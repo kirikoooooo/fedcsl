@@ -1,0 +1,30 @@
+model:
+  name: ""
+  params:
+    dist_measure: "cosine"
+    lr: 0.05     # 当dataset=HAR时为0.05
+    batch_size: 256 # 当dataset=HAR时为256
+    wd: 0
+    ls: 1         #l3 多粒度学习
+    l: 0.01       #l4 正则化系数
+
+dataset: "HAR"
+
+federated:
+  numClient: 3
+  numRound: 1000
+  numEpoch: 3 
+  dirichlet_alpha: 0.1
+
+ablation:
+  UseJointKD: True
+  UseJointCL: True
+  UseScaleKD: True
+  UseScaleCL: True
+  UseProdictor: False
+  UseMTLHomo: False     # 方差多任务学习
+  UseACF: True
+  UseDistribution: False
+
+logPath: "./result/"
+description: "testBatchScore*10"

@@ -1,0 +1,30 @@
+model:
+  name: ""
+  params:
+    dist_measure: "mix"
+    lr: 0.05     # 当dataset=HAR时为0.05
+    batch_size: 256 # 当dataset=HAR时为256
+    wd: 0
+    ls: 0.01         #l3 多粒度学习 1
+    l: 0.1       #l4 正则化系数 0.01
+    beta: 0.4
+    gamma: 0.5    # 本地和全局融合系数
+dataset: "Epilepsy"
+algo : "fedcsl"
+federated:
+  numClient: 6
+  numRound: 500
+  numEpoch: 5
+  dirichlet_alpha: 1
+
+ablation:
+  UseJointKD: True
+  UseJointCL: True
+  UseScaleKD: True
+  UseScaleCL: True
+  UseProdictor: False
+  UseMTLHomo: False     # 方差多任务学习
+  UseACF: False
+  UseDistribution: False
+logPath: "./result/"
+description: "Onlyallscale+mix_l=0.1 no-onehot"

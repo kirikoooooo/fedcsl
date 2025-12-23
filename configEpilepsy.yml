@@ -1,0 +1,29 @@
+model:
+  name: ""
+  params:
+    dist_measure: "cosine"
+    lr: 0.01     # 当dataset=HAR时为0.05
+    batch_size: 128 # 当dataset=HAR时为256
+    wd: 0
+    ls: 1         #l3 多粒度学习
+    l: 0.01       #l4 正则化系数
+
+dataset: "Epilesy-TSTCC"
+
+federated:
+  numClient: 3
+  numRound: 500
+  numEpoch: 3
+  dirichlet_alpha: 1
+
+ablation:
+  UseJointKD: False
+  UseJointCL: False
+  UseScaleKD: False
+  UseScaleCL: False
+  UseProdictor: False
+  UseMTLHomo: False     # 方差多任务学习
+  UseACF: False
+  UseDistribution: False
+logPath: "./result/"
+description: "AVG"

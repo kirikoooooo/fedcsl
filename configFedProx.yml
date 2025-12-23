@@ -1,0 +1,30 @@
+model:
+  name: ""
+  params:
+    dist_measure: "mix"
+    lr: 0.05     # 当dataset=HAR时为0.05
+    batch_size: 32 # 当dataset=HAR时为256
+    wd: 0
+    ls: 1         #l3 多粒度学习
+    l: 0.01       #l4 正则化系数 default0.01
+    beta: 0.4     # 长短期融合系数
+    gamma: 0.5    # 本地和全局融合系数
+dataset: "CharacterTrajectories"
+algo: "fedprox"
+federated:
+  numClient: 30
+  numRound: 500
+  numEpoch: 5
+  dirichlet_alpha: 1
+
+ablation:
+  UseJointKD: False
+  UseJointCL: False
+  UseScaleKD: False
+  UseScaleCL: False
+  UseProdictor: False
+  UseMTLHomo: False     # 方差多任务学习
+  UseACF: False
+  UseDistribution: False
+logPath: "./result/"
+description: "fedprox+selection"

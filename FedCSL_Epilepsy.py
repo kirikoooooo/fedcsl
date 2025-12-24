@@ -50,7 +50,7 @@ parser.add_argument('--task', default='classification', type=str)
 parser.add_argument('--config', default='./config.yml', type=str, help='Path to the config file')
 
 args = parser.parse_args()
-with open(args.config, 'r') as f:
+with open(args.config, 'r',encoding='utf-8') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 

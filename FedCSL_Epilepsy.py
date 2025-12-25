@@ -51,7 +51,7 @@ parser.add_argument('--config', default='./config.yml', type=str, help='Path to 
 
 args = parser.parse_args()
 with open(args.config, 'r',encoding='utf-8') as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
+    config = copy.deepcopy(yaml.load(f, Loader=yaml.FullLoader))  # 使用深拷贝保护原始配置
 
 
 # 训练一个SVC 分类器 进行下游分类评估

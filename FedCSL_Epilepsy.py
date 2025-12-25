@@ -157,6 +157,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     numRound = config['federated']['numRound']
     numEpoch = config['federated']['numEpoch']
     dirichlet_alpha = config['federated']['dirichlet_alpha']
+    use_client_selection = config['federated'].get('use_client_selection', False)  # 默认不启用
+    client_selection_ratio = config['federated'].get('client_selection_ratio', 0.6)  # 默认采样60%
     if args.dataset is not None:
         dataset = args.dataset
     else:
@@ -247,6 +249,9 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     f.writelines("lr:"+str(lr)+"\n")
     f.writelines("isAllocateMat:"+str(isAllocateMat)+"\n")
     f.writelines("isEMA:"+str(isEMA)+"\n")
+    f.writelines("use_client_selection:"+str(use_client_selection)+"\n")
+    if use_client_selection:
+        f.writelines("client_selection_ratio:"+str(client_selection_ratio)+"\n")
     f.writelines("-------------------------------------------"+"\n")
     f.writelines(config['description']+"\n")
     f.writelines("PID:"+str(os.getpid())+"\n")
@@ -324,6 +329,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     C_accu_server = None
     scalers = []
     best_acc = 0
+    
+    # 初始化客户端选择相关变量
+    probs = None
+    if use_client_selection:
+        probs = [1.0/numClient] * numClient  # 初始化采样概率
+        print(f"客户端选择已启用，采样比例: {client_selection_ratio}")
+    else:
+        print("客户端选择未启用，所有客户端参与聚合")
 
     for round in range(numRound):
         avg_loss = 0
@@ -394,21 +407,31 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         #     scores = sparse_mask
         #     print("CLIENT SELECTION:",sparse_mask)
 
-        sample_nums = int(numClient * 0.6) # 采样数
-        if round==0:
-            probs = [1.0/numClient] * numClient
-        print("本轮采样概率阵",probs)
-        select_mask = sample_clients_mask_by_probability(probs,sample_nums)
-        w_global = fedavg(w_locals,y_fed,select_mask)
-        server.model.load_state_dict(w_global)
-
-
-        print(select_mask)
-
-        # omp计算重新分配概率
-        sparse_vec = omp_from_state_dicts(w_locals,w_global,sample_nums)
-        probs = get_sampling_probs_from_omp(sparse_vec,prev_probs=probs,selection_mask=select_mask)
-        print("稀疏向量",sparse_vec)
+        # 根据配置决定是否使用客户端选择
+        if use_client_selection:
+            # 启用客户端选择
+            sample_nums = int(numClient * client_selection_ratio)  # 采样数
+            if round == 0:
+                probs = [1.0/numClient] * numClient
+            print(f"本轮采样概率阵: {probs}")
+            select_mask = sample_clients_mask_by_probability(probs, sample_nums)
+            print(f"客户端选择掩码: {select_mask}")
+            
+            # 使用select_mask进行聚合
+            w_global = fedavg(w_locals, y_fed, select_mask)
+            server.model.load_state_dict(w_global)
+            
+            # omp计算重新分配概率（在聚合后执行）
+            sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
+            probs = get_sampling_probs_from_omp(sparse_vec, prev_probs=probs, selection_mask=select_mask)
+            print(f"稀疏向量: {sparse_vec}")
+        else:
+            # 不使用客户端选择，所有客户端都参与聚合
+            select_mask = [1] * numClient
+            print("所有客户端参与聚合（客户端选择未启用）")
+            # 使用select_mask进行聚合
+            w_global = fedavg(w_locals, y_fed, select_mask)
+            server.model.load_state_dict(w_global)
 
         # 下游分类器，这里normalize好像有问题
         transformation = server.transform(X_all, result_type='numpy', normalize=True, batch_size=batch_size)

@@ -637,6 +637,14 @@ def get_sampling_probs_from_omp(x, prev_probs, selection_mask):
                 # 这部分代码可以省略，因为默认就是保持不变
 
     # --- 修改结束 ---
+    
+    # 在返回前添加最小概率保护，避免概率完全为0导致采样失败
+    min_prob = 1e-6  # 设置最小概率，避免完全为0
+    updated_probs = np.maximum(updated_probs, min_prob)
+    
+    # 重新归一化，确保概率总和为1
+    updated_probs = updated_probs / updated_probs.sum()
+    
     return updated_probs
 
 
@@ -660,6 +668,34 @@ def sample_clients_mask_by_probability(probs, num_to_sample, seed=None):
     assert len(probs) >= num_to_sample, "采样数量超过客户端总数"
 
     num_clients = len(probs)
+    
+    # 检查非零概率的客户端数量
+    non_zero_count = np.count_nonzero(probs)
+    
+    # 如果非零概率的客户端数量少于需要采样的数量，进行概率平滑处理
+    if non_zero_count < num_to_sample:
+        # 计算最小概率值，确保有足够的客户端可以采样
+        min_prob = 1e-6  # 设置一个很小的最小概率
+        # 对概率进行平滑：probs = (1 - smoothing_factor) * probs + smoothing_factor * uniform
+        # smoothing_factor 根据不足的数量动态调整
+        smoothing_factor = min(0.1, (num_to_sample - non_zero_count) / num_clients)
+        uniform_prob = 1.0 / num_clients
+        probs = (1 - smoothing_factor) * probs + smoothing_factor * uniform_prob
+        
+        # 确保所有概率至少为最小概率
+        probs = np.maximum(probs, min_prob)
+        
+        # 重新归一化
+        probs = probs / probs.sum()
+        
+        print(f"警告: 非零概率客户端数量({non_zero_count})少于采样数量({num_to_sample})，已进行概率平滑处理")
+    
+    # 如果平滑后仍然不足（理论上不应该发生，但为了安全起见）
+    non_zero_count_after = np.count_nonzero(probs)
+    if non_zero_count_after < num_to_sample:
+        num_to_sample = non_zero_count_after
+        print(f"警告: 采样数量已调整为非零概率客户端数量: {num_to_sample}")
+    
     indices = np.random.choice(np.arange(num_clients), size=num_to_sample, replace=False, p=probs)
 
     mask = [1 if i in indices else 0 for i in range(num_clients)]

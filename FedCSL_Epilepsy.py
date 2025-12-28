@@ -412,16 +412,21 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             # 启用客户端选择
             sample_nums = int(numClient * client_selection_ratio)  # 采样数
             if round == 0:
+                # 第一轮全选所有客户端
+                select_mask = [1] * numClient
                 probs = [1.0/numClient] * numClient
-            print(f"本轮采样概率阵: {probs}")
-            select_mask = sample_clients_mask_by_probability(probs, sample_nums)
-            print(f"客户端选择掩码: {select_mask}")
+                print(f"第一轮：全选所有客户端")
+            else:
+                # 从第二轮开始按采样概率选择
+                print(f"本轮采样概率阵: {probs}")
+                select_mask = sample_clients_mask_by_probability(probs, sample_nums)
+                print(f"客户端选择掩码: {select_mask}")
             
             # 使用select_mask进行聚合
             w_global = fedavg(w_locals, y_fed, select_mask)
             server.model.load_state_dict(w_global)
             
-            # omp计算重新分配概率（在聚合后执行）
+            # omp计算重新分配概率（在聚合后执行，第一轮也需要更新概率）
             sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
             probs = get_sampling_probs_from_omp(sparse_vec, prev_probs=probs, selection_mask=select_mask)
             print(f"稀疏向量: {sparse_vec}")

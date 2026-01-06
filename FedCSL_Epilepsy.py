@@ -159,6 +159,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     dirichlet_alpha = config['federated']['dirichlet_alpha']
     use_client_selection = config['federated'].get('use_client_selection', False)  # 默认不启用
     client_selection_ratio = config['federated'].get('client_selection_ratio', 0.6)  # 默认采样60%
+    min_selection_prob = config['federated'].get('min_selection_prob', 0.01)  # 最低选择概率，默认1%
+    ema_alpha = config['federated'].get('ema_alpha', 0.3)  # 指数移动平均平滑系数，默认0.3
     if args.dataset is not None:
         dataset = args.dataset
     else:
@@ -252,6 +254,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     f.writelines("use_client_selection:"+str(use_client_selection)+"\n")
     if use_client_selection:
         f.writelines("client_selection_ratio:"+str(client_selection_ratio)+"\n")
+        f.writelines("min_selection_prob:"+str(min_selection_prob)+"\n")
+        f.writelines("ema_alpha:"+str(ema_alpha)+"\n")
     f.writelines("-------------------------------------------"+"\n")
     f.writelines(config['description']+"\n")
     f.writelines("PID:"+str(os.getpid())+"\n")
@@ -335,6 +339,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     if use_client_selection:
         probs = [1.0/numClient] * numClient  # 初始化采样概率
         print(f"客户端选择已启用，采样比例: {client_selection_ratio}")
+        print(f"最低选择概率: {min_selection_prob}, EMA平滑系数: {ema_alpha}")
     else:
         print("客户端选择未启用，所有客户端参与聚合")
 
@@ -428,8 +433,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             
             # omp计算重新分配概率（在聚合后执行，第一轮也需要更新概率）
             sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
-            probs = get_sampling_probs_from_omp(sparse_vec, prev_probs=probs, selection_mask=select_mask)
+            probs = get_sampling_probs_from_omp(
+                sparse_vec, 
+                prev_probs=probs, 
+                selection_mask=select_mask,
+                min_selection_prob=min_selection_prob,
+                ema_alpha=ema_alpha
+            )
             print(f"稀疏向量: {sparse_vec}")
+            print(f"更新后概率: {probs}")
         else:
             # 不使用客户端选择，所有客户端都参与聚合
             select_mask = [1] * numClient

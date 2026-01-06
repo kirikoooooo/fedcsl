@@ -587,62 +587,77 @@ import numpy as np
 #                 updated_probs[i] = abs_x[i] / total_contribution * prob_share
 
 #     return updated_probs
-def get_sampling_probs_from_omp(x, prev_probs, selection_mask):
+def get_sampling_probs_from_omp(x, prev_probs, selection_mask, min_selection_prob=0.01, ema_alpha=0.3):
     """
-    根据 OMP 的稀疏系数向量和掩码更新下一轮客户端采样概率。
+    根据 OMP 的稀疏系数向量和掩码更新下一轮客户端采样概率（使用指数移动平均平滑）。
 
     参数:
         x: numpy array，长度为总客户端数，OMP输出的稀疏向量（含0和负值）
         prev_probs: numpy array，上一轮的采样概率（总客户端数）
         selection_mask: List[int] or np.ndarray，0/1 向量，表示哪些客户端被选中（长度与 x 相同）
+        min_selection_prob: float，最低选择概率，避免概率完全为0（默认0.01，即1%）
+        ema_alpha: float，指数移动平均的平滑系数，范围[0,1]，值越大更新越快（默认0.3）
 
     返回:
         updated_probs: numpy array，更新后的下一轮采样概率（总客户端数）
     """
-    # --- 仅修改核心逻辑部分，使用最直接的列表遍历来避免索引错误 ---
     # 确保 x 是 numpy 数组
     x = np.asarray(x)
     # 确保 prev_probs 是 numpy 数组，以便可以修改
-    updated_probs = np.asarray(prev_probs, dtype=float).copy()
-
+    prev_probs = np.asarray(prev_probs, dtype=float)
+    
     # 长度检查
     if len(x) != len(prev_probs) or len(prev_probs) != len(selection_mask):
         raise ValueError("输入向量 x, prev_probs, selection_mask 的长度必须相同。")
 
-    # 1. 计算被选中客户端的 |x| 贡献总和 (total_contribution)
+    num_clients = len(prev_probs)
+    
+    # 1. 处理负值：使用 ReLU 函数，只保留非负值，并加上小的正数避免完全为0
+    # 对于负值，我们将其视为较小的贡献（使用绝对值但降低权重）
+    x_processed = np.abs(x)  # 使用绝对值处理负值
+    # 对于被选中的客户端，如果贡献为0，给予最小贡献值
+    epsilon = 1e-8
+    for i in range(num_clients):
+        if selection_mask[i] == 1 and x_processed[i] < epsilon:
+            x_processed[i] = epsilon
+    
+    # 2. 计算被选中客户端的贡献总和
     total_contribution = 0.0
-    for i in range(len(selection_mask)):
+    for i in range(num_clients):
         if selection_mask[i] == 1:
-            total_contribution += abs(x[i])
-
-    # 2. 如果总贡献大于0，则进行概率重新分配
+            total_contribution += x_processed[i]
+    
+    # 3. 计算新的目标概率（基于贡献比例）
+    target_probs = np.zeros_like(prev_probs)
+    
     if total_contribution > 0:
-        # 3. 计算上一轮分配给被选中客户端的总概率份额 (prob_share)
+        # 计算被选中客户端的总概率份额
         prob_share = 0.0
-        for i in range(len(selection_mask)):
+        for i in range(num_clients):
             if selection_mask[i] == 1:
-                prob_share += updated_probs[i] # 注意：这里用 updated_probs，因为它 copy 了 prev_probs
-
-        # 4. 根据 |x| 的比例重新分配 prob_share 给被选中的客户端
-        #    未被选中的客户端概率保持不变 (在 copy 时已设定)
-        for i in range(len(selection_mask)):
+                prob_share += prev_probs[i]
+        
+        # 根据贡献比例分配概率给被选中的客户端
+        for i in range(num_clients):
             if selection_mask[i] == 1:
-                # 计算该客户端的新概率份额
-                # 避免除零：由于 total_contribution > 0 且 selection_mask[i] == 1，
-                # abs(x[i]) 必须 >= 0。如果 abs(x[i]) == 0，则新概率为 0。
-                # 这个计算是安全的。
-                updated_probs[i] = (abs(x[i]) / total_contribution) * prob_share
-            # else: # selection_mask[i] == 0
-                # 保持 updated_probs[i] = prev_probs[i] (已在 copy 时完成)
-                # 这部分代码可以省略，因为默认就是保持不变
-
-    # --- 修改结束 ---
+                # 根据贡献比例计算目标概率
+                contribution_ratio = x_processed[i] / total_contribution
+                target_probs[i] = contribution_ratio * prob_share
+            else:
+                # 未被选中的客户端保持原概率（后续会通过EMA平滑）
+                target_probs[i] = prev_probs[i]
+    else:
+        # 如果总贡献为0，保持原概率
+        target_probs = prev_probs.copy()
     
-    # 在返回前添加最小概率保护，避免概率完全为0导致采样失败
-    min_prob = 1e-6  # 设置最小概率，避免完全为0
-    updated_probs = np.maximum(updated_probs, min_prob)
+    # 4. 使用指数移动平均（EMA）平滑更新概率
+    # EMA公式: new_prob = alpha * target_prob + (1 - alpha) * prev_prob
+    updated_probs = ema_alpha * target_probs + (1 - ema_alpha) * prev_probs
     
-    # 重新归一化，确保概率总和为1
+    # 5. 应用最小概率保护
+    updated_probs = np.maximum(updated_probs, min_selection_prob)
+    
+    # 6. 重新归一化，确保概率总和为1
     updated_probs = updated_probs / updated_probs.sum()
     
     return updated_probs

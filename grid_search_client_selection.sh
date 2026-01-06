@@ -115,7 +115,7 @@ run_task() {
     # 运行训练
     log_file="${RESULT_DIR}/task_${task_id}_ratio${ratio}_min${min_prob}_ema${ema_alpha}.log"
     
-    ${PYTHON_CMD} FedCSL_Epilepsy.py --dataset ${DATASET} --config ${config_path} > ${log_file} 2>&1
+    ${PYTHON_CMD} FedCSL_Epilepsy.py -dataset ${DATASET} --config ${config_path} > ${log_file} 2>&1
     
     # 提取最终准确率（兼容不同grep版本）
     if [ -f ${log_file} ]; then

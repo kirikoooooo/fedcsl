@@ -99,7 +99,7 @@ def run_task(args):
         cmd = [
             sys.executable,
             "FedCSL_Epilepsy.py",
-            "--dataset", DATASET,
+            "-dataset", DATASET,
             "--config", str(config_path)
         ]
         

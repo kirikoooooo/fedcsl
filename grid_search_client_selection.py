@@ -32,30 +32,35 @@ RESULT_DIR.mkdir(exist_ok=True)
 
 
 def create_config(task_id, ratio, min_prob, ema_alpha):
-    """创建配置文件（每个任务使用唯一的配置文件名，避免冲突）"""
+    """创建配置文件（直接复制完整配置文件，只修改需要的部分）"""
     # 使用task_id确保文件名唯一，避免并行任务冲突
     config_name = f"config_grid_task{task_id}_ratio{ratio}_min{min_prob}_ema{ema_alpha}.yml"
     config_path = RESULT_DIR / config_name
     
-    # 读取基础配置（使用深拷贝避免修改原始配置）
-    import copy
-    with open(BASE_CONFIG, 'r', encoding='utf-8') as f:
-        config = yaml.load(f, Loader=yaml.FullLoader)
-        config = copy.deepcopy(config)  # 深拷贝，确保不修改原始配置
+    # 直接复制完整的基础配置文件
+    shutil.copy2(BASE_CONFIG, config_path)
     
-    # 修改客户端选择参数
+    # 读取完整配置（保留所有原有配置项）
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
+    
+    # 只修改客户端选择相关的参数，其他配置保持不变
     if 'federated' not in config:
         config['federated'] = {}
+    
+    # 修改客户端选择参数
     config['federated']['use_client_selection'] = True
     config['federated']['client_selection_ratio'] = float(ratio)
     config['federated']['min_selection_prob'] = float(min_prob)
     config['federated']['ema_alpha'] = float(ema_alpha)
     config['federated']['numRound'] = NUM_ROUNDS
+    
+    # 只修改description，其他字段保持不变
     config['description'] = f"GridSearch_task{task_id}_ratio{ratio}_min{min_prob}_ema{ema_alpha}"
     
-    # 保存配置到结果目录（不污染项目根目录）
+    # 保存配置（保留所有原有配置项）
     with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
     
     return config_path
 

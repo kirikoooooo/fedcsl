@@ -48,7 +48,7 @@ done
 
 echo "总共生成 $task_id 个任务"
 
-# 函数：创建配置文件（使用深拷贝，避免修改原始配置）
+# 函数：创建配置文件（直接复制完整配置文件，只修改需要的部分）
 create_config() {
     local task_id=$1
     local ratio=$2
@@ -59,38 +59,40 @@ create_config() {
     # 配置文件保存在RESULT_DIR中，避免污染项目根目录
     local config_path="${RESULT_DIR}/${config_name}"
     
-    # 使用Python创建配置文件（深拷贝，避免修改原始配置）
+    # 确保结果目录存在
+    mkdir -p "${RESULT_DIR}"
+    
+    # 直接复制完整的基础配置文件
+    cp "${BASE_CONFIG}" "${config_path}"
+    
+    # 使用Python修改配置文件（只修改需要的部分，保留所有原有配置）
     ${PYTHON_CMD} << EOF
 import yaml
-import copy
 import os
 
-base_config_file = "${BASE_CONFIG}"
 config_file = "${config_path}"
 
-# 确保结果目录存在
-os.makedirs(os.path.dirname(config_file), exist_ok=True)
-
-# 读取基础配置并使用深拷贝
-with open(base_config_file, 'r', encoding='utf-8') as f:
+# 读取完整配置（保留所有原有配置项）
+with open(config_file, 'r', encoding='utf-8') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
-    config = copy.deepcopy(config)  # 深拷贝，确保不修改原始配置
 
 # 确保federated键存在
 if 'federated' not in config:
     config['federated'] = {}
 
-# 修改客户端选择参数
+# 只修改客户端选择相关的参数，其他配置保持不变
 config['federated']['use_client_selection'] = True
 config['federated']['client_selection_ratio'] = ${ratio}
 config['federated']['min_selection_prob'] = ${min_prob}
 config['federated']['ema_alpha'] = ${ema_alpha}
 config['federated']['numRound'] = ${NUM_ROUNDS}
+
+# 只修改description，其他字段保持不变
 config['description'] = f"GridSearch_task${task_id}_ratio${ratio}_min${min_prob}_ema${ema_alpha}"
 
-# 保存到结果目录
+# 保存配置（保留所有原有配置项，不排序以保持原有顺序）
 with open(config_file, 'w', encoding='utf-8') as f:
-    yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 print(f"Created config: {config_file}")
 EOF

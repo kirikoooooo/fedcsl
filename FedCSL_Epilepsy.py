@@ -48,6 +48,11 @@ parser.add_argument('-r', '--resize', default=0, type=int)
 parser.add_argument('-c', '--checkpoint', default=False, type=bool)
 parser.add_argument('--task', default='classification', type=str)
 parser.add_argument('--config', default='./config.yml', type=str, help='Path to the config file')
+# 客户端选择超参数（命令行参数，会覆盖配置文件中的值）
+parser.add_argument('--use-client-selection', action='store_true', help='Enable client selection')
+parser.add_argument('--client-selection-ratio', type=float, default=None, help='Client selection ratio (0.0-1.0)')
+parser.add_argument('--min-selection-prob', type=float, default=None, help='Minimum selection probability')
+parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
 
 args = parser.parse_args()
 with open(args.config, 'r',encoding='utf-8') as f:
@@ -157,10 +162,11 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     numRound = config['federated']['numRound']
     numEpoch = config['federated']['numEpoch']
     dirichlet_alpha = config['federated']['dirichlet_alpha']
-    use_client_selection = config['federated'].get('use_client_selection', False)  # 默认不启用
-    client_selection_ratio = config['federated'].get('client_selection_ratio', 0.6)  # 默认采样60%
-    min_selection_prob = config['federated'].get('min_selection_prob', 0.01)  # 最低选择概率，默认1%
-    ema_alpha = config['federated'].get('ema_alpha', 0.3)  # 指数移动平均平滑系数，默认0.3
+    # 命令行参数优先，如果没有则使用配置文件中的值
+    use_client_selection = args.use_client_selection if args.use_client_selection else config['federated'].get('use_client_selection', False)
+    client_selection_ratio = args.client_selection_ratio if args.client_selection_ratio is not None else config['federated'].get('client_selection_ratio', 0.6)
+    min_selection_prob = args.min_selection_prob if args.min_selection_prob is not None else config['federated'].get('min_selection_prob', 0.01)
+    ema_alpha = args.ema_alpha if args.ema_alpha is not None else config['federated'].get('ema_alpha', 0.3)
     if args.dataset is not None:
         dataset = args.dataset
     else:

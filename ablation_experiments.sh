@@ -2,8 +2,8 @@
 # 客户端选择消融实验命令列表
 # 使用方法: bash ablation_experiments.sh
 
-BASE_CONFIG="configEpilepsy.yml"
-DATASET="Epilepsy-TSTCC"
+BASE_CONFIG="configAVG.yml"
+DATASET="HAR"
 
 # 基础命令（不使用客户端选择，作为baseline）
 # echo "=== Baseline (FedAvg without client selection) ==="

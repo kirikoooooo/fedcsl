@@ -194,14 +194,14 @@ class LearningShapeletsCL:
             if self.to_cuda:
                 labels = labels.cuda()
 
-            gamma = config['model']['params']['gamma'] #local
+            gamma = config['model']['params'].get('gamma', 0.5)  # local, 默认值0.5
             zeta = 1-gamma  #global
             #本地joint对比学习
             loss = self.loss_func(logits, labels) * gamma
             loss_local_jointCLKD = torch.tensor(0.0,device=torch.cuda.current_device())
 
             #全局模型与本地模型joint对比
-            if self.Global_Model != None and config['algo']=='fedcsl':
+            if self.Global_Model != None and config.get('algo', 'fedcsl')=='fedcsl':
                 k_g = self.Global_Model(x_k, optimize=None, masking=False)
                 k_g = nn.functional.normalize(k_g, dim=1)
                 q_g = self.Global_Model(x_q, optimize=None, masking=False)
@@ -272,7 +272,7 @@ class LearningShapeletsCL:
                 # 本地scale 对比学习
                 loss_local_CLKD_mutiscale  += precisions[length_i] * self.loss_func(logits, labels)
                 #print("loss_local_mutiscaleCL",precisions[length_i] * self.loss_func(logits, labels) * gamma)
-                if self.Global_Model != None and config['algo']=='fedcsl':
+                if self.Global_Model != None and config.get('algo', 'fedcsl')=='fedcsl':
                     #print("采用全局模型辅助")
                     #方案2 多尺度的全局到本地对比蒸馏
                     qi_g = q_g[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
@@ -338,7 +338,7 @@ class LearningShapeletsCL:
             #print("loss_sdl: ",loss_sdl.item())
             #print("loss: ",loss.item())
 
-            if config['algo'] == 'fedcsl':
+            if config.get('algo', 'fedcsl') == 'fedcsl':
                 loss_global_CLKD_mutiscale = loss_global_CLKD_mutiscale * zeta *0.1
                 loss_local_jointCLKD =  loss_local_jointCLKD * gamma * 0.5
                 loss_local_CLKD_mutiscale   =loss_local_CLKD_mutiscale *gamma * 0.1
@@ -353,7 +353,7 @@ class LearningShapeletsCL:
                 #print("loss",loss)
                 #print("")
 
-            if config['algo'] == 'fedprox' and self.Global_Model != None:
+            if config.get('algo', 'fedcsl') == 'fedprox' and self.Global_Model != None:
 
                 proximal_term = 0.0
                 mu = 1e-5

@@ -53,6 +53,7 @@ parser.add_argument('--use-client-selection', action='store_true', help='Enable 
 parser.add_argument('--client-selection-ratio', type=float, default=None, help='Client selection ratio (0.0-1.0)')
 parser.add_argument('--min-selection-prob', type=float, default=None, help='Minimum selection probability')
 parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
+parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
 
 args = parser.parse_args()
 with open(args.config, 'r',encoding='utf-8') as f:
@@ -178,7 +179,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     wd = config['model']['params']['wd']
     ls = config['model']['params']['ls']
     l = config['model']['params']['l']
-    beta = config['model']['params']['beta']
+    beta = config['model']['params'].get('beta', 0.4)  # 默认值0.4，参考configAVG.yml
+    gamma = config['model']['params'].get('gamma', 0.5)  # 默认值0.5，参考configAVG.yml
 
     # 加载shapelets weight权重
     shapelet_weight_X = np.load('./algoutils/shapelet_weight_All.npy')
@@ -240,6 +242,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     isAllocateMat = False
     isEMA = False
     shapelets_size_and_len = {int(i): 40 for i in np.linspace(min(128, max(3, int(0.1 * len_ts))), int(0.8 * len_ts), 8, dtype=int)}
+
+    # 命令行参数优先，如果没有则使用配置文件中的值
+    if args.description is not None:
+        config['description'] = args.description
 
     #Print logs------------------------------------------------------------------------------------------------------------
     print("shapelet initialized! \n")

@@ -48,10 +48,16 @@ parser.add_argument('-r', '--resize', default=0, type=int)
 parser.add_argument('-c', '--checkpoint', default=False, type=bool)
 parser.add_argument('--task', default='classification', type=str)
 parser.add_argument('--config', default='./config.yml', type=str, help='Path to the config file')
+# 客户端选择超参数（命令行参数，会覆盖配置文件中的值）
+parser.add_argument('--use-client-selection', action='store_true', help='Enable client selection')
+parser.add_argument('--client-selection-ratio', type=float, default=None, help='Client selection ratio (0.0-1.0)')
+parser.add_argument('--min-selection-prob', type=float, default=None, help='Minimum selection probability')
+parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
+parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
 
 args = parser.parse_args()
 with open(args.config, 'r',encoding='utf-8') as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
+    config = copy.deepcopy(yaml.load(f, Loader=yaml.FullLoader))  # 使用深拷贝保护原始配置
 
 
 # 训练一个SVC 分类器 进行下游分类评估
@@ -107,6 +113,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
 
+    # 保存原始seed值用于客户端选择
+    original_seed = seed
     if seed is not None:
         random.seed(seed)
         seed += 1
@@ -122,6 +130,11 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     numRound = config['federated']['numRound']
     numEpoch = config['federated']['numEpoch']
     dirichlet_alpha = config['federated']['dirichlet_alpha']
+    # 命令行参数优先，如果没有则使用配置文件中的值
+    use_client_selection = args.use_client_selection if args.use_client_selection else config['federated'].get('use_client_selection', False)
+    client_selection_ratio = args.client_selection_ratio if args.client_selection_ratio is not None else config['federated'].get('client_selection_ratio', 0.6)
+    min_selection_prob = args.min_selection_prob if args.min_selection_prob is not None else config['federated'].get('min_selection_prob', 0.01)
+    ema_alpha = args.ema_alpha if args.ema_alpha is not None else config['federated'].get('ema_alpha', 0.3)
     if args.dataset is not None:
         dataset = args.dataset
     else:
@@ -159,6 +172,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     isEMA = False
     shapelets_size_and_len = {int(i): 40 for i in np.linspace(min(128, max(3, int(0.1 * len_ts))), int(0.8 * len_ts), 8, dtype=int)}
 
+    # 命令行参数优先，如果没有则使用配置文件中的值
+    if args.description is not None:
+        config['description'] = args.description
+
     #Print logs------------------------------------------------------------------------------------------------------------
     print("shapelet initialized! \n")
     now = datetime.now()
@@ -175,6 +192,11 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     f.writelines("lr:"+str(lr)+"\n")
     f.writelines("isAllocateMat:"+str(isAllocateMat)+"\n")
     f.writelines("isEMA:"+str(isEMA)+"\n")
+    f.writelines("use_client_selection:"+str(use_client_selection)+"\n")
+    if use_client_selection:
+        f.writelines("client_selection_ratio:"+str(client_selection_ratio)+"\n")
+        f.writelines("min_selection_prob:"+str(min_selection_prob)+"\n")
+        f.writelines("ema_alpha:"+str(ema_alpha)+"\n")
     f.writelines("-------------------------------------------"+"\n")
     f.writelines(config['description']+"\n")
     f.writelines("PID:"+str(os.getpid())+"\n")
@@ -250,6 +272,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     C_accu_server = None
     scalers = []
     best_acc = 0
+    
+    # 初始化客户端选择相关变量
+    probs = None
+    if use_client_selection:
+        probs = [1.0/numClient] * numClient  # 初始化采样概率
+        print(f"客户端选择已启用，采样比例: {client_selection_ratio}")
+        print(f"最低选择概率: {min_selection_prob}, EMA平滑系数: {ema_alpha}")
+    else:
+        print("客户端选择未启用，所有客户端参与聚合")
 
     for round in range(numRound):
         avg_loss = 0
@@ -281,8 +312,28 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             # print(len(X_fed[idx]))
             # print(X_fed[idx][0].shape)
             # print("以下来自第{idx}个客户端")
+            
+            # 检查客户端数据是否为空
+            if len(X_fed[idx]) == 0 or len(y_fed[idx]) == 0:
+                print(f"警告：客户端 {idx} 的数据为空，跳过训练")
+                # 如果数据为空，使用当前模型状态作为本地模型
+                if round == 0:
+                    w_locals.append(c.model.state_dict())
+                else:
+                    w_locals[idx] = c.model.state_dict()
+                continue
+            
             losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size, epoch_idx=-1,lr=lr)
-            loss_all = np.mean([loss[0] for loss in losses])
+            # 检查losses是否为空或包含NaN
+            if len(losses) == 0:
+                print(f"警告：客户端 {idx} 的训练损失为空，跳过损失计算")
+                loss_all = 0.0
+            else:
+                loss_all = np.mean([loss[0] for loss in losses])
+                # 检查loss_all是否为NaN
+                if np.isnan(loss_all) or np.isinf(loss_all):
+                    print(f"警告：客户端 {idx} 的训练损失为 NaN/Inf，使用0.0")
+                    loss_all = 0.0
             # loss_align = np.mean([loss[2] for loss in losses])
             # loss_sdl = np.mean([loss[3] for loss in losses])
             avg_loss+=(loss_all) * len(y_fed[idx]) / len(X_all)
@@ -297,7 +348,17 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         scores = []
         #before aggregation
         for idx,c in enumerate(clientList):
+            # 检查数据是否为空
+            if len(X_fed[idx]) == 0:
+                print(f"警告：客户端 {idx} 的数据为空，跳过预测，使用默认分数")
+                scores.append(1.0)  # 使用默认分数
+                continue
             features = c.predict(X_fed[idx])
+            # 检查预测结果是否为空（处理一维或二维数组）
+            if features.size == 0 or (len(features.shape) > 0 and features.shape[0] == 0):
+                print(f"警告：客户端 {idx} 的预测结果为空，使用默认分数")
+                scores.append(1.0)  # 使用默认分数
+                continue
             print(features.shape)
             scores.append(cal_score(features))
         scores = normalize_to_near_one(scores)
@@ -305,11 +366,48 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
         # 分布打分
         if config['ablation']['UseDistribution']==False:
-            scores = [1,1,1]
+            scores = [1] * numClient  # 修改为动态长度
         # scores = [1,1,1]
-        # aggregation: model
-        w_global = fedavg(w_locals,y_fed,scores)
-        server.model.load_state_dict(w_global)
+        
+        # 根据配置决定是否使用客户端选择
+        if use_client_selection:
+            # 启用客户端选择
+            sample_nums = int(numClient * client_selection_ratio)  # 采样数
+            if round == 0:
+                # 第一轮全选所有客户端
+                select_mask = [1] * numClient
+                probs = [1.0/numClient] * numClient
+                print(f"第一轮：全选所有客户端")
+            else:
+                # 从第二轮开始按采样概率选择
+                print(f"本轮采样概率阵: {probs}")
+                select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=original_seed)
+                print(f"客户端选择掩码: {select_mask}")
+            
+            # 使用select_mask进行聚合（结合原有的scores）
+            # 将select_mask与scores结合：如果客户端未被选中，则score为0
+            combined_scores = [scores[i] * select_mask[i] for i in range(numClient)]
+            w_global = fedavg(w_locals, y_fed, combined_scores)
+            server.model.load_state_dict(w_global)
+            
+            # omp计算重新分配概率（在聚合后执行，第一轮也需要更新概率）
+            sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
+            probs = get_sampling_probs_from_omp(
+                sparse_vec, 
+                prev_probs=probs, 
+                selection_mask=select_mask,
+                min_selection_prob=min_selection_prob,
+                ema_alpha=ema_alpha
+            )
+            print(f"稀疏向量: {sparse_vec}")
+            print(f"更新后概率: {probs}")
+        else:
+            # 不使用客户端选择，所有客户端都参与聚合
+            select_mask = [1] * numClient
+            print("所有客户端参与聚合（客户端选择未启用）")
+            # 使用原有的scores进行聚合
+            w_global = fedavg(w_locals, y_fed, scores)
+            server.model.load_state_dict(w_global)
 
 
         # 下游分类器
@@ -327,7 +425,9 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         #print("round %d Server %d trained.\n"%(round,idx))
 
         f = open(logTxt, mode="a+")
-        f.writelines("dataset: "+dataset+"round:"+str(round)+" server aggregation "+" testACC:"+str(test_acc)+" trainACC:"+str(train_acc)+" avg_loss:"+str(avg_loss)+"\n")
+        # 检查avg_loss是否为NaN，如果是则显示为字符串
+        avg_loss_str = str(avg_loss) if not (np.isnan(avg_loss) or np.isinf(avg_loss)) else "nan"
+        f.writelines("dataset: "+dataset+"round:"+str(round)+" server aggregation "+" testACC:"+str(test_acc)+" trainACC:"+str(train_acc)+" avg_loss:"+avg_loss_str+"\n")
         f.close()
 
         # # 太大的模型早退
@@ -360,6 +460,6 @@ def save_model(model, dataset, formatted_date):
     print(f"Model saved to {model_path}")
 if __name__ == '__main__':
 
-    train(dataset=args.dataset)
+    train(dataset=args.dataset, seed=args.seed)
 
 

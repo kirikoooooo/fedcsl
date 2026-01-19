@@ -389,9 +389,21 @@ class LearningShapeletsCL:
         if not isinstance(Y, torch.Tensor):
             Y = torch.tensor(Y, dtype=torch.long).contiguous()
 
+        # 检查数据是否为空
+        if X.shape[0] == 0:
+            print(f"警告：fine_tune数据集为空，返回空损失列表")
+            return []
+
         train_ds = torch.utils.data.TensorDataset(X, Y)
         sampler = torch.utils.data.distributed.DistributedSampler(train_ds, shuffle=True) if self.is_ddp else None
-        train_dl = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, drop_last=True)
+        
+        # 如果数据量小于batch_size，使用drop_last=False，避免所有数据被丢弃
+        # 否则使用drop_last=True，保持批次大小一致（避免BatchNorm报错）
+        drop_last = X.shape[0] >= batch_size
+        if not drop_last:
+            print(f"警告：fine_tune数据量({X.shape[0]})小于batch_size({batch_size})，使用drop_last=False")
+
+        train_dl = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, drop_last=drop_last)
 
         # set model in train mode
         self.model.train()
@@ -427,11 +439,21 @@ class LearningShapeletsCL:
             X = torch.from_numpy(X).float()    # 转换为 tensor
             X = X.contiguous()                 # 保持内存连续
 
+        # 检查数据是否为空
+        if X.shape[0] == 0:
+            print(f"警告：数据集为空，返回空损失列表")
+            return []
+
         train_ds = torch.utils.data.TensorDataset(X, torch.arange(X.shape[0]))
         sampler = torch.utils.data.distributed.DistributedSampler(train_ds, shuffle=True) if self.is_ddp else None
 
+        # 如果数据量小于batch_size，使用drop_last=False，避免所有数据被丢弃
+        # 否则使用drop_last=True，保持批次大小一致（避免BatchNorm报错）
+        drop_last = X.shape[0] >= batch_size
+        if not drop_last:
+            print(f"警告：数据量({X.shape[0]})小于batch_size({batch_size})，使用drop_last=False")
 
-        train_dl = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, drop_last=True)
+        train_dl = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, drop_last=drop_last)
 
         # set model in train mode
         self.model.train()
@@ -520,8 +542,23 @@ class LearningShapeletsCL:
         losses_ce, losses_dist)
 
     def transform(self, X, *, batch_size=512, result_type='tensor', normalize=False):
+        # 先检查输入数据是否为空（在转换为tensor之前）
+        if isinstance(X, (list, tuple)):
+            if len(X) == 0:
+                return np.array([]) if result_type == 'numpy' else torch.tensor([])
+        elif isinstance(X, np.ndarray):
+            if X.size == 0 or (len(X.shape) > 0 and X.shape[0] == 0):
+                return np.array([]) if result_type == 'numpy' else torch.tensor([])
+        elif isinstance(X, torch.Tensor):
+            if X.numel() == 0 or (len(X.shape) > 0 and X.shape[0] == 0):
+                return np.array([]) if result_type == 'numpy' else torch.tensor([])
+
         if not isinstance(X, torch.Tensor):
             X = torch.tensor(X, dtype=torch.float)
+
+        # 再次检查转换后的tensor是否为空
+        if X.numel() == 0 or (len(X.shape) > 0 and X.shape[0] == 0):
+            return np.array([]) if result_type == 'numpy' else torch.tensor([])
 
         self.model.eval()
         dataset = torch.utils.data.TensorDataset(X)
@@ -533,6 +570,11 @@ class LearningShapeletsCL:
             with torch.no_grad():
             #shapelet_transform = self.model.transform(X)
                 shapelet_transform.append(self.model(x, optimize=None).cpu())
+        
+        # 检查shapelet_transform是否为空
+        if len(shapelet_transform) == 0:
+            return np.array([]) if result_type == 'numpy' else torch.tensor([])
+        
         shapelet_transform = torch.cat(shapelet_transform, 0)
         if normalize:
             shapelet_transform = nn.functional.normalize(shapelet_transform, dim=1)
@@ -542,8 +584,23 @@ class LearningShapeletsCL:
 
     def predict(self, X, *, batch_size=512):
 
+        # 先检查输入数据是否为空（在转换为tensor之前）
+        if isinstance(X, (list, tuple)):
+            if len(X) == 0:
+                return np.array([])
+        elif isinstance(X, np.ndarray):
+            if X.size == 0 or (len(X.shape) > 0 and X.shape[0] == 0):
+                return np.array([])
+        elif isinstance(X, torch.Tensor):
+            if X.numel() == 0 or (len(X.shape) > 0 and X.shape[0] == 0):
+                return np.array([])
+
         if not isinstance(X, torch.Tensor):
             X = torch.tensor(X, dtype=torch.float)
+
+        # 再次检查转换后的tensor是否为空
+        if X.numel() == 0 or (len(X.shape) > 0 and X.shape[0] == 0):
+            return np.array([])
 
         self.model.eval()
         dataset = torch.utils.data.TensorDataset(X)
@@ -555,6 +612,11 @@ class LearningShapeletsCL:
             with torch.no_grad():
             #shapelet_transform = self.model.transform(X)
                 preds.append(self.model(x).cpu())
+        
+        # 检查preds是否为空
+        if len(preds) == 0:
+            return np.array([])
+        
         preds = torch.cat(preds, 0)
 
         return preds.detach().numpy()

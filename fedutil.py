@@ -306,31 +306,139 @@ def set_diagonal_to_zero(matrix):
 
 
 ## 将样本索引集合划分为n_clients个子集
-def dirichlet_split_noniid(train_labels, alpha, n_clients):
+def dirichlet_split_noniid(train_labels, alpha, n_clients, min_samples_per_client=None, max_retries=100):
     '''
     按照参数为alpha的Dirichlet分布将样本索引集合划分为n_clients个子集
+    
+    参数:
+        train_labels: 训练标签数组
+        alpha: Dirichlet分布参数
+        n_clients: 客户端数量
+        min_samples_per_client: 每个客户端的最小样本数（默认值为总样本数/n_clients的10%，最小为1）
+        max_retries: 最大重试次数（如果某个客户端为空，重新采样）
+    
+    返回:
+        client_idcs: 每个客户端对应的样本索引列表
     '''
-
+    n_samples = len(train_labels)
+    
+    # 设置默认最小样本数
+    if min_samples_per_client is None:
+        min_samples_per_client = max(1, int(n_samples / n_clients * 0.1))  # 至少为平均值的10%，最小为1
+    
     n_classes = train_labels.max()+1
-    # (K, N) 类别标签分布矩阵X，记录每个类别划分到每个client去的比例
-    label_distribution = np.random.dirichlet([alpha]*n_clients, n_classes)
-    # (K, ...) 记录K个类别对应的样本索引集合
-    class_idcs = [np.argwhere(train_labels == y).flatten()
-                  for y in range(n_classes)]
+    
+    # 重试机制：如果某个客户端为空，重新采样
+    for retry in range(max_retries):
+        # (K, N) 类别标签分布矩阵X，记录每个类别划分到每个client去的比例
+        label_distribution = np.random.dirichlet([alpha]*n_clients, n_classes)
+        # (K, ...) 记录K个类别对应的样本索引集合
+        class_idcs = [np.argwhere(train_labels == y).flatten()
+                      for y in range(n_classes)]
 
-    # 记录N个client分别对应的样本索引集合
-    client_idcs = [[] for _ in range(n_clients)]
-    for k_idcs, fracs in zip(class_idcs, label_distribution):
-        # np.split按照比例fracs将类别为k的样本索引k_idcs划分为了N个子集
-        # i表示第i个client，idcs表示其对应的样本索引集合idcs
-        for i, idcs in enumerate(np.split(k_idcs,
-                                          (np.cumsum(fracs)[:-1]*len(k_idcs)).
-                                          astype(int))):
-            client_idcs[i] += [idcs]
+        # 记录N个client分别对应的样本索引集合
+        client_idcs = [[] for _ in range(n_clients)]
+        for k_idcs, fracs in zip(class_idcs, label_distribution):
+            # np.split按照比例fracs将类别为k的样本索引k_idcs划分为了N个子集
+            # i表示第i个client，idcs表示其对应的样本索引集合idcs
+            for i, idcs in enumerate(np.split(k_idcs,
+                                              (np.cumsum(fracs)[:-1]*len(k_idcs)).
+                                              astype(int))):
+                client_idcs[i] += [idcs]
 
-    client_idcs = [np.concatenate(idcs) for idcs in client_idcs]
-
-    return client_idcs
+        client_idcs = [np.concatenate(idcs) for idcs in client_idcs]
+        
+        # 检查是否有空客户端
+        empty_clients = [i for i, idcs in enumerate(client_idcs) if len(idcs) == 0]
+        if len(empty_clients) == 0:
+            # 没有空客户端，检查最小样本数保障
+            break
+        # 如果有空客户端，继续重试
+    
+    # 如果仍有空客户端，使用备用方案：从其他客户端补充
+    empty_clients = [i for i, idcs in enumerate(client_idcs) if len(idcs) == 0]
+    if len(empty_clients) > 0:
+        print(f"警告：经过{max_retries}次重试后，仍有{len(empty_clients)}个客户端为空，使用备用方案补充")
+        # 收集所有已分配的样本索引
+        allocated_indices = set()
+        for idcs in client_idcs:
+            allocated_indices.update(idcs)
+        
+        # 找到未分配的样本
+        all_indices = set(range(n_samples))
+        unallocated_indices = list(all_indices - allocated_indices)
+        
+        # 为每个空客户端分配样本
+        for empty_idx in empty_clients:
+            if len(unallocated_indices) > 0:
+                # 从未分配的样本中随机选择
+                num_to_assign = min(min_samples_per_client, len(unallocated_indices))
+                selected = np.random.choice(unallocated_indices, size=num_to_assign, replace=False)
+                client_idcs[empty_idx] = np.array(selected)
+                unallocated_indices = [idx for idx in unallocated_indices if idx not in selected]
+            else:
+                # 如果没有未分配的样本，从样本最多的客户端中取一些
+                non_empty_clients = [i for i in range(n_clients) if len(client_idcs[i]) > 0]
+                if len(non_empty_clients) > 0:
+                    # 找到样本最多的客户端
+                    max_client = max(non_empty_clients, key=lambda i: len(client_idcs[i]))
+                    if len(client_idcs[max_client]) > min_samples_per_client:
+                        # 从该客户端中取一些样本
+                        num_to_take = min(min_samples_per_client, len(client_idcs[max_client]) // 2)
+                        taken_indices = np.random.choice(client_idcs[max_client], size=num_to_take, replace=False)
+                        client_idcs[empty_idx] = taken_indices
+                        client_idcs[max_client] = np.array([idx for idx in client_idcs[max_client] if idx not in taken_indices])
+    
+    # 确保所有客户端都有最小样本数
+    for i, idcs in enumerate(client_idcs):
+        if len(idcs) < min_samples_per_client:
+            # 从其他客户端或未分配的样本中补充
+            current_indices = set(idcs.flatten() if isinstance(idcs, np.ndarray) else idcs)
+            all_other_indices = set(range(n_samples)) - current_indices
+            
+            if len(all_other_indices) > 0:
+                needed = min_samples_per_client - len(idcs)
+                # 优先从未分配的样本中选择
+                unallocated = list(all_other_indices)
+                if len(unallocated) >= needed:
+                    additional = np.random.choice(unallocated, size=needed, replace=False)
+                    if len(idcs) > 0:
+                        client_idcs[i] = np.concatenate([idcs, additional])
+                    else:
+                        client_idcs[i] = additional
+                else:
+                    # 如果未分配的样本不够，从样本最多的客户端中取
+                    additional = list(unallocated)
+                    still_needed = needed - len(additional)
+                    if still_needed > 0:
+                        non_empty_clients = [j for j in range(n_clients) if j != i and len(client_idcs[j]) > min_samples_per_client]
+                        if len(non_empty_clients) > 0:
+                            max_client = max(non_empty_clients, key=lambda j: len(client_idcs[j]))
+                            max_client_indices = client_idcs[max_client].flatten() if isinstance(client_idcs[max_client], np.ndarray) else client_idcs[max_client]
+                            if len(max_client_indices) > still_needed:
+                                taken = np.random.choice(max_client_indices, size=still_needed, replace=False)
+                                additional.extend(taken)
+                                remaining = np.array([idx for idx in max_client_indices if idx not in taken])
+                                client_idcs[max_client] = remaining
+                    if len(additional) > 0:
+                        if len(idcs) > 0:
+                            client_idcs[i] = np.concatenate([idcs, np.array(additional)])
+                        else:
+                            client_idcs[i] = np.array(additional)
+    
+    # 确保所有索引都是numpy数组，并且没有重复
+    final_client_idcs = []
+    for idcs in client_idcs:
+        if isinstance(idcs, np.ndarray):
+            # 去重并排序
+            unique_idcs = np.unique(idcs)
+            final_client_idcs.append(unique_idcs)
+        else:
+            # 转换为numpy数组并去重
+            unique_idcs = np.unique(np.array(idcs))
+            final_client_idcs.append(unique_idcs)
+    
+    return final_client_idcs
 
 
 

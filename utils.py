@@ -168,7 +168,7 @@ def fill_out_with_Nan(data,max_length):
 
 def get_label_dict(file_path):
     label_dict ={}
-    with open(file_path) as file:
+    with open(file_path, encoding='utf-8', errors='ignore') as file:
         lines = file.readlines()
         for line in lines:
             if '@classLabel' in line:
@@ -181,7 +181,7 @@ def get_label_dict(file_path):
 
 
 def get_data_and_label_from_ts_file(file_path,label_dict):
-    with open(file_path) as file:
+    with open(file_path, encoding='utf-8', errors='ignore') as file:
         lines = file.readlines()
         Start_reading_data = False
         Label_list = []
@@ -623,9 +623,11 @@ def compute_gap_scores(similarity, shapelets_length=None, mode="mean"):
         DB_dists = dists[DB_indices]
 
         mu_A = DA_dists.mean()
-        sigma_A = DA_dists.std()
+        # 如果只有一个元素，标准差为0；否则使用无偏估计
+        sigma_A = DA_dists.std() if len(DA_dists) > 1 else torch.tensor(0.0, device=DA_dists.device)
         mu_B = DB_dists.mean()
-        sigma_B = DB_dists.std()
+        # 如果只有一个元素，标准差为0；否则使用无偏估计
+        sigma_B = DB_dists.std() if len(DB_dists) > 1 else torch.tensor(0.0, device=DB_dists.device)
 
         gap = (mu_B - sigma_B) - (mu_A + sigma_A)
         gap_scores.append(gap)

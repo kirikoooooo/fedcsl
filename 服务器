@@ -63,3 +63,34 @@ python FedCSL_All.py -dataset HandWriting --config configAVG.yml --description "
 
 python FedCSL_All.py -dataset HandWriting --config configAllScale.yml --description "fedcsl+allscale"
 
+
+#HAR类别列表: [0.0, 1.0, 2.0, 3.0, 4.0, 5.0] bs固定32，lr=0.05
+训练集: 5,881 个样本 (57.10%)
+测试集: 2,947 个样本 (28.61%)
+验证集: 1,471 个样本 (14.28%)
+nohup python FedCSL_Epilepsy.py -dataset HAR --config configAVG.yml --description "fedavg" &    
+nohup python FedCSL_Epilepsy.py -dataset HAR --config configAllScale.yml --description "fedcsl+allscale" &
+nohup python FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --description "fedcsl+noselection" &
+nohup python FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
+
+nohup python FedCSL_Epilepsy.py -dataset HAR --config configAllScale.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
+
+
+# sleepedf[0, 1, 2, 3, 4] bs固定32，lr=0.05
+数据集分布:
+    训练集: 25,612 个样本 (60.54%)
+    测试集: 8,910 个样本 (21.06%)
+    验证集: 7,786 个样本 (18.40%)
+nohup python FedCSL_Epilepsy.py -dataset SleepEDF --config configAVG.yml --description "fedavg" &
+nohup python FedCSL_Epilepsy.py -dataset SleepEDF --config configAllScale.yml --description "fedcsl+allscale" &
+nohup python FedCSL_Epilepsy.py -dataset SleepEDF --config configACF.yml --description "fedcsl+noselection" &
+nohup python FedCSL_Epilepsy.py -dataset SleepEDF --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
+
+nohup python FedCSL_Epilepsy.py -dataset SleepEDF --config configAllScale.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
+
+# epilepsy-tstcc
+nohup python FedCSL_Epilepsy.py -dataset Epilepsy-TSTCC --config configAVG.yml --description "fedavg" &
+nohup python FedCSL_Epilepsy.py -dataset Epilepsy-TSTCC --config configAllScale.yml --description "fedcsl+allscale" &
+nohup python FedCSL_Epilepsy.py -dataset Epilepsy-TSTCC --config configACF.yml --description "fedcsl+noselection" &
+nohup python FedCSL_Epilepsy.py -dataset Epilepsy-TSTCC --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
+nohup python FedCSL_Epilepsy.py -dataset Epilepsy-TSTCC --config configAllScale.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &

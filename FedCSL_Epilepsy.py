@@ -401,18 +401,19 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             else:
                 w_locals[idx] = c.model.state_dict()
 
-            transformation_local = c.transform(X_fed[idx], result_type='numpy', normalize=True, batch_size=batch_size)
-            # mean_vector = np.mean(np.abs(transformation), axis=0) # 沿着行方向（纵向）求均值
-            # std_vector = np.std(np.abs(transformation), axis=0)    # 同样沿着行方向求标准差
-            # #mean_vector = np.mean(transformation_local, axis=0) # 沿着行方向（纵向）求均值
-            # #std_vector = np.std(transformation_local, axis=0)    # 同样沿着行方向求标准差
-            # print(mean_vector)
-            # print(std_vector)
-            gap_score_vec = compute_gap_scores_from_transformation(transformation_local)
-            sum_score = np.sum(gap_score_vec)
-            client_select_scores.append(sum_score)
-            #print(gap_score_vec)
-            print("ROUND:",round,"SUM",sum_score)
+            # 【可删除】以下代码计算gap_score但从未使用（第421行直接设置scores=[1]*numClient），每轮每个客户端都做transform非常耗时
+            # transformation_local = c.transform(X_fed[idx], result_type='numpy', normalize=True, batch_size=batch_size)
+            # # mean_vector = np.mean(np.abs(transformation), axis=0) # 沿着行方向（纵向）求均值
+            # # std_vector = np.std(np.abs(transformation), axis=0)    # 同样沿着行方向求标准差
+            # # #mean_vector = np.mean(transformation_local, axis=0) # 沿着行方向（纵向）求均值
+            # # #std_vector = np.std(transformation_local, axis=0)    # 同样沿着行方向求标准差
+            # # print(mean_vector)
+            # # print(std_vector)
+            # gap_score_vec = compute_gap_scores_from_transformation(transformation_local)
+            # sum_score = np.sum(gap_score_vec)
+            # client_select_scores.append(sum_score)
+            # #print(gap_score_vec)
+            # print("ROUND:",round,"SUM",sum_score)
 
 
 
@@ -466,12 +467,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         transformation = server.transform(X_all, result_type='numpy', normalize=True, batch_size=batch_size)
         transformation_test = server.transform(X_test, result_type='numpy', normalize=True, batch_size=batch_size)
         transformation_val = server.transform(X_val,result_type='numpy', normalize=True, batch_size=batch_size)
-        transformation_X_train_linear_1per = server.transform(X_train_linear_1per,result_type='numpy', normalize=True, batch_size=batch_size)
+        # 【可删除】以下transformation_X_train_linear_1per计算了但从未使用（第477-484行被注释掉）
+        # transformation_X_train_linear_1per = server.transform(X_train_linear_1per,result_type='numpy', normalize=True, batch_size=batch_size)
         scaler = RobustScaler()
         transformation = scaler.fit_transform(transformation)
         transformation_test = scaler.transform(transformation_test)
         transformation_val =scaler.transform(transformation_val)
-        transformation_X_train_linear_1per = scaler.transform(transformation_X_train_linear_1per)
+        # 【可删除】对应上面的transformation_X_train_linear_1per，从未使用
+        # transformation_X_train_linear_1per = scaler.transform(transformation_X_train_linear_1per)
 
         #train_acc, test_acc =  eval(transformation,transformation_test,y_train=y_all,y_test=y_test) #验证训练集是全局训练集， 测试集为全集测试集
         # train_acc, test_acc = eval_TSTCC(

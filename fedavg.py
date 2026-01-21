@@ -3,21 +3,41 @@ import copy
 import numpy as np
 
 # 使用score
-def fedavg(w, y_fed,score_list):
+def fedavg(w, y_fed, score_list):
     """
     Returns the average of the weights.
+    
+    Args:
+        w: List of model state dicts from clients
+        y_fed: List of labels for each client (used to calculate sample counts)
+        score_list: List of scores/masks for each client (0 or 1 for client selection)
+    
+    Returns:
+        w_avg: Averaged model weights
     """
-    total_samples = sum([len(row) for row in y_fed])
+    # 只计算被选中客户端的总样本数（score_list[i] != 0 的客户端）
+    total_samples = sum([len(y_fed[i]) * (1 if score_list[i] != 0 else 0) for i in range(len(y_fed))])
+    
+    # 如果没有客户端被选中，返回第一个客户端的权重（或抛出错误）
+    if total_samples == 0:
+        print("警告：没有客户端被选中，返回第一个客户端的权重")
+        return copy.deepcopy(w[0])
+    
     w_avg = copy.deepcopy(w[0])
+    # 初始化第一个客户端的权重
     for k in w_avg.keys():
-        w_avg[k] =  w_avg[k] * len(y_fed[0]) / total_samples * score_list[0]
-        #print(w_avg[k].shape)
-    # print(len(w))
-    # print(len(y_fed))
+        if score_list[0] != 0:
+            w_avg[k] = w_avg[k] * len(y_fed[0]) / total_samples * score_list[0]
+        else:
+            w_avg[k] = w_avg[k] * 0  # 如果第一个客户端未被选中，权重为0
+    
+    # 累加其他客户端的权重
     for key in w_avg.keys():
         for i in range(1, len(w)):
-            w_avg[key] += w[i][key] * len(y_fed[i]) / total_samples * score_list[i] #key 是model_state_dict 的key
-        #w_avg[key] = torch.div(w_avg[key], len(w))
+            if score_list[i] != 0:
+                w_avg[key] += w[i][key] * len(y_fed[i]) / total_samples * score_list[i]  # key 是model_state_dict 的key
+            # 如果 score_list[i] == 0，该客户端不参与聚合（权重为0，不需要累加）
+    
     return w_avg
 
 def fedavg2(w,y_fed):

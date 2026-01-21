@@ -163,6 +163,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     numRound = config['federated']['numRound']
     numEpoch = config['federated']['numEpoch']
     dirichlet_alpha = config['federated']['dirichlet_alpha']
+    # 读取算法类型
+    algo = config.get('algo', 'fedcsl')
     # 命令行参数优先，如果没有则使用配置文件中的值
     use_client_selection = args.use_client_selection if args.use_client_selection else config['federated'].get('use_client_selection', False)
     client_selection_ratio = args.client_selection_ratio if args.client_selection_ratio is not None else config['federated'].get('client_selection_ratio', 0.6)
@@ -429,32 +431,53 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         if use_client_selection:
             # 启用客户端选择
             sample_nums = int(numClient * client_selection_ratio)  # 采样数
-            if round == 0:
-                # 第一轮全选所有客户端
-                select_mask = [1] * numClient
+            
+            # 如果使用fedavg算法，强制使用均匀采样（各客户端概率相等）
+            if algo == 'fedavg':
+                # fedavg算法使用均匀采样，概率始终保持相等
                 probs = [1.0/numClient] * numClient
-                print(f"第一轮：全选所有客户端")
+                if round == 0:
+                    # 第一轮全选所有客户端
+                    select_mask = [1] * numClient
+                    print(f"第一轮：全选所有客户端（fedavg均匀采样模式）")
+                else:
+                    # 从第二轮开始按均匀概率选择
+                    print(f"fedavg均匀采样模式，概率: {probs}")
+                    select_mask = sample_clients_mask_by_probability(probs, sample_nums)
+                    print(f"客户端选择掩码: {select_mask}")
             else:
-                # 从第二轮开始按采样概率选择
-                print(f"本轮采样概率阵: {probs}")
-                select_mask = sample_clients_mask_by_probability(probs, sample_nums)
-                print(f"客户端选择掩码: {select_mask}")
+                # 其他算法使用自适应概率采样
+                if round == 0:
+                    # 第一轮全选所有客户端
+                    select_mask = [1] * numClient
+                    probs = [1.0/numClient] * numClient
+                    print(f"第一轮：全选所有客户端")
+                else:
+                    # 从第二轮开始按采样概率选择
+                    print(f"本轮采样概率阵: {probs}")
+                    select_mask = sample_clients_mask_by_probability(probs, sample_nums)
+                    print(f"客户端选择掩码: {select_mask}")
             
             # 使用select_mask进行聚合
             w_global = fedavg(w_locals, y_fed, select_mask)
             server.model.load_state_dict(w_global)
             
             # omp计算重新分配概率（在聚合后执行，第一轮也需要更新概率）
-            sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
-            probs = get_sampling_probs_from_omp(
-                sparse_vec, 
-                prev_probs=probs, 
-                selection_mask=select_mask,
-                min_selection_prob=min_selection_prob,
-                ema_alpha=ema_alpha
-            )
-            print(f"稀疏向量: {sparse_vec}")
-            print(f"更新后概率: {probs}")
+            # 注意：fedavg算法不更新概率，始终保持均匀
+            if algo != 'fedavg':
+                sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
+                probs = get_sampling_probs_from_omp(
+                    sparse_vec, 
+                    prev_probs=probs, 
+                    selection_mask=select_mask,
+                    min_selection_prob=min_selection_prob,
+                    ema_alpha=ema_alpha
+                )
+                print(f"稀疏向量: {sparse_vec}")
+                print(f"更新后概率: {probs}")
+            else:
+                # fedavg算法保持均匀概率，不更新
+                print(f"fedavg算法：保持均匀采样概率，不更新")
         else:
             # 不使用客户端选择，所有客户端都参与聚合
             select_mask = [1] * numClient

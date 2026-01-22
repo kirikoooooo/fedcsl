@@ -24,19 +24,31 @@ def fedavg(w, y_fed, score_list):
         return copy.deepcopy(w[0])
     
     w_avg = copy.deepcopy(w[0])
+    
+    # 只聚合可训练参数（跳过buffers如num_batches_tracked等整数类型）
+    # 获取第一个模型的参数键（排除buffers）
+    param_keys = [k for k in w_avg.keys() if not k.endswith('.num_batches_tracked')]
+    
     # 初始化第一个客户端的权重
-    for k in w_avg.keys():
+    for k in param_keys:
         if score_list[0] != 0:
             w_avg[k] = w_avg[k] * len(y_fed[0]) / total_samples * score_list[0]
         else:
-            w_avg[k] = w_avg[k] * 0  # 如果第一个客户端未被选中，权重为0
+            # 如果第一个客户端未被选中，权重为0
+            w_avg[k] = w_avg[k] * 0
     
     # 累加其他客户端的权重
-    for key in w_avg.keys():
+    for key in param_keys:
         for i in range(1, len(w)):
             if score_list[i] != 0:
-                w_avg[key] += w[i][key] * len(y_fed[i]) / total_samples * score_list[i]  # key 是model_state_dict 的key
+                contribution = w[i][key] * len(y_fed[i]) / total_samples * score_list[i]
+                w_avg[key] += contribution
             # 如果 score_list[i] == 0，该客户端不参与聚合（权重为0，不需要累加）
+    
+    # 对于buffers（如num_batches_tracked），直接使用第一个客户端的值（不进行聚合）
+    buffer_keys = [k for k in w_avg.keys() if k.endswith('.num_batches_tracked')]
+    for k in buffer_keys:
+        w_avg[k] = w[0][k]  # 直接使用第一个客户端的buffer值
     
     return w_avg
 

@@ -51,6 +51,7 @@ parser.add_argument('--config', default='./config.yml', type=str, help='Path to 
 # 客户端选择超参数（命令行参数，会覆盖配置文件中的值）
 parser.add_argument('--use-client-selection', action='store_true', help='Enable client selection')
 parser.add_argument('--client-selection-ratio', type=float, default=None, help='Client selection ratio (0.0-1.0)')
+parser.add_argument('--client-selection-method', type=str, default=None, choices=['uniform', 'omp'], help='Client selection method: uniform (uniform probability) or omp (OMP-based adaptive)')
 parser.add_argument('--min-selection-prob', type=float, default=None, help='Minimum selection probability')
 parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
 parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
@@ -130,11 +131,18 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     numRound = config['federated']['numRound']
     numEpoch = config['federated']['numEpoch']
     dirichlet_alpha = config['federated']['dirichlet_alpha']
+    # 读取算法类型
+    algo = config.get('algo', 'fedcsl')
     # 命令行参数优先，如果没有则使用配置文件中的值
     use_client_selection = args.use_client_selection if args.use_client_selection else config['federated'].get('use_client_selection', False)
     client_selection_ratio = args.client_selection_ratio if args.client_selection_ratio is not None else config['federated'].get('client_selection_ratio', 0.6)
     min_selection_prob = args.min_selection_prob if args.min_selection_prob is not None else config['federated'].get('min_selection_prob', 0.01)
     ema_alpha = args.ema_alpha if args.ema_alpha is not None else config['federated'].get('ema_alpha', 0.3)
+    # 客户端选择方法：uniform（均匀概率）或omp（OMP自适应），默认根据算法类型自动选择
+    client_selection_method = args.client_selection_method if args.client_selection_method is not None else config['federated'].get('client_selection_method', None)
+    # 如果没有指定方法，fedavg默认使用uniform，其他算法默认使用omp
+    if client_selection_method is None:
+        client_selection_method = 'uniform' if algo == 'fedavg' else 'omp'
     if args.dataset is not None:
         dataset = args.dataset
     else:
@@ -146,7 +154,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     wd = config['model']['params']['wd']
     ls = config['model']['params']['ls']
     l = config['model']['params']['l']
-
+    beta = config['model']['params'].get('beta', 0.4)  # 默认值0.4，参考configAVG.yml
+    gamma = config['model']['params'].get('gamma', 0.5)  # 默认值0.5，参考configAVG.yml
 
     # 加载shapelets weight权重
     shapelet_weight_X = np.load('./algoutils/shapelet_weight_All.npy')
@@ -195,6 +204,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     f.writelines("use_client_selection:"+str(use_client_selection)+"\n")
     if use_client_selection:
         f.writelines("client_selection_ratio:"+str(client_selection_ratio)+"\n")
+        f.writelines("client_selection_method:"+str(client_selection_method)+"\n")
         f.writelines("min_selection_prob:"+str(min_selection_prob)+"\n")
         f.writelines("ema_alpha:"+str(ema_alpha)+"\n")
     f.writelines("-------------------------------------------"+"\n")
@@ -228,7 +238,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         seed=seed,
         shapelet_weight=shapelet_weight_X,
         configDir=args.config,
-        config=config
+        config=config,
+        beta=beta,
     )
     for idx in range(numClient):
         client = LearningShapeletsCL(
@@ -248,7 +259,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             seed=seed,
             shapelet_weight=shapelet_weight_X,
             configDir=args.config,
-            config=config
+            config=config,
+            beta=beta,
         )
         optimizer = optim.SGD(client.model.parameters(), lr=lr, weight_decay=wd)
         # optimizer = optim.SGD([
@@ -277,7 +289,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     probs = None
     if use_client_selection:
         probs = [1.0/numClient] * numClient  # 初始化采样概率
-        print(f"客户端选择已启用，采样比例: {client_selection_ratio}")
+        method_name = "均匀采样" if client_selection_method == 'uniform' else "OMP自适应采样"
+        print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: {method_name}")
         print(f"最低选择概率: {min_selection_prob}, EMA平滑系数: {ema_alpha}")
     else:
         print("客户端选择未启用，所有客户端参与聚合")
@@ -373,37 +386,59 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         if use_client_selection:
             # 启用客户端选择
             sample_nums = int(numClient * client_selection_ratio)  # 采样数
-            if round == 0:
-                # 第一轮全选所有客户端
-                select_mask = [1] * numClient
-                probs = [1.0/numClient] * numClient
-                print(f"第一轮：全选所有客户端")
-            else:
-                # 从第二轮开始按采样概率选择
-                print(f"本轮采样概率阵: {probs}")
-                select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=original_seed)
-                print(f"客户端选择掩码: {select_mask}")
             
-            # 使用select_mask进行聚合（结合原有的scores）
-            # 将select_mask与scores结合：如果客户端未被选中，则score为0
+            # 根据选择方法进行客户端选择
+            if client_selection_method == 'uniform':
+                # 均匀采样：所有客户端概率相等
+                probs = [1.0/numClient] * numClient
+                if round == 0:
+                    # 第一轮全选所有客户端
+                    select_mask = [1.0] * numClient  # 使用浮点数
+                    print(f"第一轮：全选所有客户端（均匀采样模式）")
+                else:
+                    # 从第二轮开始按均匀概率选择
+                    print(f"均匀采样模式，概率: {probs}")
+                    select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=original_seed)
+                    # 转换为浮点数类型
+                    select_mask = [float(x) for x in select_mask]
+                    print(f"客户端选择掩码: {select_mask}")
+            else:
+                # OMP自适应采样
+                if round == 0:
+                    # 第一轮全选所有客户端
+                    select_mask = [1.0] * numClient  # 使用浮点数
+                    probs = [1.0/numClient] * numClient
+                    print(f"第一轮：全选所有客户端（OMP自适应采样模式）")
+                else:
+                    # 从第二轮开始按采样概率选择
+                    print(f"本轮采样概率阵: {probs}")
+                    select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=original_seed)
+                    # 转换为浮点数类型
+                    select_mask = [float(x) for x in select_mask]
+                    print(f"客户端选择掩码: {select_mask}")
+            
+            # 使用select_mask与scores结合进行聚合：如果客户端未被选中，则score为0
             combined_scores = [scores[i] * select_mask[i] for i in range(numClient)]
             w_global = fedavg(w_locals, y_fed, combined_scores)
             server.model.load_state_dict(w_global)
             
-            # omp计算重新分配概率（在聚合后执行，第一轮也需要更新概率）
-            sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
-            probs = get_sampling_probs_from_omp(
-                sparse_vec, 
-                prev_probs=probs, 
-                selection_mask=select_mask,
-                min_selection_prob=min_selection_prob,
-                ema_alpha=ema_alpha
-            )
-            print(f"稀疏向量: {sparse_vec}")
-            print(f"更新后概率: {probs}")
+            # 更新概率：只有使用OMP自适应采样时才更新
+            if client_selection_method == 'omp':
+                sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
+                probs = get_sampling_probs_from_omp(
+                    sparse_vec,
+                    prev_probs=probs,
+                    selection_mask=select_mask,
+                    min_selection_prob=min_selection_prob,
+                    ema_alpha=ema_alpha
+                )
+                print(f"稀疏向量: {sparse_vec}")
+                print(f"更新后概率: {probs}")
+            else:
+                # 均匀采样模式保持均匀概率，不更新
+                print(f"均匀采样模式：保持均匀采样概率，不更新")
         else:
             # 不使用客户端选择，所有客户端都参与聚合
-            select_mask = [1] * numClient
             print("所有客户端参与聚合（客户端选择未启用）")
             # 使用原有的scores进行聚合
             w_global = fedavg(w_locals, y_fed, scores)

@@ -265,7 +265,11 @@ class LearningShapeletsCL:
                 #print(type(config['ablation']['UseACF']))
                 if config['ablation']['UseACF'] and pscore is not None:
                     self.shapelet_weight = pscore
-                    precisions[length_i] = self.shapelet_weight[length_i] * 5 # 倍频一下
+                    w = float(pscore[length_i]) if length_i < len(pscore) else 1.0
+                    # 防止 NaN/Inf 传入 loss 导致 backward 失败
+                    if not (np.isfinite(w) and w > 0):
+                        w = 1.0
+                    precisions[length_i] = w * 5  # 倍频一下
                 else:
                     precisions[length_i] = 1.0
 

@@ -68,7 +68,7 @@ python FedCSL_All.py -dataset HandWriting --config configAllScale.yml --descript
 训练集: 5,881 个样本 (57.10%)
 测试集: 2,947 个样本 (28.61%)
 验证集: 1,471 个样本 (14.28%)
-nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configAVG.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "fedavg 采样" &    
+nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configAVG.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "fedavg 采样" &
 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configAllScale.yml --description "fedcsl+allscale" &
 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --description "fedcsl+noselection" &
 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
@@ -84,7 +84,7 @@ nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configAllScale.yml --us
 nohup python -u FedCSL_Epilepsy.py -dataset SleepEDF --config configAVG.yml --description "fedavg" &
 nohup python -u FedCSL_Epilepsy.py -dataset SleepEDF --config configAllScale.yml --description "fedcsl+allscale" &
 nohup python -u FedCSL_Epilepsy.py -dataset SleepEDF --config configACF.yml --description "fedcsl+noselection" &
-nohup python -u FedCSL_Epilepsy.py -dataset SleepEDF --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
+nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
 
 nohup python -u FedCSL_Epilepsy.py -dataset SleepEDF --config configAllScale.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "min0.01+ema0" &
 
@@ -100,5 +100,57 @@ nohup python FedCSL_Epilepsy.py -dataset Epilepsy-TSTCC --config configAllScale.
 python FedCSL_Epilepsy.py --config config.yml --use-client-selection --client-selection-method uniform
 
 # 使用OMP自适应采样
-nohup python -u FedCSL_Epilepsy.py --config configAVG.yml --use-client-selection 
---client-selection-method uniform  --client-selection-ratio 0.7  -dataset HAR --description "fedavg" &
+nohup python -u FedCSL_Epilepsy.py --config configACF.yml --use-client-selection
+--client-selection-method omp --client-selection-ratio 0.7  -dataset HAR --description "fedavg" &
+
+
+# GPU 0
+CUDA_VISIBLE_DEVICES=0 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.0   --description "prob0.01_ema0.0"   > logs_prob0.01_ema0.0.log   2>&1 &
+
+# GPU 1
+CUDA_VISIBLE_DEVICES=1 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.2   --description "prob0.01_ema0.2"   > logs_prob0.01_ema0.2.log   2>&1 &
+
+# GPU 2
+CUDA_VISIBLE_DEVICES=2 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.4   --description "prob0.01_ema0.4"   > logs_prob0.01_ema0.4.log   2>&1 &
+
+# GPU 3
+CUDA_VISIBLE_DEVICES=3 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.6   --description "prob0.01_ema0.6"   > logs_prob0.01_ema0.6.log   2>&1 &
+
+# GPU 4
+CUDA_VISIBLE_DEVICES=4 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.8   --description "prob0.01_ema0.8"   > logs_prob0.01_ema0.8.log   2>&1 &
+
+# GPU 5
+CUDA_VISIBLE_DEVICES=5 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 1.0   --description "prob0.01_ema1.0"   > logs_prob0.01_ema1.0.log   2>&1 &
+
+
+# GPU 6 (或 0)
+CUDA_VISIBLE_DEVICES=0 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.001 --ema-alpha 0   --description "ema0_prob0.001"   > logs_ema0_prob0.001.log   2>&1 &
+
+# GPU 7 (或 1)
+CUDA_VISIBLE_DEVICES=1 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.002 --ema-alpha 0   --description "ema0_prob0.002"   > logs_ema0_prob0.002.log   2>&1 &
+
+# GPU 8 (或 2)
+CUDA_VISIBLE_DEVICES=2 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.005 --ema-alpha 0   --description "ema0_prob0.005"   > logs_ema0_prob0.005.log   2>&1 &
+
+# GPU 9 (或 3)
+CUDA_VISIBLE_DEVICES=3 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01  --ema-alpha 0   --description "ema0_prob0.01"    > logs_ema0_prob0.01.log    2>&1 &
+
+# GPU 10 (或 4)
+CUDA_VISIBLE_DEVICES=4 nohup python -u FedCSL_Epilepsy.py -dataset HAR --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.02  --ema-alpha 0   --description "ema0_prob0.02"    > logs_ema0_prob0.02.log    2>&1 &
+
+
+
+
+CUDA_VISIBLE_DEVICES=0 nohup python -u FedCSL_Epilepsy.py -dataset PEMS-SF --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.0   --description "prob0.01_ema0.0"   > logs_PEMS-SF_prob0.01_ema0.0.log   2>&1 &
+
+
+
+CUDA_VISIBLE_DEVICES=6 nohup python -u FedCSL_All.py -dataset PhonemeSpectra --config configAVG.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "fedavg uniform 采样" &
+
+
+CUDA_VISIBLE_DEVICES=5 nohup python -u FedCSL_All.py -dataset PhonemeSpectra --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "fedacf omp 采样" &
+
+CUDA_VISIBLE_DEVICES=6 python FedCSL_All.py -dataset PhonemeSpectra --config configAVG.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "fedavg uniform 采样"
+
+
+CUDA_VISIBLE_DEVICES=6 python FedCSL_All.py -dataset PhonemeSpectra --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "fedacf omp 采样"

@@ -354,30 +354,39 @@ def period_score(x,alpha=0.4):
             threshold = np.percentile(power_spectrum, 95)
             bright_region = power_spectrum >= threshold
 
-            # 计算加权中心频率
-            if np.sum(bright_region) > 0:
-                weighted_freq = np.sum(f[:, None] * power_spectrum * bright_region) / np.sum(power_spectrum * bright_region)
+            # 计算加权中心频率（防止除零和 NaN）
+            denom = np.sum(power_spectrum * bright_region)
+            if denom > 1e-12 and np.isfinite(denom):
+                weighted_freq = np.sum(f[:, None] * power_spectrum * bright_region) / denom
+                weighted_freq = np.nan_to_num(weighted_freq, nan=0.0, posinf=0.0, neginf=0.0)
             else:
-                weighted_freq = 0  # 防止除零
+                weighted_freq = 0.0
 
             # 计算当前维度的 STFT 得分
-            current_score = 1 / weighted_freq if weighted_freq != 0 else 0
+            current_score = (1.0 / weighted_freq) if (weighted_freq > 1e-12 and np.isfinite(weighted_freq)) else 0.0
             stft_scores.append(current_score)
 
-        # 转换为数组并计算高斯核得分
-        stft_scores = np.array(stft_scores)
+        # 转换为数组并计算高斯核得分（防止 NaN 传播）
+        stft_scores = np.nan_to_num(np.array(stft_scores), nan=0.0, posinf=0.0, neginf=0.0)
         stft_gauss = np.exp(-((stft_scores[:, None] - list_points_scaled) ** 2) / (2 * (L * 0.1) ** 2))
-        stft_normalized = stft_gauss / stft_gauss.sum(axis=1, keepdims=True)
+        stft_row_sum = stft_gauss.sum(axis=1, keepdims=True)
+        stft_row_sum = np.where(stft_row_sum > 1e-12, stft_row_sum, 1.0)
+        stft_normalized = stft_gauss / stft_row_sum
         total_scores_stft += stft_normalized.sum(axis=0)  # 累加所有维度的得分
 
         # 2. ACF 分析
         acf_scores = []
 
         for i in range(k):
-            # 计算当前维度的 ACF
-            time_series = sample_data[i, :]
-            acf_values = acf(time_series, nlags=L-1, fft=True)
-
+            # 计算当前维度的 ACF（零方差序列会导致 statsmodels 产生 NaN）
+            time_series = sample_data[i, :].astype(np.float64)
+            if np.var(time_series) < 1e-12:
+                continue  # 常数序列跳过 ACF
+            try:
+                acf_values = acf(time_series, nlags=L-1, fft=True)
+                acf_values = np.nan_to_num(acf_values, nan=0.0, posinf=0.0, neginf=0.0)
+            except (FloatingPointError, ValueError):
+                continue
             # 找到 lag > L/2 的峰值点
             half_lag = L // 2
             peaks, _ = find_peaks(acf_values[half_lag:], height=acf_threshold)
@@ -392,13 +401,17 @@ def period_score(x,alpha=0.4):
                 distances = np.abs(lag - list_points_scaled)
                 current_scores += 1 / (distances + 1e-6)
 
-            # 归一化当前维度的得分
-            current_scores /= current_scores.sum()
-            acf_scores.append(current_scores)
+            # 归一化当前维度的得分（防止除零）
+            csum = current_scores.sum()
+            if csum > 1e-12:
+                current_scores /= csum
+                acf_scores.append(current_scores)
 
         if acf_scores:
             acf_scores = np.array(acf_scores)
-            acf_normalized = acf_scores / acf_scores.sum(axis=1, keepdims=True)
+            acf_row_sum = acf_scores.sum(axis=1, keepdims=True)
+            acf_row_sum = np.where(acf_row_sum > 1e-12, acf_row_sum, 1.0)
+            acf_normalized = acf_scores / acf_row_sum
             total_scores_acf += acf_normalized.sum(axis=0)  # 累加所有维度的得分
 
     # 合并得分：前4个用STFT，后4个用ACF，并根据alpha调整权重
@@ -412,12 +425,17 @@ def period_score(x,alpha=0.4):
     stft_part_normalized = stft_part / stft_sum if stft_sum != 0 else np.zeros_like(stft_part)
     acf_part_normalized = acf_part / acf_sum if acf_sum != 0 else np.zeros_like(acf_part)
 
-    # 加权合并并归一化
+    # 加权合并并归一化（防止 NaN 和除零）
     final_scores = np.concatenate([
         stft_part_normalized * alpha,
         acf_part_normalized * (1 - alpha)
     ])
-    final_scores /= final_scores.sum()
+    final_scores = np.nan_to_num(final_scores, nan=0.0, posinf=0.0, neginf=0.0)
+    fsum = final_scores.sum()
+    if fsum > 1e-12:
+        final_scores /= fsum
+    else:
+        final_scores = np.ones_like(final_scores) / len(final_scores)
 
     #打印结果
     # print("Final Normalized Scores for Each Reference Point:")

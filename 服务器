@@ -154,3 +154,41 @@ CUDA_VISIBLE_DEVICES=6 python FedCSL_All.py -dataset PhonemeSpectra --config con
 
 
 CUDA_VISIBLE_DEVICES=6 python FedCSL_All.py -dataset PhonemeSpectra --config configACF.yml --use-client-selection --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "fedacf omp 采样"
+
+# sleepedf
+CUDA_VISIBLE_DEVICES=3 nohup python -u FedCSL_Epilepsy.py -dataset SleepEDF --config configAVG.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedAVGuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=4 nohup python -u FedCSL_Epilepsy.py -dataset SleepEDF --config configACF.yml --use-client-selection --client-selection-method omp --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedCSLOMPmin0.01+ema0" &
+
+
+CUDA_VISIBLE_DEVICES=5 nohup python -u FedCSL_Epilepsy.py -dataset SleepEDF --config configACF.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedCSLuniformmin0.01+ema0" &
+
+
+# phonemespectra
+CUDA_VISIBLE_DEVICES=2 nohup python -u FedCSL_All.py -dataset PhonemeSpectra --config configACF.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedCSLuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=6 nohup python -u FedCSL_All.py -dataset PhonemeSpectra --config configAVG.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedAVGuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=7 nohup python -u FedCSL_All.py -dataset PhonemeSpectra --config configACF.yml --use-client-selection --client-selection-method omp --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.4 --description "FedCSLOMPmin0.01+ema0.4" &
+
+
+# SpokenArabicDigits
+CUDA_VISIBLE_DEVICES=1 nohup python -u FedCSL_All.py -dataset SpokenArabicDigits --config configACF.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedCSLuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=3 nohup python -u FedCSL_All.py -dataset SpokenArabicDigits --config configAVG.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedAVGuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=4 nohup python -u FedCSL_All.py -dataset SpokenArabicDigits --config configACF.yml --use-client-selection --client-selection-method omp --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.4 --description "FedCSLOMPmin0.01+ema0.4" &
+
+# InsectWingbeat
+CUDA_VISIBLE_DEVICES=1 nohup python -u FedCSL_All.py -dataset InsectWingbeat --config configACF.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedCSLuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=3 nohup python -u FedCSL_All.py -dataset InsectWingbeat --config configAVG.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedAVGuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=4 nohup python -u FedCSL_All.py -dataset InsectWingbeat --config configACF.yml --use-client-selection --client-selection-method omp --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.4 --description "FedCSLOMPmin0.01+ema0.4" &
+
+# FaceDetection
+CUDA_VISIBLE_DEVICES=2 nohup python -u FedCSL_All.py -dataset FaceDetection --config configACF.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedCSLuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=5 nohup python -u FedCSL_All.py -dataset FaceDetection --config configAVG.yml --use-client-selection --client-selection-method uniform --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0 --description "FedAVGuniformmin0.01+ema0" &
+
+CUDA_VISIBLE_DEVICES=6 nohup python -u FedCSL_All.py -dataset FaceDetection --config configACF.yml --use-client-selection --client-selection-method omp --client-selection-ratio 0.7 --min-selection-prob 0.01 --ema-alpha 0.4 --description "FedCSLOMPmin0.01+ema0.4" &

@@ -52,6 +52,30 @@ def fedavg(w, y_fed, score_list):
     
     return w_avg
 
+
+def fedavg_fedcs(w, y_fed, agg_weights):
+    """
+    FedCS 聚合：使用逆概率权重 agg_weights（由 FedCS 选择器计算 p_i/(K*q_i) 并归一化）。
+    agg_weights: List[float]，长度=客户端数，仅被选中客户端非 0，且 sum(agg_weights)=1。
+    """
+    agg_weights = np.asarray(agg_weights, dtype=np.float64)
+    if agg_weights.sum() <= 0:
+        print("警告：FedCS 聚合权重和为 0，退回首客户端")
+        return copy.deepcopy(w[0])
+    agg_weights = agg_weights / agg_weights.sum()
+    w_avg = copy.deepcopy(w[0])
+    param_keys = [k for k in w_avg.keys() if not k.endswith('.num_batches_tracked')]
+    for k in param_keys:
+        w_avg[k] = w[0][k] * agg_weights[0]
+    for key in param_keys:
+        for i in range(1, len(w)):
+            w_avg[key] = w_avg[key] + w[i][key] * agg_weights[i]
+    buffer_keys = [k for k in w_avg.keys() if k.endswith('.num_batches_tracked')]
+    for k in buffer_keys:
+        w_avg[k] = w[0][k]
+    return w_avg
+
+
 def fedavg2(w,y_fed):
         # FedAvg with weight
         total_samples = sum([len(row) for row in y_fed])

@@ -3,7 +3,7 @@ from train import LearningShapeletsCL
 #from train_origin import LearningShapeletsCL
 
 from fedutil import *
-from fedavg import fedavg,fedavg2,FedAvg3
+from fedavg import fedavg, fedavg_fedcs, fedavg2, FedAvg3
 import torch.distributed as dist
 import torch
 from torch import nn, optim
@@ -25,6 +25,8 @@ import copy
 from dataset_utils import *
 import yaml
 from datetime import datetime
+from oort_selector import create_oort_selector
+from fedcs_selector import create_fedcs_selector
 
 import time
 
@@ -51,7 +53,7 @@ parser.add_argument('--config', default='./config.yml', type=str, help='Path to 
 # 客户端选择超参数（命令行参数，会覆盖配置文件中的值）
 parser.add_argument('--use-client-selection', action='store_true', help='Enable client selection')
 parser.add_argument('--client-selection-ratio', type=float, default=None, help='Client selection ratio (0.0-1.0)')
-parser.add_argument('--client-selection-method', type=str, default=None, choices=['uniform', 'omp'], help='Client selection method: uniform (uniform probability) or omp (OMP-based adaptive)')
+parser.add_argument('--client-selection-method', type=str, default=None, choices=['uniform', 'omp', 'oort', 'fedcs'], help='Client selection: uniform, omp, oort, or fedcs (adaptive client sampling)')
 parser.add_argument('--min-selection-prob', type=float, default=None, help='Minimum selection probability')
 parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
 parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
@@ -59,6 +61,22 @@ parser.add_argument('--description', type=str, default=None, help='Experiment de
 args = parser.parse_args()
 with open(args.config, 'r',encoding='utf-8') as f:
     config = copy.deepcopy(yaml.load(f, Loader=yaml.FullLoader))  # 使用深拷贝保护原始配置
+
+
+def _sanitize_filename(s):
+    """按当前操作系统替换非法文件名字符，保证 Win/Linux 兼容。"""
+    if s is None:
+        return ""
+    s = str(s)
+    if os.name == "nt":
+        # Windows 非法: \ / : * ? " < > |
+        invalid_chars = r'\/:*?"<>|'
+    else:
+        # Linux/macOS: 仅路径分隔符 / 和空字符非法
+        invalid_chars = "/\x00"
+    for c in invalid_chars:
+        s = s.replace(c, "_")
+    return s.strip() or "run"
 
 
 # 训练一个SVC 分类器 进行下游分类评估
@@ -101,6 +119,25 @@ def evalwithCV(transformation,transformation_test,y_train,y_test):
     train_acc = accuracy_score(clf.predict(transformation), y_train)
     test_acc = accuracy_score(clf.predict(transformation_test), y_test)
     return train_acc, test_acc
+
+
+def eval_TSTCC(transformation_train, transformation_test, transformation_val, y_train, y_test, y_val):
+    """使用验证集选 C，再在测试集上评估（Epilepsy/SleepEDF/FD-A 等有 val.pt 的数据集）。"""
+    acc_val_best = -1
+    C_best = None
+    for C in [10 ** i for i in range(-4, 5)]:
+        clf = SVC(C=C, random_state=42)
+        clf.fit(transformation_train, y_train)
+        acc_i = accuracy_score(clf.predict(transformation_val), y_val)
+        if acc_i > acc_val_best:
+            acc_val_best = acc_i
+            C_best = C
+    clf = SVC(C=C_best, random_state=42)
+    clf.fit(transformation_train, y_train)
+    train_acc = accuracy_score(clf.predict(transformation_train), y_train)
+    test_acc = accuracy_score(clf.predict(transformation_test), y_test)
+    return train_acc, test_acc
+
 
 def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, to_cuda=True,
            eval_per_x_epochs=10, dist_measure='mix', rank=-1, world_size=-1, resize=0,
@@ -163,12 +200,39 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     print(shapelet_weight_X)
 
 
-    # 加载数据集
+    # 加载数据集（统一入口：HAR / Epilepsy-TSTCC / SleepEDF / FD-A / 其他 UEA）
+    has_val = False
+    X_val, y_val = None, None
+
     if dataset == "HAR":
-         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_HAR(numClient,dirichlet_alpha,scoreX=shapelet_weight_X,scoreY=None)
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_HAR(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
+        if os.path.isfile("./HAR/val.pt"):
+            val_data = torch.load("./HAR/val.pt")
+            X_val = val_data["samples"].float()
+            y_val = val_data["labels"].int()
+            has_val = True
+    elif dataset == "Epilepsy-TSTCC":
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_Epilepsy(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
+        val_data = torch.load("./Epilepsy/val.pt")
+        X_val = val_data["samples"].float()
+        y_val = val_data["labels"].int()
+        has_val = True
+    elif dataset == "SleepEDF":
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_SleepEDF(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
+        val_data = torch.load("./sleepEDF/val.pt")
+        X_val = val_data["samples"].float()
+        y_val = val_data["labels"].int()
+        has_val = True
+    elif dataset == "FD-A":
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_FDA(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
+        val_data = torch.load("./FD-A/val.pt")
+        X_val = val_data["samples"].float()
+        y_val = val_data["labels"].int()
+        X_val = X_val.unsqueeze(1)
+        has_val = True
     elif dataset != "":
-         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_UEA(dataset, numClient,dirchlet_alpha=dirichlet_alpha,
-                                                                                            scoreX=shapelet_weight_X,scoreY=None)
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_UEA(dataset, numClient, dirchlet_alpha=dirichlet_alpha,
+                                                                     scoreX=shapelet_weight_X, scoreY=None)
     else:
         print("dataset not found")
         exit(0)
@@ -188,9 +252,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     #Print logs------------------------------------------------------------------------------------------------------------
     print("shapelet initialized! \n")
     now = datetime.now()
-    formatted_date = now.strftime("%Y-%m-%d-%H")+str(config['description'])
+    desc_safe = _sanitize_filename(config.get('description', ''))
+    formatted_date = now.strftime("%Y-%m-%d-%H") + desc_safe
     #logTxt = "./result/"+dataset+"l=1e-2lr=0.01epoch3 contrastive.txt"
-    logTxt = f"./result/{dataset}/{formatted_date}_l={l}_lr={lr}_epoch{numEpoch}_alphadir{dirichlet_alpha}_{config['description']}.txt"
+    logTxt = f"./result/{dataset}/{formatted_date}_l={l}_lr={lr}_epoch{numEpoch}_alphadir{dirichlet_alpha}_{desc_safe}.txt"
 
     f = open(logTxt, mode="a+")
     f.writelines("Details of Training:-----------------------\n")
@@ -287,16 +352,34 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     
     # 初始化客户端选择相关变量
     probs = None
+    oort_selector = None
+    fedcs_selector = None
     if use_client_selection:
-        probs = [1.0/numClient] * numClient  # 初始化采样概率
-        method_name = "均匀采样" if client_selection_method == 'uniform' else "OMP自适应采样"
-        print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: {method_name}")
+        probs = [1.0/numClient] * numClient  # 初始化采样概率（uniform/omp 用）
+        sample_nums_init = int(numClient * client_selection_ratio)
+        if client_selection_method == 'oort':
+            oort_selector = create_oort_selector(config=config, sample_seed=original_seed or 42)
+            for idx in range(numClient):
+                size = len(y_fed[idx]) if idx < len(y_fed) else 0
+                reward = min(size, numEpoch * batch_size) if size else 1.0
+                oort_selector.register_client(idx, {'reward': reward, 'duration': 1.0, 'time_stamp': 0, 'status': True})
+            print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: Oort (UCB+探索+Pacer)")
+        elif client_selection_method == 'fedcs':
+            data_weights = [len(y_fed[i]) / len(y_all) for i in range(numClient)]
+            fedcs_selector = create_fedcs_selector(
+                num_clients=numClient, sample_nums=sample_nums_init, data_weights=data_weights, config=config
+            )
+            print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: FedCS (自适应客户端采样)")
+        else:
+            method_name = "均匀采样" if client_selection_method == 'uniform' else "OMP自适应采样"
+            print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: {method_name}")
         print(f"最低选择概率: {min_selection_prob}, EMA平滑系数: {ema_alpha}")
     else:
         print("客户端选择未启用，所有客户端参与聚合")
 
     for round in range(numRound):
         avg_loss = 0
+        client_losses = [0.0] * numClient  # 每客户端本轮损失，供 Oort 更新 reward
         if round == 1:
             one_round_time_start = time.time()
         for idx,c in enumerate(clientList):
@@ -347,6 +430,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 if np.isnan(loss_all) or np.isinf(loss_all):
                     print(f"警告：客户端 {idx} 的训练损失为 NaN/Inf，使用0.0")
                     loss_all = 0.0
+            client_losses[idx] = loss_all
             # loss_align = np.mean([loss[2] for loss in losses])
             # loss_sdl = np.mean([loss[3] for loss in losses])
             avg_loss+=(loss_all) * len(y_fed[idx]) / len(X_all)
@@ -388,7 +472,43 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             sample_nums = int(numClient * client_selection_ratio)  # 采样数
             
             # 根据选择方法进行客户端选择
-            if client_selection_method == 'uniform':
+            if client_selection_method == 'oort':
+                # Oort：第一轮全选，之后用 UCB+探索 选 top-k
+                if round == 0:
+                    select_mask = [1.0] * numClient
+                    print(f"第一轮：全选所有客户端（Oort 模式）")
+                else:
+                    feasible = set(range(numClient))
+                    picked = oort_selector.select_participant(sample_nums, feasible)
+                    picked_set = set(int(i) for i in picked)
+                    select_mask = [1.0 if i in picked_set else 0.0 for i in range(numClient)]
+                    print(f"Oort 选中客户端: {sorted(picked_set)}, 掩码: {select_mask}")
+                if oort_selector is not None:
+                    for idx in range(numClient):
+                        reward = -float(client_losses[idx]) if client_losses[idx] else 0.0
+                        oort_selector.update_client_util(
+                            idx,
+                            {'reward': reward, 'duration': 1.0, 'time_stamp': round, 'status': True}
+                        )
+            elif client_selection_method == 'fedcs':
+                # FedCS：按 q 采样，聚合使用逆概率权重 p_i/(K*q_i)
+                if round == 0:
+                    select_mask = [1.0] * numClient
+                    print(f"第一轮：全选所有客户端（FedCS 模式）")
+                else:
+                    q = fedcs_selector.get_sampling_probs()
+                    q_list = q.tolist() if hasattr(q, 'tolist') else list(q)
+                    select_mask = sample_clients_mask_by_probability(q_list, sample_nums, seed=original_seed)
+                    select_mask = [float(x) for x in select_mask]
+                    print(f"FedCS 采样概率 q (前5): {q_list[:5]}..., 掩码: {select_mask}")
+                agg_weights = fedcs_selector.get_aggregation_weights(select_mask)
+                agg_weights_list = agg_weights.tolist() if hasattr(agg_weights, 'tolist') else list(agg_weights)
+                w_global = fedavg_fedcs(w_locals, y_fed, agg_weights_list)
+                server.model.load_state_dict(w_global)
+                for idx in range(numClient):
+                    g_proxy = 1.0 / (1.0 + float(client_losses[idx])) if client_losses[idx] else 1.0
+                    fedcs_selector.update_gradient_norm(idx, g_proxy, ema_alpha=0.3)
+            elif client_selection_method == 'uniform':
                 # 均匀采样：所有客户端概率相等
                 probs = [1.0/numClient] * numClient
                 if round == 0:
@@ -417,12 +537,12 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     select_mask = [float(x) for x in select_mask]
                     print(f"客户端选择掩码: {select_mask}")
             
-            # 使用select_mask与scores结合进行聚合：如果客户端未被选中，则score为0
-            combined_scores = [scores[i] * select_mask[i] for i in range(numClient)]
-            w_global = fedavg(w_locals, y_fed, combined_scores)
-            server.model.load_state_dict(w_global)
+            # 聚合（FedCS 已在分支内用 fedavg_fedcs 完成，此处跳过）
+            if client_selection_method != 'fedcs':
+                combined_scores = [scores[i] * select_mask[i] for i in range(numClient)]
+                w_global = fedavg(w_locals, y_fed, combined_scores)
+                server.model.load_state_dict(w_global)
             
-            # 更新概率：只有使用OMP自适应采样时才更新
             if client_selection_method == 'omp':
                 sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
                 probs = get_sampling_probs_from_omp(
@@ -434,8 +554,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 )
                 print(f"稀疏向量: {sparse_vec}")
                 print(f"更新后概率: {probs}")
-            else:
-                # 均匀采样模式保持均匀概率，不更新
+            elif client_selection_method not in ('oort', 'fedcs'):
                 print(f"均匀采样模式：保持均匀采样概率，不更新")
         else:
             # 不使用客户端选择，所有客户端都参与聚合
@@ -451,7 +570,18 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         scaler = RobustScaler()
         transformation = scaler.fit_transform(transformation)
         transformation_test = scaler.transform(transformation_test)
-        train_acc, test_acc =  eval(transformation,transformation_test,y_train=y_all,y_test=y_test) #验证训练集是全局训练集， 测试集为全集测试集
+        if has_val and X_val is not None and y_val is not None:
+            transformation_val = server.transform(X_val, result_type='numpy', normalize=True, batch_size=batch_size)
+            transformation_val = scaler.transform(transformation_val)
+            y_val_np = y_val.cpu().numpy() if hasattr(y_val, 'cpu') else np.asarray(y_val)
+            train_acc, test_acc = eval_TSTCC(
+                transformation_train=transformation,
+                transformation_test=transformation_test,
+                transformation_val=transformation_val,
+                y_train=y_all, y_test=y_test, y_val=y_val_np,
+            )
+        else:
+            train_acc, test_acc = eval(transformation, transformation_test, y_train=y_all, y_test=y_test)
         if best_acc< test_acc:
             best_acc = test_acc
             best_round = round
@@ -483,9 +613,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     return
 def save_model(model, dataset, formatted_date):
-    # 定义保存路径
+    # 定义保存路径（formatted_date 可能含非法字符，需净化）
     checkpoint_dir = f'./checkpoint/{dataset}'
-    model_path = f'{checkpoint_dir}/{formatted_date}_{dataset}_model.pt'
+    safe_date = _sanitize_filename(formatted_date) if formatted_date else formatted_date
+    model_path = f'{checkpoint_dir}/{safe_date}_{dataset}_model.pt'
 
     # 检查并创建目录（如果不存在）
     os.makedirs(checkpoint_dir, exist_ok=True)

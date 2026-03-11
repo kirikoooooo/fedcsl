@@ -484,7 +484,9 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     select_mask = [1.0 if i in picked_set else 0.0 for i in range(numClient)]
                     print(f"Oort 选中客户端: {sorted(picked_set)}, 掩码: {select_mask}")
                 if oort_selector is not None:
-                    for idx in range(numClient):
+                    # 仅对被选中并参与聚合的客户端更新 feedback（time_stamp、unexplored）
+                    selected_for_update = {i for i in range(numClient) if select_mask[i] > 0}
+                    for idx in selected_for_update:
                         reward = -float(client_losses[idx]) if client_losses[idx] else 0.0
                         oort_selector.update_client_util(
                             idx,
@@ -516,9 +518,9 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     select_mask = [1.0] * numClient  # 使用浮点数
                     print(f"第一轮：全选所有客户端（均匀采样模式）")
                 else:
-                    # 从第二轮开始按均匀概率选择
+                    # 从第二轮开始按均匀概率选择（seed=None 保证每轮独立随机）
                     print(f"均匀采样模式，概率: {probs}")
-                    select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=original_seed)
+                    select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=None)
                     # 转换为浮点数类型
                     select_mask = [float(x) for x in select_mask]
                     print(f"客户端选择掩码: {select_mask}")

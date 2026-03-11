@@ -181,9 +181,10 @@ class OortTrainingSelector:
         else:
             self.round_prefer_duration = float('inf')
 
+        # 收集已探索客户端的 reward 与 staleness（reward 可为负，如 reward=-loss）
         moving_reward, staleness = [], []
         for clientId in orderedKeys:
-            if self.totalArms[clientId]['reward'] > 0:
+            if self.totalArms[clientId]['count'] > 0:
                 moving_reward.append(self.totalArms[clientId]['reward'])
                 staleness.append(cur_time - self.totalArms[clientId]['time_stamp'])
 

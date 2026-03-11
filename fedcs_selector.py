@@ -51,10 +51,16 @@ class FedCSClientSelector:
 
     def get_aggregation_weights(self, select_mask):
         """
-        根据本轮选中结果返回聚合权重。被选中的客户端 i 权重为 p_i/(K*q_i)，再归一化使和为 1。
+        根据本轮选中结果返回聚合权重。
+        - 全选时（所有客户端被选中）：使用数据权重 p，因无采样无需逆概率校正。
+        - 部分选时：被选中的客户端 i 权重为 p_i/(K*q_i)，再归一化使和为 1。
         select_mask: List[float] 或 ndarray，长度 N，选中为非 0，未选中为 0。
         """
         select_mask = np.asarray(select_mask, dtype=np.float64)
+        n_selected = (select_mask != 0).sum()
+        # 全选时：逆概率公式不适用，直接按数据权重 p 聚合
+        if n_selected >= self.N:
+            return self.p.copy()
         q_safe = np.maximum(self.q, 1e-10)
         # 仅被选中的客户端有权重 p_i / (K * q_i)
         w = np.where(select_mask != 0, self.p / (self.K * q_safe), 0.0)

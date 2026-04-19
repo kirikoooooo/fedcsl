@@ -39,7 +39,8 @@ parser.add_argument('-T', '--temperature', default=0.1, type=float, help='temper
 parser.add_argument('-l', '--lmd', default=1e-2, type=float, help='multi-scale alignment weight')
 parser.add_argument('-ls', '--lmd_s', default=1.0, type=float, help='SDL weight')
 parser.add_argument('-a', '--alpha', default=0.5, type=float, help='covariance matrix decay')
-parser.add_argument('-b', '--batch-size', default=8, type=int)
+parser.add_argument('-b', '--batch-size', type=int, default=None,
+                    help='Batch size (None=use config file value)')
 parser.add_argument('-g', '--to-cuda', default=True, type=bool)
 parser.add_argument('-e', '--eval-per-x-epochs', default=10, type=int)
 parser.add_argument('-d', '--dist-measure', default='mix', type=str)
@@ -58,7 +59,6 @@ parser.add_argument('--min-selection-prob', type=float, default=None, help='Mini
 parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
 parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
 parser.add_argument('--dirichlet-alpha', type=float, default=None, help='Dirichlet alpha for data heterogeneity (overrides config file)')
-parser.add_argument('--batch-size', type=int, default=None, help='Batch size (overrides config file)')
 
 args = parser.parse_args()
 with open(args.config, 'r',encoding='utf-8') as f:

@@ -14,6 +14,8 @@
     --min-selection-prob 0.01 --ema-alpha 0 --description "uniform+acf" &
 """
 
+from __future__ import annotations
+
 import os
 import json
 import time
@@ -21,6 +23,7 @@ import shlex
 import signal
 import subprocess
 import datetime
+from typing import Dict, List
 
 
 TASKS_FILE = "tasks.json"
@@ -29,7 +32,7 @@ POLL_INTERVAL = 30  # 秒
 
 
 # 内存中保存子进程对象（不写入 json）
-_running_procs: dict[int, subprocess.Popen] = {}
+_running_procs: Dict[int, subprocess.Popen] = {}
 
 
 def check_available_gpus():

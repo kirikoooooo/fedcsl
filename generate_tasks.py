@@ -12,6 +12,8 @@
       --min-selection-prob 0.01 --ema-alpha 0 --description "uniform+acf" &
 """
 
+from __future__ import annotations
+
 import json
 
 

@@ -57,6 +57,8 @@ parser.add_argument('--client-selection-method', type=str, default=None, choices
 parser.add_argument('--min-selection-prob', type=float, default=None, help='Minimum selection probability')
 parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
 parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
+parser.add_argument('--dirichlet-alpha', type=float, default=None, help='Dirichlet alpha for data heterogeneity (overrides config file)')
+parser.add_argument('--batch-size', type=int, default=None, help='Batch size (overrides config file)')
 
 args = parser.parse_args()
 with open(args.config, 'r',encoding='utf-8') as f:
@@ -167,7 +169,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     numClient= config['federated']['numClient']
     numRound = config['federated']['numRound']
     numEpoch = config['federated']['numEpoch']
-    dirichlet_alpha = config['federated']['dirichlet_alpha']
+    # 命令行参数优先，如果没有则使用配置文件中的值
+    dirichlet_alpha = args.dirichlet_alpha if args.dirichlet_alpha is not None else config['federated']['dirichlet_alpha']
     # 读取算法类型
     algo = config.get('algo', 'fedcsl')
     # 命令行参数优先，如果没有则使用配置文件中的值
@@ -187,7 +190,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     #dataset = args.dataset
     dist_measure = config['model']['params']['dist_measure']
     lr = config['model']['params']['lr']
-    batch_size = config['model']['params']['batch_size']
+    # 命令行参数优先，如果没有则使用配置文件中的值
+    batch_size = args.batch_size if args.batch_size is not None else config['model']['params']['batch_size']
     wd = config['model']['params']['wd']
     ls = config['model']['params']['ls']
     l = config['model']['params']['l']
@@ -349,7 +353,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     C_accu_server = None
     scalers = []
     best_acc = 0
-    
+
     # 初始化客户端选择相关变量
     probs = None
     oort_selector = None
@@ -408,7 +412,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             # print(len(X_fed[idx]))
             # print(X_fed[idx][0].shape)
             # print("以下来自第{idx}个客户端")
-            
+
             # 检查客户端数据是否为空
             if len(X_fed[idx]) == 0 or len(y_fed[idx]) == 0:
                 print(f"警告：客户端 {idx} 的数据为空，跳过训练")
@@ -418,7 +422,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 else:
                     w_locals[idx] = c.model.state_dict()
                 continue
-            
+
             losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size, epoch_idx=-1,lr=lr)
             # 检查losses是否为空或包含NaN
             if len(losses) == 0:
@@ -465,12 +469,12 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         if config['ablation']['UseDistribution']==False:
             scores = [1] * numClient  # 修改为动态长度
         # scores = [1,1,1]
-        
+
         # 根据配置决定是否使用客户端选择
         if use_client_selection:
             # 启用客户端选择
             sample_nums = int(numClient * client_selection_ratio)  # 采样数
-            
+
             # 根据选择方法进行客户端选择
             if client_selection_method == 'oort':
                 # Oort：第一轮全选，之后用 UCB+探索 选 top-k
@@ -538,13 +542,13 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     # 转换为浮点数类型
                     select_mask = [float(x) for x in select_mask]
                     print(f"客户端选择掩码: {select_mask}")
-            
+
             # 聚合（FedCS 已在分支内用 fedavg_fedcs 完成，此处跳过）
             if client_selection_method != 'fedcs':
                 combined_scores = [scores[i] * select_mask[i] for i in range(numClient)]
                 w_global = fedavg(w_locals, y_fed, combined_scores)
                 server.model.load_state_dict(w_global)
-            
+
             if client_selection_method == 'omp':
                 sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
                 probs = get_sampling_probs_from_omp(

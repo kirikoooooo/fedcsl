@@ -402,7 +402,6 @@ class LearningShapeletsCL:
         sampler = torch.utils.data.distributed.DistributedSampler(train_ds, shuffle=True) if self.is_ddp else None
         
         # 如果数据量小于batch_size，使用drop_last=False，避免所有数据被丢弃
-        # 否则使用drop_last=True，保持批次大小一致（避免BatchNorm报错）
         drop_last = X.shape[0] >= batch_size
         if not drop_last:
             print(f"警告：fine_tune数据量({X.shape[0]})小于batch_size({batch_size})，使用drop_last=False")
@@ -452,7 +451,6 @@ class LearningShapeletsCL:
         sampler = torch.utils.data.distributed.DistributedSampler(train_ds, shuffle=True) if self.is_ddp else None
 
         # 如果数据量小于batch_size，使用drop_last=False，避免所有数据被丢弃
-        # 否则使用drop_last=True，保持批次大小一致（避免BatchNorm报错）
         drop_last = X.shape[0] >= batch_size
         if not drop_last:
             print(f"警告：数据量({X.shape[0]})小于batch_size({batch_size})，使用drop_last=False")

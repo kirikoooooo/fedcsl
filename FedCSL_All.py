@@ -500,7 +500,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 else:
                     q = fedcs_selector.get_sampling_probs()
                     q_list = q.tolist() if hasattr(q, 'tolist') else list(q)
-                    select_mask = sample_clients_mask_by_probability(q_list, sample_nums, seed=original_seed)
+                    select_mask = sample_clients_mask_by_probability(q_list, sample_nums, seed=None)
                     select_mask = [float(x) for x in select_mask]
                     print(f"FedCS 采样概率 q (前5): {q_list[:5]}..., 掩码: {select_mask}")
                 agg_weights = fedcs_selector.get_aggregation_weights(select_mask)
@@ -534,7 +534,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 else:
                     # 从第二轮开始按采样概率选择
                     print(f"本轮采样概率阵: {probs}")
-                    select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=original_seed)
+                    select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=None)
                     # 转换为浮点数类型
                     select_mask = [float(x) for x in select_mask]
                     print(f"客户端选择掩码: {select_mask}")

@@ -255,7 +255,8 @@ class LearningShapeletsModel(nn.Module):
 
         self.linear = nn.Linear(self.num_shapelets, num_classes)
 
-        self.projection = nn.Sequential(nn.BatchNorm1d(num_features=self.num_shapelets),
+        # LayerNorm：按特征维归一化，batch_size=1 也可用（BatchNorm1d 训练时要求 N>1）
+        self.projection = nn.Sequential(nn.LayerNorm(self.num_shapelets),
                                             #   nn.Linear(self.model.num_shapelets, 256),
                                             #   nn.ReLU(),
                                             #   nn.Linear(self.num_shapelets, 128)
@@ -269,7 +270,7 @@ class LearningShapeletsModel(nn.Module):
                                               nn.ReLU(),
                                               nn.Linear(256, 128))
 
-        self.prodictor = nn.Sequential(nn.BatchNorm1d(num_features=self.num_shapelets),
+        self.prodictor = nn.Sequential(nn.LayerNorm(self.num_shapelets),
                                         nn.Linear(self.num_shapelets, self.num_shapelets),
                                         nn.ReLU(),
                                         nn.Linear(self.num_shapelets, self.num_shapelets))
@@ -350,15 +351,17 @@ class LearningShapeletsModelMixDistances(nn.Module):
 
         self.linear = nn.Linear(self.num_shapelets, num_classes)
 
-        self.projection = nn.Sequential(nn.BatchNorm1d(num_features=self.num_shapelets),
+        self.projection = nn.Sequential(nn.LayerNorm(self.num_shapelets),
                                               #nn.Linear(self.model.num_shapelets, 256),
                                               #nn.ReLU(),
                                               #nn.Linear(self.num_shapelets, 128)
                                         )
 
-        self.bn1 = nn.BatchNorm1d(num_features=sum(num // 3 for num in self.shapelets_size_and_len.values()))
-        self.bn2 = nn.BatchNorm1d(num_features=sum(num // 3 for num in self.shapelets_size_and_len.values()))
-        self.bn3 = nn.BatchNorm1d(num_features=sum(num - 2 * (num // 3) for num in self.shapelets_size_and_len.values()))
+        _n12 = sum(num // 3 for num in self.shapelets_size_and_len.values())
+        _n3 = sum(num - 2 * (num // 3) for num in self.shapelets_size_and_len.values())
+        self.ln1 = nn.LayerNorm(_n12)
+        self.ln2 = nn.LayerNorm(_n12)
+        self.ln3 = nn.LayerNorm(_n3)
 
         self.projection2 = nn.Sequential(nn.Linear(self.num_shapelets, 256),
                                               nn.ReLU(),
@@ -379,7 +382,7 @@ class LearningShapeletsModelMixDistances(nn.Module):
         x_out = self.shapelets_euclidean(x, masking)
         x_out = torch.squeeze(x_out, 1)
         #x_out = torch.nn.functional.normalize(x_out, dim=1)
-        x_out = self.bn1(x_out)
+        x_out = self.ln1(x_out)
         x_out = x_out.reshape(n_samples, num_lengths, -1)
         #print(x_out.shape)
         out = torch.cat((out, x_out), dim=2)
@@ -387,7 +390,7 @@ class LearningShapeletsModelMixDistances(nn.Module):
         x_out = self.shapelets_cosine(x, masking)
         x_out = torch.squeeze(x_out, 1)
         #x_out = torch.nn.functional.normalize(x_out, dim=1)
-        x_out = self.bn2(x_out)
+        x_out = self.ln2(x_out)
         x_out = x_out.reshape(n_samples, num_lengths, -1)
         #print(x_out.shape)
         out = torch.cat((out, x_out), dim=2)
@@ -395,7 +398,7 @@ class LearningShapeletsModelMixDistances(nn.Module):
         x_out = self.shapelets_cross_correlation(x, masking)
         x_out = torch.squeeze(x_out, 1)
         #x_out = torch.nn.functional.normalize(x_out, dim=1)
-        x_out = self.bn3(x_out)
+        x_out = self.ln3(x_out)
         x_out = x_out.reshape(n_samples, num_lengths, -1)
         #print(x_out.shape)
         out = torch.cat((out, x_out), dim=2)

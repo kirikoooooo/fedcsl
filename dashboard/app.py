@@ -7,8 +7,6 @@
   * 无数据库，使用 ``runs.json`` 以 JSON 记录任务元数据。
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
@@ -21,7 +19,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 import psutil
 import yaml
@@ -63,7 +61,7 @@ def _safe_under(root: Path, target: Path) -> Path:
     return resolved
 
 
-def _load_runs() -> list[dict[str, Any]]:
+def _load_runs() -> List[Dict[str, Any]]:
     with _runs_lock:
         if not RUNS_FILE.exists():
             return []
@@ -73,7 +71,7 @@ def _load_runs() -> list[dict[str, Any]]:
             return []
 
 
-def _save_runs(runs: list[dict[str, Any]]) -> None:
+def _save_runs(runs: List[Dict[str, Any]]) -> None:
     with _runs_lock:
         RUNS_FILE.write_text(
             json.dumps(runs, indent=2, ensure_ascii=False),
@@ -89,7 +87,7 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _refresh_run_status(run: dict[str, Any]) -> dict[str, Any]:
+def _refresh_run_status(run: Dict[str, Any]) -> Dict[str, Any]:
     """根据 pid 是否存活更新 run 的 status 字段（in-place）。"""
     if run.get("status") == "running":
         pid = run.get("pid")
@@ -102,7 +100,7 @@ def _refresh_run_status(run: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # nvidia-smi 解析
 # ---------------------------------------------------------------------------
-def _run_nvidia_smi(fields: str, *, mode: str = "gpu") -> list[list[str]] | None:
+def _run_nvidia_smi(fields: str, *, mode: str = "gpu") -> Optional[List[List[str]]]:
     """``mode``: ``"gpu"`` -> --query-gpu, ``"apps"`` -> --query-compute-apps。"""
     flag = "--query-gpu" if mode == "gpu" else "--query-compute-apps"
     try:
@@ -121,7 +119,7 @@ def _run_nvidia_smi(fields: str, *, mode: str = "gpu") -> list[list[str]] | None
     ]
 
 
-def gpu_snapshot() -> dict[str, Any]:
+def gpu_snapshot() -> Dict[str, Any]:
     gpus_raw = _run_nvidia_smi(
         "index,name,utilization.gpu,memory.used,memory.total,temperature.gpu"
     )
@@ -132,7 +130,7 @@ def gpu_snapshot() -> dict[str, Any]:
         return {"available": False, "gpus": []}
 
     uuid_map_raw = _run_nvidia_smi("index,uuid")
-    index_by_uuid: dict[str, int] = {}
+    index_by_uuid: Dict[str, int] = {}
     if uuid_map_raw:
         for row in uuid_map_raw:
             if len(row) >= 2:
@@ -141,7 +139,7 @@ def gpu_snapshot() -> dict[str, Any]:
                 except ValueError:
                     pass
 
-    procs_by_idx: dict[int, list[dict[str, Any]]] = {}
+    procs_by_idx: Dict[int, List[Dict[str, Any]]] = {}
     if procs_raw:
         for row in procs_raw:
             if len(row) < 4:
@@ -164,7 +162,7 @@ def gpu_snapshot() -> dict[str, Any]:
                 {"pid": pid_int, "name": pname, "mem_mb": mem_mb, "user": user}
             )
 
-    gpus: list[dict[str, Any]] = []
+    gpus: List[Dict[str, Any]] = []
     for row in gpus_raw:
         if len(row) < 6:
             continue
@@ -199,7 +197,7 @@ _DESC_RE = re.compile(r"^\s*#\s?(.*)$")
 
 def _extract_script_doc(path: Path, max_lines: int = 30) -> str:
     """抽取脚本首部连续注释块作为说明（跳过 shebang）。"""
-    lines: list[str] = []
+    lines: List[str] = []
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
             for i, raw in enumerate(f):
@@ -224,8 +222,8 @@ def _extract_script_doc(path: Path, max_lines: int = 30) -> str:
     return "\n".join(lines)
 
 
-def list_scripts() -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
+def list_scripts() -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
     patterns = [
         (SCRIPTS_DIR, "**/*.sh"),
         (PROJECT_ROOT, "*.py"),
@@ -255,7 +253,7 @@ def list_scripts() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Config 扫描
 # ---------------------------------------------------------------------------
-def list_configs() -> list[dict[str, Any]]:
+def list_configs() -> List[Dict[str, Any]]:
     if not CONFIG_DIR.exists():
         return []
     return [
@@ -289,11 +287,11 @@ def write_config(name: str, content: str) -> None:
 # ---------------------------------------------------------------------------
 class LaunchRequest(BaseModel):
     script: str = Field(..., description="相对项目根的脚本路径")
-    args: list[str] = Field(default_factory=list, description="附加参数")
-    env: dict[str, str] = Field(default_factory=dict, description="附加环境变量")
+    args: List[str] = Field(default_factory=list, description="附加参数")
+    env: Dict[str, str] = Field(default_factory=dict, description="附加环境变量")
 
 
-def launch_script(req: LaunchRequest) -> dict[str, Any]:
+def launch_script(req: LaunchRequest) -> Dict[str, Any]:
     script_rel = req.script.lstrip("/")
     script_path = _safe_under(PROJECT_ROOT, PROJECT_ROOT / script_rel)
     if not script_path.exists() or not script_path.is_file():
@@ -345,7 +343,7 @@ def launch_script(req: LaunchRequest) -> dict[str, Any]:
     return run
 
 
-def stop_run(run_id: str) -> dict[str, Any]:
+def stop_run(run_id: str) -> Dict[str, Any]:
     runs = _load_runs()
     target = next((r for r in runs if r["id"] == run_id), None)
     if target is None:
@@ -425,22 +423,22 @@ app.add_middleware(
 
 
 @app.get("/api/health")
-def health() -> dict[str, Any]:
+def health() -> Dict[str, Any]:
     return {"ok": True, "project_root": str(PROJECT_ROOT)}
 
 
 @app.get("/api/gpus")
-def api_gpus() -> dict[str, Any]:
+def api_gpus() -> Dict[str, Any]:
     return gpu_snapshot()
 
 
 @app.get("/api/scripts")
-def api_scripts() -> list[dict[str, Any]]:
+def api_scripts() -> List[Dict[str, Any]]:
     return list_scripts()
 
 
 @app.get("/api/configs")
-def api_configs() -> list[dict[str, Any]]:
+def api_configs() -> List[Dict[str, Any]]:
     return list_configs()
 
 
@@ -454,13 +452,13 @@ class ConfigPut(BaseModel):
 
 
 @app.put("/api/configs/{name}")
-def api_config_put(name: str, body: ConfigPut) -> dict[str, Any]:
+def api_config_put(name: str, body: ConfigPut) -> Dict[str, Any]:
     write_config(name, body.content)
     return {"ok": True}
 
 
 @app.get("/api/runs")
-def api_runs_list() -> list[dict[str, Any]]:
+def api_runs_list() -> List[Dict[str, Any]]:
     runs = _load_runs()
     for r in runs:
         _refresh_run_status(r)
@@ -469,7 +467,7 @@ def api_runs_list() -> list[dict[str, Any]]:
 
 
 @app.post("/api/runs")
-def api_runs_launch(req: LaunchRequest) -> dict[str, Any]:
+def api_runs_launch(req: LaunchRequest) -> Dict[str, Any]:
     return launch_script(req)
 
 
@@ -479,7 +477,7 @@ def api_run_log(run_id: str, tail: int = 500) -> str:
 
 
 @app.post("/api/runs/{run_id}/stop")
-def api_run_stop(run_id: str) -> dict[str, Any]:
+def api_run_stop(run_id: str) -> Dict[str, Any]:
     return stop_run(run_id)
 
 

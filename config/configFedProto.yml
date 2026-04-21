@@ -1,0 +1,38 @@
+model:
+  name: ""
+  params:
+    dist_measure: "mix"
+    lr: 0.05
+    batch_size: 32
+    wd: 0
+    momentum: 0.9
+    ls: 1
+    l: 0.01
+    beta: 0.4
+    gamma: 0.5
+dataset: "CharacterTrajectories"
+algo: "fedproto"
+federated:
+  numClient: 30
+  numRound: 500
+  numEpoch: 5
+  dirichlet_alpha: 1
+  use_client_selection: False
+  client_selection_ratio: 0.6
+
+ablation:
+  UseJointKD: False
+  UseJointCL: False
+  UseScaleKD: False
+  UseScaleCL: False
+  UseProdictor: False
+  UseMTLHomo: False
+  UseACF: False
+  UseDistribution: False
+
+# FedProto 方法专属超参，移植自 FL-bench src/server/fedproto.py:get_hyperparams
+fedproto:
+  lamda: 1.0   # MSE 原型对齐损失权重
+
+logPath: "./result/"
+description: "fedproto"

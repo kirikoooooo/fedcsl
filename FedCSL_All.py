@@ -1,34 +1,28 @@
-from seaborn import dark_palette
-from train import LearningShapeletsCL
-#from train_origin import LearningShapeletsCL
+"""FedCSL 主入口：负责数据加载、客户端/服务器初始化、客户端选择与聚合、下游 SVC 评估。
 
-from fedutil import *
-from fedavg import fedavg, fedavg_fedcs, fedavg2, FedAvg3
-import torch.distributed as dist
-import torch
-from torch import nn, optim
-import random
-import numpy as np
-from utils import z_normalize,TSC_multivariate_data_loader
-import os
-import tsaug
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, rand_score, normalized_mutual_info_score
-from sklearn.model_selection import cross_val_score
-from sklearn.preprocessing import RobustScaler
-from sktime.datasets import load_from_tsfile_to_dataframe,load_UCR_UEA_dataset
-import pandas as pd
-from torch.nn.parallel import DistributedDataParallel as DDP
+SCAFFOLD / FedProto 等 FL-bench 原生算法会在识别到 ``algo`` 字段后路由到
+``algo/baseline_runner.run_baseline``，跳过多尺度对比流程。
+"""
+
 import argparse
-from model.ema import EMA ,update_moving_average,calculate_divergence
-import copy
-from dataset_utils import *
-import yaml
+import os
+import random
 from datetime import datetime
-from oort_selector import create_oort_selector
-from fedcs_selector import create_fedcs_selector
 
-import time
+import numpy as np
+import torch
+import torch.distributed as dist
+import yaml
+from sklearn.metrics import accuracy_score
+from sklearn.preprocessing import RobustScaler
+from sklearn.svm import SVC
+from torch import nn, optim
+
+from algo.client_selection import make_selector, available_methods
+from dataset_utils import *   # noqa: F401,F403  (LoadDataset_* 全家桶)
+from fedavg import fedavg
+from fedutil import cal_score, normalize_to_near_one
+from train import LearningShapeletsCL
 
 
 
@@ -61,8 +55,24 @@ parser.add_argument('--description', type=str, default=None, help='Experiment de
 parser.add_argument('--dirichlet-alpha', type=float, default=None, help='Dirichlet alpha for data heterogeneity (overrides config file)')
 
 args = parser.parse_args()
-with open(args.config, 'r',encoding='utf-8') as f:
-    config = copy.deepcopy(yaml.load(f, Loader=yaml.FullLoader))  # 使用深拷贝保护原始配置
+def _resolve_config_path(path):
+    """支持三种写法：
+    1. 绝对路径或存在的相对路径 → 直接使用；
+    2. 纯文件名或 'config.yml' 等不存在时，自动在 ``config/`` 目录下查找；
+    3. 老写法 './configXXX.yml' / 'configXXX.yml' 亦会被重定向到 ``config/configXXX.yml``。
+    """
+    if os.path.isfile(path):
+        return path
+    candidate = os.path.join('config', os.path.basename(path))
+    if os.path.isfile(candidate):
+        print(f"[config] '{path}' 未找到，重定向到 '{candidate}'")
+        return candidate
+    return path  # 让后续 open 抛出明确错误
+
+
+_config_path = _resolve_config_path(args.config)
+with open(_config_path, 'r', encoding='utf-8') as f:
+    config = yaml.safe_load(f)  # yaml 已返回全新对象，无需再 deepcopy
 
 
 def _sanitize_filename(s):
@@ -81,17 +91,16 @@ def _sanitize_filename(s):
     return s.strip() or "run"
 
 
-# 训练一个SVC 分类器 进行下游分类评估
-def eval(transformation,transformation_test,y_train,y_test):
-    # 评估模块
-    acc_val = -1
-    C_best = None
-    best_acc =0
-    for C in [10 ** i for i in range(-4, 5)]:
-        # clf = SVC(C=C, random_state=42) # 原本的交叉验证
-        # acc_i = cross_val_score(clf, transformation, y_train, cv=5)
-        # if acc_i.mean() > acc_val:
-        #     C_best = C
+# ---------------------------------------------------------------------------
+# 下游 SVC 评估：在 [10^-4, 10^4] 的 9 个 C 里挑最优，再在测试集上评估
+# ---------------------------------------------------------------------------
+_SVC_C_GRID = [10 ** i for i in range(-4, 5)]
+
+
+def eval(transformation, transformation_test, y_train, y_test):
+    """训练集自评估选 C（不做 CV，更快），然后在测试集评估。"""
+    best_acc, C_best = -1.0, _SVC_C_GRID[0]
+    for C in _SVC_C_GRID:
         clf = SVC(C=C, random_state=42)
         clf.fit(transformation, y_train)
         acc = accuracy_score(clf.predict(transformation), y_train)
@@ -99,41 +108,21 @@ def eval(transformation,transformation_test,y_train,y_test):
             best_acc, C_best = acc, C
     clf = SVC(C=C_best, random_state=42)
     clf.fit(transformation, y_train)
-    # 作图
-
-    #draw_scatter_plot(transformation_test,y_test)
-
-    train_acc = accuracy_score(clf.predict(transformation), y_train)
-    test_acc = accuracy_score(clf.predict(transformation_test), y_test)
-    return train_acc, test_acc
-# 训练一个SVC 分类器 进行下游分类评估
-def evalwithCV(transformation,transformation_test,y_train,y_test):
-    # 评估模块
-    acc_val = -1
-    C_best = None
-    for C in [10 ** i for i in range(-4, 5)]:
-        clf = SVC(C=C, random_state=42)
-        acc_i = cross_val_score(clf, transformation, y_train, cv=5)
-        if acc_i.mean() > acc_val:
-            C_best = C
-    clf = SVC(C=C_best, random_state=42)
-    clf.fit(transformation, y_train)
     train_acc = accuracy_score(clf.predict(transformation), y_train)
     test_acc = accuracy_score(clf.predict(transformation_test), y_test)
     return train_acc, test_acc
 
 
-def eval_TSTCC(transformation_train, transformation_test, transformation_val, y_train, y_test, y_val):
+def eval_TSTCC(transformation_train, transformation_test, transformation_val,
+               y_train, y_test, y_val):
     """使用验证集选 C，再在测试集上评估（Epilepsy/SleepEDF/FD-A 等有 val.pt 的数据集）。"""
-    acc_val_best = -1
-    C_best = None
-    for C in [10 ** i for i in range(-4, 5)]:
+    best_val_acc, C_best = -1.0, _SVC_C_GRID[0]
+    for C in _SVC_C_GRID:
         clf = SVC(C=C, random_state=42)
         clf.fit(transformation_train, y_train)
         acc_i = accuracy_score(clf.predict(transformation_val), y_val)
-        if acc_i > acc_val_best:
-            acc_val_best = acc_i
-            C_best = C
+        if acc_i > best_val_acc:
+            best_val_acc, C_best = acc_i, C
     clf = SVC(C=C_best, random_state=42)
     clf.fit(transformation_train, y_train)
     train_acc = accuracy_score(clf.predict(transformation_train), y_train)
@@ -144,67 +133,51 @@ def eval_TSTCC(transformation_train, transformation_test, transformation_val, y_
 def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, to_cuda=True,
            eval_per_x_epochs=10, dist_measure='mix', rank=-1, world_size=-1, resize=0,
            checkpoint=False, task='classification'):
-    # init data--------------------------------------------------------------------------------------
-    is_ddp = False
-    if rank != -1 and world_size != -1:
-        is_ddp = True
+    # ----- DDP 初始化（可选；rank / world_size 默认 -1 表示单机）-----------------
+    is_ddp = rank != -1 and world_size != -1
     if is_ddp:
-        # initialize the process group
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
 
-    # 保存原始seed值用于客户端选择
+    # ----- seed：派生三个独立 seed 给 numpy / torch / cuda，避免相关性 -------------
     original_seed = seed
     if seed is not None:
         random.seed(seed)
-        seed += 1
-        np.random.seed(seed)
-        seed += 1
-        torch.manual_seed(seed)
-        seed += 1
-        torch.cuda.manual_seed(seed)
+        np.random.seed(seed + 1)
+        torch.manual_seed(seed + 2)
+        torch.cuda.manual_seed(seed + 3)
         torch.backends.cudnn.deterministic = True
 
+    # ----- 从 config + argv 派生超参（命令行优先）---------------------------------
+    fed_cfg = config['federated']
+    model_cfg = config['model']['params']
 
-    numClient= config['federated']['numClient']
-    numRound = config['federated']['numRound']
-    numEpoch = config['federated']['numEpoch']
-    # 命令行参数优先，如果没有则使用配置文件中的值
-    dirichlet_alpha = args.dirichlet_alpha if args.dirichlet_alpha is not None else config['federated']['dirichlet_alpha']
-    # 读取算法类型
+    numClient = fed_cfg['numClient']
+    numRound = fed_cfg['numRound']
+    numEpoch = fed_cfg['numEpoch']
+    dirichlet_alpha = args.dirichlet_alpha if args.dirichlet_alpha is not None else fed_cfg['dirichlet_alpha']
     algo = config.get('algo', 'fedcsl')
-    # 命令行参数优先，如果没有则使用配置文件中的值
-    use_client_selection = args.use_client_selection if args.use_client_selection else config['federated'].get('use_client_selection', False)
-    client_selection_ratio = args.client_selection_ratio if args.client_selection_ratio is not None else config['federated'].get('client_selection_ratio', 0.6)
-    min_selection_prob = args.min_selection_prob if args.min_selection_prob is not None else config['federated'].get('min_selection_prob', 0.01)
-    ema_alpha = args.ema_alpha if args.ema_alpha is not None else config['federated'].get('ema_alpha', 0.3)
-    # 客户端选择方法：uniform（均匀概率）或omp（OMP自适应），默认根据算法类型自动选择
-    client_selection_method = args.client_selection_method if args.client_selection_method is not None else config['federated'].get('client_selection_method', None)
-    # 如果没有指定方法，fedavg默认使用uniform，其他算法默认使用omp
+    use_client_selection = args.use_client_selection if args.use_client_selection else fed_cfg.get('use_client_selection', False)
+    client_selection_ratio = args.client_selection_ratio if args.client_selection_ratio is not None else fed_cfg.get('client_selection_ratio', 0.6)
+    min_selection_prob = args.min_selection_prob if args.min_selection_prob is not None else fed_cfg.get('min_selection_prob', 0.01)
+    ema_alpha = args.ema_alpha if args.ema_alpha is not None else fed_cfg.get('ema_alpha', 0.3)
+    client_selection_method = args.client_selection_method if args.client_selection_method is not None else fed_cfg.get('client_selection_method', None)
+    # 默认: fedavg→uniform，其余→omp
     if client_selection_method is None:
         client_selection_method = 'uniform' if algo == 'fedavg' else 'omp'
-    if args.dataset is not None:
-        dataset = args.dataset
-    else:
-        dataset = config['dataset']
-    #dataset = args.dataset
-    dist_measure = config['model']['params']['dist_measure']
-    lr = config['model']['params']['lr']
-    # 命令行参数优先，如果没有则使用配置文件中的值
-    batch_size = args.batch_size if args.batch_size is not None else config['model']['params']['batch_size']
-    wd = config['model']['params']['wd']
-    ls = config['model']['params']['ls']
-    l = config['model']['params']['l']
-    beta = config['model']['params'].get('beta', 0.4)  # 默认值0.4，参考configAVG.yml
-    gamma = config['model']['params'].get('gamma', 0.5)  # 默认值0.5，参考configAVG.yml
 
-    # 加载shapelets weight权重
+    dataset = args.dataset if args.dataset is not None else config.get('dataset', dataset)
+    dist_measure = model_cfg['dist_measure']
+    lr = model_cfg['lr']
+    batch_size = args.batch_size if args.batch_size is not None else model_cfg['batch_size']
+    wd = model_cfg['wd']
+    ls = model_cfg['ls']
+    l = model_cfg['l']
+    beta = model_cfg.get('beta', 0.4)
+
     shapelet_weight_X = np.load('./algoutils/shapelet_weight_All.npy')
 
-    print(shapelet_weight_X)
-
-
-    # 加载数据集（统一入口：HAR / Epilepsy-TSTCC / SleepEDF / FD-A / 其他 UEA）
+    # ----- 加载数据集（统一入口：HAR / Epilepsy-TSTCC / SleepEDF / FD-A / 其他 UEA）
     has_val = False
     X_val, y_val = None, None
 
@@ -245,52 +218,81 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     n_ts, n_channels, len_ts = X_all.shape
     loss_func = nn.CrossEntropyLoss()
     num_classes = len(set(y_all))
-    isAllocateMat = False
-    isEMA = False
-    shapelets_size_and_len = {int(i): 40 for i in np.linspace(min(128, max(3, int(0.1 * len_ts))), int(0.8 * len_ts), 8, dtype=int)}
+    shapelets_size_and_len = {
+        int(i): 40
+        for i in np.linspace(min(128, max(3, int(0.1 * len_ts))), int(0.8 * len_ts), 8, dtype=int)
+    }
 
-    # 命令行参数优先，如果没有则使用配置文件中的值
     if args.description is not None:
         config['description'] = args.description
 
-    #Print logs------------------------------------------------------------------------------------------------------------
-    print("shapelet initialized! \n")
-    now = datetime.now()
+    # ----- 日志文件初始化 -------------------------------------------------------
+    print("shapelet initialized!")
     desc_safe = _sanitize_filename(config.get('description', ''))
-    formatted_date = now.strftime("%Y-%m-%d-%H") + desc_safe
-    #logTxt = "./result/"+dataset+"l=1e-2lr=0.01epoch3 contrastive.txt"
+    formatted_date = datetime.now().strftime("%Y-%m-%d-%H") + desc_safe
     logTxt = f"./result/{dataset}/{formatted_date}_l={l}_lr={lr}_epoch{numEpoch}_alphadir{dirichlet_alpha}_{desc_safe}.txt"
+    os.makedirs(os.path.dirname(logTxt), exist_ok=True)
 
-    f = open(logTxt, mode="a+")
-    f.writelines("Details of Training:-----------------------\n")
-    f.writelines("dataset: "+dataset+"\n")
-    f.writelines("local train epochs:"+str(numEpoch)+"\n")
-    f.writelines("round num:"+str(numRound)+"\n")
-    f.writelines("batch size:"+str(batch_size)+"\n")
-    f.writelines("lr:"+str(lr)+"\n")
-    f.writelines("isAllocateMat:"+str(isAllocateMat)+"\n")
-    f.writelines("isEMA:"+str(isEMA)+"\n")
-    f.writelines("use_client_selection:"+str(use_client_selection)+"\n")
+    header_lines = [
+        "Details of Training:-----------------------",
+        f"dataset: {dataset}",
+        f"local train epochs: {numEpoch}",
+        f"round num: {numRound}",
+        f"batch size: {batch_size}",
+        f"lr: {lr}",
+        f"use_client_selection: {use_client_selection}",
+    ]
     if use_client_selection:
-        f.writelines("client_selection_ratio:"+str(client_selection_ratio)+"\n")
-        f.writelines("client_selection_method:"+str(client_selection_method)+"\n")
-        f.writelines("min_selection_prob:"+str(min_selection_prob)+"\n")
-        f.writelines("ema_alpha:"+str(ema_alpha)+"\n")
-    f.writelines("-------------------------------------------"+"\n")
-    f.writelines(config['description']+"\n")
-    f.writelines("PID:"+str(os.getpid())+"\n")
-    f.writelines("PPID:"+str(os.getppid())+"\n")
+        header_lines += [
+            f"client_selection_ratio: {client_selection_ratio}",
+            f"client_selection_method: {client_selection_method}",
+            f"min_selection_prob: {min_selection_prob}",
+            f"ema_alpha: {ema_alpha}",
+        ]
+    header_lines += [
+        "-------------------------------------------",
+        str(config.get('description', '')),
+        f"PID: {os.getpid()}",
+        f"PPID: {os.getppid()}",
+        yaml.dump(config).replace('\n', ''),
+    ]
+    with open(logTxt, mode="a+", encoding="utf-8") as f:
+        f.write("\n".join(header_lines) + "\n")
 
-    yaml_str = yaml.dump(config)
+    # FL-bench 风格基线分发：SCAFFOLD / FedProto 不走 CSL 多尺度对比流程，直接接入
+    # FL-bench 原实现（见 algo/scaffold/ 与 algo/fedproto/）。
+    if algo.lower() in ('scaffold', 'fedproto'):
+        from algo.baseline_runner import run_baseline
+        run_baseline(
+            algo=algo.lower(),
+            config=config,
+            seed=original_seed,
+            dataset=dataset,
+            shapelets_size_and_len=shapelets_size_and_len,
+            n_channels=n_channels,
+            num_classes=num_classes,
+            X_all=X_all, y_all=y_all,
+            X_test=X_test, y_test=y_test,
+            X_fed=X_fed, y_fed=y_fed,
+            X_val=X_val, y_val=y_val, has_val=has_val,
+            num_rounds=numRound,
+            num_epoch=numEpoch,
+            batch_size=batch_size,
+            lr=lr,
+            wd=wd,
+            dist_measure=dist_measure,
+            to_cuda=to_cuda,
+            logTxt=logTxt,
+            formatted_date=formatted_date,
+            eval_train_test_fn=eval,
+            eval_tstcc_fn=eval_TSTCC,
+            save_model_fn=save_model,
+        )
+        return
 
-    # 去掉换行符
-    yaml_str_no_newline = yaml_str.replace('\n', '')
-    f.write(yaml_str_no_newline+"\n")
-    f.close()
     # train----------------------------------------------------------------------------------------------------
-    w_locals = []
-    clientList = []
-    server = LearningShapeletsCL(
+    # 使用共享 kwargs 避免 server/client 两段近乎相同的构造参数重复
+    shared_kwargs = dict(
         shapelets_size_and_len=shapelets_size_and_len,
         in_channels=n_channels,
         num_classes=num_classes,
@@ -310,267 +312,129 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         config=config,
         beta=beta,
     )
+
+    w_locals = []
+    clientList = []
+    server = LearningShapeletsCL(**shared_kwargs)
+    # 服务器模型只做前向（作为 Global_Model 供客户端蒸馏/对比），
+    # 关闭 requires_grad 可避免 client.train() 中 forward 时构建反向图，显著省显存。
+    for p in server.model.parameters():
+        p.requires_grad_(False)
+
     for idx in range(numClient):
-        client = LearningShapeletsCL(
-            shapelets_size_and_len=shapelets_size_and_len,
-            in_channels=n_channels,
-            num_classes=num_classes,
-            loss_func=loss_func,
-            to_cuda=to_cuda,
-            verbose=0,
-            dist_measure=dist_measure,
-            l3=l,
-            l4=ls,
-            T=T,
-            alpha=alpha,
-            is_ddp=is_ddp,
-            checkpoint=checkpoint,
-            seed=seed,
-            shapelet_weight=shapelet_weight_X,
-            configDir=args.config,
-            config=config,
-            beta=beta,
-        )
+        client = LearningShapeletsCL(**shared_kwargs)
         optimizer = optim.SGD(client.model.parameters(), lr=lr, weight_decay=wd)
-        # optimizer = optim.SGD([
-        #     {'params': client.model.parameters()},
-        #     {'params': [client.log_vars]}
-        # ], lr=lr, weight_decay=wd)
         client.set_optimizer(optimizer)
         clientList.append(client)
 
-    print("All %d clinet initialized! \n" % len(clientList))
+    print(f"All {len(clientList)} clients initialized.")
 
-    # 先验计算每个客户端的数据分布情况
-    # score_list = []
-    # for idx,c in enumerate(clientList):
-    #     data = torch.tensor(y_fed[idx])
-    #     #print(data.shape)
-    #     score =map_to_near_one(data,num_classes)
-    #     score_list.append(score)
-    #     print("clinet %d score: %f", (idx, score))
+    best_acc = 0.0
+    best_round = -1
+    best_state_dict = None  # 只保存 state_dict 的 CPU 副本，避免频繁 deepcopy GPU 模型
 
-    C_accu_server = None
-    scalers = []
-    best_acc = 0
-
-    # 初始化客户端选择相关变量
-    probs = None
-    oort_selector = None
-    fedcs_selector = None
+    # ----- 客户端选择器：策略工厂见 algo/client_selection/ ----------------------
+    selector = None
     if use_client_selection:
-        probs = [1.0/numClient] * numClient  # 初始化采样概率（uniform/omp 用）
-        sample_nums_init = int(numClient * client_selection_ratio)
-        if client_selection_method == 'oort':
-            oort_selector = create_oort_selector(config=config, sample_seed=original_seed or 42)
-            for idx in range(numClient):
-                size = len(y_fed[idx]) if idx < len(y_fed) else 0
-                reward = min(size, numEpoch * batch_size) if size else 1.0
-                oort_selector.register_client(idx, {'reward': reward, 'duration': 1.0, 'time_stamp': 0, 'status': True})
-            print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: Oort (UCB+探索+Pacer)")
-        elif client_selection_method == 'fedcs':
-            data_weights = [len(y_fed[i]) / len(y_all) for i in range(numClient)]
-            fedcs_selector = create_fedcs_selector(
-                num_clients=numClient, sample_nums=sample_nums_init, data_weights=data_weights, config=config
+        if client_selection_method not in available_methods():
+            raise ValueError(
+                f"非法的 client_selection_method={client_selection_method!r}，"
+                f"可选: {available_methods()}"
             )
-            print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: FedCS (自适应客户端采样)")
-        else:
-            method_name = "均匀采样" if client_selection_method == 'uniform' else "OMP自适应采样"
-            print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: {method_name}")
+        sample_nums_init = int(numClient * client_selection_ratio)
+        selector = make_selector(
+            client_selection_method,
+            num_clients=numClient,
+            sample_nums=sample_nums_init,
+            seed=original_seed or 42,
+            config=config,
+            y_fed=y_fed,
+            y_all_size=len(y_all),
+            num_epoch=numEpoch,
+            batch_size=batch_size,
+            min_selection_prob=min_selection_prob,
+            ema_alpha=ema_alpha,
+        )
+        print(f"客户端选择已启用，采样比例: {client_selection_ratio}, 选择方法: {client_selection_method}")
         print(f"最低选择概率: {min_selection_prob}, EMA平滑系数: {ema_alpha}")
     else:
         print("客户端选择未启用，所有客户端参与聚合")
 
+    use_distribution = config['ablation'].get('UseDistribution', True)
+    total_samples = len(X_all)
+
     for round in range(numRound):
-        avg_loss = 0
-        client_losses = [0.0] * numClient  # 每客户端本轮损失，供 Oort 更新 reward
-        if round == 1:
-            one_round_time_start = time.time()
-        for idx,c in enumerate(clientList):
-            # 比例系数Q
-            c.Q = len(y_fed[idx]) / len(y_all)
-            if isEMA:
-                if round == 0:
-                    #分发模型
-                    c.model.load_state_dict(server.model.state_dict())
-                else:
-                    #分发模型EMA
-                    weight_scaler = min(scalers[idx] * calculate_divergence(c.model, server.model),1)
-                    ema = EMA(weight_scaler)
-                    update_moving_average(ema,c.model, server.model)
-            else:
-                #分发模型
-                #c.model.load_state_dict(server.model.state_dict())
-                # 不直接加载全局模型
-                if round!=0:
-                    c.Global_Model =copy.deepcopy(server.model)
-            #分发矩阵
-            if isAllocateMat and round != 0:
-                c.C_accu_Server = C_accu_server
+        avg_loss = 0.0
+        client_losses = [0.0] * numClient  # 供 Oort 更新 reward
 
+        # ----- 本地训练阶段：每个客户端在本地数据上训练 numEpoch -----
+        for idx, c in enumerate(clientList):
+            c.Q = len(y_fed[idx]) / total_samples
+            # 客户端对比学习/FedProx 需要参考 Global_Model：直接共享 server.model 引用即可
+            # （只做 forward；server.model 已冻结 requires_grad，无副作用且节省一次 deepcopy）
+            if round != 0:
+                c.Global_Model = server.model
 
-            # print(len(X_fed[idx]))
-            # print(X_fed[idx][0].shape)
-            # print("以下来自第{idx}个客户端")
-
-            # 检查客户端数据是否为空
+            # 空客户端兜底：保留上一轮权重
             if len(X_fed[idx]) == 0 or len(y_fed[idx]) == 0:
-                print(f"警告：客户端 {idx} 的数据为空，跳过训练")
-                # 如果数据为空，使用当前模型状态作为本地模型
+                print(f"[warn] client {idx} 数据为空，跳过训练")
                 if round == 0:
                     w_locals.append(c.model.state_dict())
                 else:
                     w_locals[idx] = c.model.state_dict()
                 continue
 
-            losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size, epoch_idx=-1,lr=lr)
-            # 检查losses是否为空或包含NaN
-            if len(losses) == 0:
-                print(f"警告：客户端 {idx} 的训练损失为空，跳过损失计算")
+            losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size,
+                             epoch_idx=-1, lr=lr)
+            if not losses:
                 loss_all = 0.0
             else:
-                loss_all = np.mean([loss[0] for loss in losses])
-                # 检查loss_all是否为NaN
-                if np.isnan(loss_all) or np.isinf(loss_all):
-                    print(f"警告：客户端 {idx} 的训练损失为 NaN/Inf，使用0.0")
+                loss_all = float(np.mean([loss[0] for loss in losses]))
+                if not np.isfinite(loss_all):
+                    print(f"[warn] client {idx} loss NaN/Inf，置 0")
                     loss_all = 0.0
             client_losses[idx] = loss_all
-            # loss_align = np.mean([loss[2] for loss in losses])
-            # loss_sdl = np.mean([loss[3] for loss in losses])
-            avg_loss+=(loss_all) * len(y_fed[idx]) / len(X_all)
+            avg_loss += loss_all * len(y_fed[idx]) / total_samples
 
-
-
-            if round==0 :
+            if round == 0:
                 w_locals.append(c.model.state_dict())
             else:
                 w_locals[idx] = c.model.state_dict()
 
+        # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----
         scores = []
-        #before aggregation
-        for idx,c in enumerate(clientList):
-            # 检查数据是否为空
+        for idx, c in enumerate(clientList):
             if len(X_fed[idx]) == 0:
-                print(f"警告：客户端 {idx} 的数据为空，跳过预测，使用默认分数")
-                scores.append(1.0)  # 使用默认分数
+                scores.append(1.0)
                 continue
             features = c.predict(X_fed[idx])
-            # 检查预测结果是否为空（处理一维或二维数组）
-            if features.size == 0 or (len(features.shape) > 0 and features.shape[0] == 0):
-                print(f"警告：客户端 {idx} 的预测结果为空，使用默认分数")
-                scores.append(1.0)  # 使用默认分数
+            if features.size == 0 or (features.ndim > 0 and features.shape[0] == 0):
+                scores.append(1.0)
                 continue
-            print(features.shape)
             scores.append(cal_score(features))
         scores = normalize_to_near_one(scores)
-        print(scores)
+        if not use_distribution:
+            scores = [1] * numClient
 
-        # 分布打分
-        if config['ablation']['UseDistribution']==False:
-            scores = [1] * numClient  # 修改为动态长度
-        # scores = [1,1,1]
-
-        # 根据配置决定是否使用客户端选择
-        if use_client_selection:
-            # 启用客户端选择
-            sample_nums = int(numClient * client_selection_ratio)  # 采样数
-
-            # 根据选择方法进行客户端选择
-            if client_selection_method == 'oort':
-                # Oort：第一轮全选，之后用 UCB+探索 选 top-k
-                if round == 0:
-                    select_mask = [1.0] * numClient
-                    print(f"第一轮：全选所有客户端（Oort 模式）")
-                else:
-                    feasible = set(range(numClient))
-                    picked = oort_selector.select_participant(sample_nums, feasible)
-                    picked_set = set(int(i) for i in picked)
-                    select_mask = [1.0 if i in picked_set else 0.0 for i in range(numClient)]
-                    print(f"Oort 选中客户端: {sorted(picked_set)}, 掩码: {select_mask}")
-                if oort_selector is not None:
-                    # 仅对被选中并参与聚合的客户端更新 feedback（time_stamp、unexplored）
-                    selected_for_update = {i for i in range(numClient) if select_mask[i] > 0}
-                    for idx in selected_for_update:
-                        reward = -float(client_losses[idx]) if client_losses[idx] else 0.0
-                        oort_selector.update_client_util(
-                            idx,
-                            {'reward': reward, 'duration': 1.0, 'time_stamp': round, 'status': True}
-                        )
-            elif client_selection_method == 'fedcs':
-                # FedCS：按 q 采样，聚合使用逆概率权重 p_i/(K*q_i)
-                if round == 0:
-                    select_mask = [1.0] * numClient
-                    print(f"第一轮：全选所有客户端（FedCS 模式）")
-                else:
-                    q = fedcs_selector.get_sampling_probs()
-                    q_list = q.tolist() if hasattr(q, 'tolist') else list(q)
-                    select_mask = sample_clients_mask_by_probability(q_list, sample_nums, seed=None)
-                    select_mask = [float(x) for x in select_mask]
-                    print(f"FedCS 采样概率 q (前5): {q_list[:5]}..., 掩码: {select_mask}")
-                agg_weights = fedcs_selector.get_aggregation_weights(select_mask)
-                agg_weights_list = agg_weights.tolist() if hasattr(agg_weights, 'tolist') else list(agg_weights)
-                w_global = fedavg_fedcs(w_locals, y_fed, agg_weights_list)
-                server.model.load_state_dict(w_global)
-                for idx in range(numClient):
-                    g_proxy = 1.0 / (1.0 + float(client_losses[idx])) if client_losses[idx] else 1.0
-                    fedcs_selector.update_gradient_norm(idx, g_proxy, ema_alpha=0.3)
-            elif client_selection_method == 'uniform':
-                # 均匀采样：所有客户端概率相等
-                probs = [1.0/numClient] * numClient
-                if round == 0:
-                    # 第一轮全选所有客户端
-                    select_mask = [1.0] * numClient  # 使用浮点数
-                    print(f"第一轮：全选所有客户端（均匀采样模式）")
-                else:
-                    # 从第二轮开始按均匀概率选择（seed=None 保证每轮独立随机）
-                    print(f"均匀采样模式，概率: {probs}")
-                    select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=None)
-                    # 转换为浮点数类型
-                    select_mask = [float(x) for x in select_mask]
-                    print(f"客户端选择掩码: {select_mask}")
-            else:
-                # OMP自适应采样
-                if round == 0:
-                    # 第一轮全选所有客户端
-                    select_mask = [1.0] * numClient  # 使用浮点数
-                    probs = [1.0/numClient] * numClient
-                    print(f"第一轮：全选所有客户端（OMP自适应采样模式）")
-                else:
-                    # 从第二轮开始按采样概率选择
-                    print(f"本轮采样概率阵: {probs}")
-                    select_mask = sample_clients_mask_by_probability(probs, sample_nums, seed=None)
-                    # 转换为浮点数类型
-                    select_mask = [float(x) for x in select_mask]
-                    print(f"客户端选择掩码: {select_mask}")
-
-            # 聚合（FedCS 已在分支内用 fedavg_fedcs 完成，此处跳过）
-            if client_selection_method != 'fedcs':
+        # ----- 客户端选择 + 聚合（策略见 algo/client_selection/）-----
+        if use_client_selection and selector is not None:
+            select_mask = selector.on_round_start(round, client_losses=client_losses, y_fed=y_fed)
+            print(f"[{selector.name}] 选择掩码: {select_mask}")
+            w_global = selector.aggregate(w_locals, y_fed, scores, select_mask)
+            if w_global is None:  # 策略未覆盖时回退默认 FedAvg
                 combined_scores = [scores[i] * select_mask[i] for i in range(numClient)]
                 w_global = fedavg(w_locals, y_fed, combined_scores)
-                server.model.load_state_dict(w_global)
-
-            if client_selection_method == 'omp':
-                sparse_vec = omp_from_state_dicts(w_locals, w_global, sample_nums)
-                probs = get_sampling_probs_from_omp(
-                    sparse_vec,
-                    prev_probs=probs,
-                    selection_mask=select_mask,
-                    min_selection_prob=min_selection_prob,
-                    ema_alpha=ema_alpha
-                )
-                print(f"稀疏向量: {sparse_vec}")
-                print(f"更新后概率: {probs}")
-            elif client_selection_method not in ('oort', 'fedcs'):
-                print(f"均匀采样模式：保持均匀采样概率，不更新")
+            server.model.load_state_dict(w_global)
+            selector.on_round_end(
+                round,
+                w_locals=w_locals, w_global=w_global,
+                select_mask=select_mask, client_losses=client_losses,
+            )
         else:
-            # 不使用客户端选择，所有客户端都参与聚合
-            print("所有客户端参与聚合（客户端选择未启用）")
-            # 使用原有的scores进行聚合
             w_global = fedavg(w_locals, y_fed, scores)
             server.model.load_state_dict(w_global)
 
-
-        # 下游分类器
+        # ----- 下游 SVC 评估 -----
         transformation = server.transform(X_all, result_type='numpy', normalize=True, batch_size=batch_size)
         transformation_test = server.transform(X_test, result_type='numpy', normalize=True, batch_size=batch_size)
         scaler = RobustScaler()
@@ -588,50 +452,40 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             )
         else:
             train_acc, test_acc = eval(transformation, transformation_test, y_train=y_all, y_test=y_test)
-        if best_acc< test_acc:
+
+        if test_acc > best_acc:
             best_acc = test_acc
             best_round = round
-            best_model = copy.deepcopy(server.model)
-        print('Classification:', train_acc, test_acc, round)
-        #print("round %d Server %d trained.\n"%(round,idx))
+            # 只 clone 到 CPU，避免 deepcopy 整个 GPU 模型（显著更快、更省显存）
+            best_state_dict = {k: v.detach().cpu().clone() for k, v in server.model.state_dict().items()}
 
-        f = open(logTxt, mode="a+")
-        # 检查avg_loss是否为NaN，如果是则显示为字符串
-        avg_loss_str = str(avg_loss) if not (np.isnan(avg_loss) or np.isinf(avg_loss)) else "nan"
-        f.writelines("dataset: "+dataset+"round:"+str(round)+" server aggregation "+" testACC:"+str(test_acc)+" trainACC:"+str(train_acc)+" avg_loss:"+avg_loss_str+"\n")
-        f.close()
+        print(f"Classification: train={train_acc:.4f} test={test_acc:.4f} round={round}")
 
-        # # 太大的模型早退
-        # if round == 1 and dataset!="HAR":
-        #     time_round = time.time() - one_round_time_start
-        #     if time_round*numRound > 40000:
-        #         return
+        avg_loss_str = str(avg_loss) if np.isfinite(avg_loss) else "nan"
+        with open(logTxt, mode="a+", encoding="utf-8") as f:
+            f.write(
+                f"dataset: {dataset}round:{round} server aggregation "
+                f" testACC:{test_acc} trainACC:{train_acc} avg_loss:{avg_loss_str}\n"
+            )
 
-    print("best round is %d, acc is %f"%(best_round,best_acc))
-    # 画一下散点图
-    # vectors = server.predict(X_all)
-    # draw_scatter_plot(vectors,y_all)
+    print(f"best round is {best_round}, acc is {best_acc:.6f}")
+    if best_state_dict is not None:
+        save_model(best_state_dict, dataset, formatted_date)
+    else:
+        print("[warn] 没有任何一轮 test_acc > 0，跳过 best 模型保存")
 
 
-    #torch.save(best_model.state_dict(), f'./checkpoint/{dataset}/{formatted_date}_{dataset}_model.pt')
-    save_model(best_model, dataset, formatted_date)
-
-
-    return
-def save_model(model, dataset, formatted_date):
-    # 定义保存路径（formatted_date 可能含非法字符，需净化）
+def save_model(state_dict, dataset, formatted_date):
+    """保存 best state_dict 到 ./checkpoint/<dataset>/<date>_<dataset>_model.pt。"""
     checkpoint_dir = f'./checkpoint/{dataset}'
     safe_date = _sanitize_filename(formatted_date) if formatted_date else formatted_date
     model_path = f'{checkpoint_dir}/{safe_date}_{dataset}_model.pt'
-
-    # 检查并创建目录（如果不存在）
     os.makedirs(checkpoint_dir, exist_ok=True)
-
-    # 保存模型
-    torch.save(model.state_dict(), model_path)
+    torch.save(state_dict, model_path)
     print(f"Model saved to {model_path}")
-if __name__ == '__main__':
 
+
+if __name__ == '__main__':
     train(dataset=args.dataset, seed=args.seed)
 
 

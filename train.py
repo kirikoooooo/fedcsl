@@ -17,8 +17,15 @@ from fedutil import *
 from utils import *
 import yaml
 
-from blocksMMOE import MMoE
-from blocksAttention import Attention
+# 对比学习/蒸馏损失模块（见 algo/contrastive/）。每项对应一个消融开关。
+from algo.contrastive import (
+    local_infonce_loss,
+    joint_contrastive_loss,
+    joint_distill_loss,
+    scale_contrastive_loss,
+    scale_distill_loss,
+)
+
 
 class LearningShapeletsCL:
     """
@@ -185,41 +192,31 @@ class LearningShapeletsCL:
             q = self.model(x_q, optimize=None, masking=False)
             k = self.model(x_k, optimize=None, masking=False)
 
+            # 归一化 (供后续 SDL / CCA 使用)
             q = nn.functional.normalize(q, dim=1)
             k = nn.functional.normalize(k, dim=1)
-            logits = torch.einsum('nc,ck->nk', [q, k.t()])
-            logits /= self.T
-            labels = torch.arange(q.shape[0], dtype=torch.long)
-
-            if self.to_cuda:
-                labels = labels.cuda()
 
             gamma = config['model']['params'].get('gamma', 0.5)  # local, 默认值0.5
-            zeta = 1-gamma  #global
-            #本地joint对比学习
-            loss = self.loss_func(logits, labels) * gamma
-            loss_local_jointCLKD = torch.tensor(0.0,device=torch.cuda.current_device())
+            zeta = 1 - gamma  # global
 
-            #全局模型与本地模型joint对比
-            if self.Global_Model != None and config.get('algo', 'fedcsl')=='fedcsl':
+            # [基础项] 局部 InfoNCE (algo/contrastive/local_infonce.py)
+            loss = local_infonce_loss(q, k, self.loss_func, self.T) * gamma
+            loss_local_jointCLKD = torch.tensor(0.0, device=torch.cuda.current_device())
+
+            # 全局模型与本地模型的 Joint CL/KD
+            if self.Global_Model is not None and config.get('algo', 'fedcsl') == 'fedcsl':
                 k_g = self.Global_Model(x_k, optimize=None, masking=False)
                 k_g = nn.functional.normalize(k_g, dim=1)
                 q_g = self.Global_Model(x_q, optimize=None, masking=False)
                 q_g = nn.functional.normalize(q_g, dim=1)
-                logits_g = torch.einsum('nc,ck->nk', [q_g, k.t()])
-                logits_g /= self.T
-                labels_g = torch.arange(q_g.shape[0], dtype=torch.long)
-                if self.to_cuda:
-                    labels_g = labels_g.cuda()
 
-
+                # [UseJointCL] 全局↔本地 InfoNCE (algo/contrastive/joint_cl.py)
                 if config["ablation"]["UseJointCL"]:
-                    loss_local_jointCLKD += self.loss_func(logits_g, labels_g)
+                    loss_local_jointCLKD += joint_contrastive_loss(q_g, k, self.loss_func, self.T)
 
-
-                # 全局模型和本地模型的joint蒸馏
+                # [UseJointKD] 全局↔本地 KL 蒸馏 (algo/contrastive/joint_kd.py)
                 if config["ablation"]["UseJointKD"]:
-                    loss_local_jointCLKD += direct_kl_loss(q,q_g) *zeta+ direct_kl_loss(k,k_g)
+                    loss_local_jointCLKD += joint_distill_loss(q, q_g, k, k_g, zeta)
 
 
             q_sum = None
@@ -246,51 +243,42 @@ class LearningShapeletsCL:
             loss_global_CLKD_mutiscale = torch.tensor(0.0,device=torch.cuda.current_device())
             loss_local_CLKD_mutiscale = torch.tensor(0.0,device=torch.cuda.current_device())
 
-            #多尺度本地和全局对齐
+            # 多尺度本地与全局对齐（见 algo/contrastive/*）。
             for length_i in range(num_shapelet_lengths):
-                local_loss=None
-                global_loss=None
-                # 提取对应scale的representation
+                # 提取对应 scale 的表征切片
                 qi = q[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
                 ki = k[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
-                # 本地 scale对比学习
-                logits = torch.einsum('nc,ck->nk', [nn.functional.normalize(qi, dim=1), nn.functional.normalize(ki, dim=1).t()])
-                logits /= self.T
-                #print(logits)
 
-                precision = torch.exp(-self.log_vars[scale_index]) #方差倒数
-                #print(len(precisions))
-                #self.shapelet_weight = [0.965, 1.271, 1.033, 0.730, 1.366, 1.937, 1.742, 0.956]
-                # 设置为batch内的score 统计
-                #print(type(config['ablation']['UseACF']))
+                # 尺度不确定性权重：UseACF=True 时用 pscore，否则常数 1
                 if config['ablation']['UseACF'] and pscore is not None:
                     self.shapelet_weight = pscore
                     w = float(pscore[length_i]) if length_i < len(pscore) else 1.0
-                    # 防止 NaN/Inf 传入 loss 导致 backward 失败
                     if not (np.isfinite(w) and w > 0):
                         w = 1.0
-                    precisions[length_i] = w * 5  # 倍频一下
+                    precisions[length_i] = w * 5
                 else:
                     precisions[length_i] = 1.0
 
-                # 本地scale 对比学习
-                loss_local_CLKD_mutiscale  += precisions[length_i] * self.loss_func(logits, labels)
-                #print("loss_local_mutiscaleCL",precisions[length_i] * self.loss_func(logits, labels) * gamma)
-                if self.Global_Model != None and config.get('algo', 'fedcsl')=='fedcsl':
-                    #print("采用全局模型辅助")
-                    #方案2 多尺度的全局到本地对比蒸馏
+                # [基础项] 本地 scale 对比 (algo/contrastive/local_infonce.py)
+                loss_local_CLKD_mutiscale += precisions[length_i] * local_infonce_loss(
+                    qi, ki, self.loss_func, self.T
+                )
+
+                if self.Global_Model is not None and config.get('algo', 'fedcsl') == 'fedcsl':
                     qi_g = q_g[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
                     ki_g = k_g[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
-                    logits_g = torch.einsum('nc,ck->nk', [nn.functional.normalize(qi_g, dim=1), nn.functional.normalize(ki, dim=1).t()])
-                    logits_g /= self.T
 
-
+                    # [UseScaleCL] 多尺度全局↔本地 InfoNCE (algo/contrastive/scale_cl.py)
                     if config["ablation"]["UseScaleCL"]:
-                        loss_global_CLKD_mutiscale += self.loss_func(logits_g, labels_g) * precisions[length_i]
+                        loss_global_CLKD_mutiscale += scale_contrastive_loss(
+                            qi_g, ki, self.loss_func, self.T, weight=precisions[length_i]
+                        )
 
-
+                    # [UseScaleKD] 多尺度全局↔本地 KL 蒸馏 (algo/contrastive/scale_kd.py)
                     if config["ablation"]["UseScaleKD"]:
-                        loss_global_CLKD_mutiscale += direct_kl_loss(qi_g,qi) * precisions[length_i] * zeta + direct_kl_loss(ki_g,ki)*precisions[length_i]
+                        loss_global_CLKD_mutiscale += scale_distill_loss(
+                            qi_g, qi, ki_g, ki, weight=precisions[length_i], zeta=zeta
+                        )
 
 
                 # if q_sum!=None:

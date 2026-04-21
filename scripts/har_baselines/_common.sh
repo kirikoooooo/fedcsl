@@ -6,11 +6,11 @@
 # 职责：
 #   1. 通过 gpu_sched.py 监听空闲 GPU，按调度条件挑一张派给本次训练；
 #   2. 每个任务在后台启动（&），脚本末尾用 har_wait_all 等待全部完成；
-#   3. 2 号卡永远排除；启动前要求空闲 GPU 数 ≥ HAR_MIN_FREE（默认 3），
-#      即 "剩余>2 才挂，且启动后至少保留 1 张空闲"。
+#   3. 2 号卡永远排除；启动前要求空闲 GPU 数 ≥ HAR_MIN_FREE（默认 2），
+#      即 "剩余>=2 才挂，且启动后至少保留 1 张空闲"。
 #
 # 可调环境变量（均可选）：
-#   HAR_MIN_FREE       启动前的空闲 GPU 下限，默认 3
+#   HAR_MIN_FREE       启动前的空闲 GPU 下限，默认 2（至少给机器剩 1 张空闲）
 #   HAR_GPU_EXCLUDE    禁用 GPU id，空格分隔，默认 "2"
 #   HAR_POLL_INTERVAL  GPU 轮询间隔（秒），默认 20
 #   HAR_WARMUP_SEC     启动任务后等待的时间（秒），让 GPU 真正占用再挑下一张，默认 40
@@ -31,7 +31,7 @@ PY_BIN="${PY_BIN:-python}"               # 用于训练（FedCSL_All.py）
 SCHED_PY_BIN="${SCHED_PY_BIN:-python3}"   # 用于调度器（gpu_sched.py）
 SEED="${HAR_SEED:-42}"
 
-MIN_FREE="${HAR_MIN_FREE:-3}"
+MIN_FREE="${HAR_MIN_FREE:-2}"
 GPU_EXCLUDE="${HAR_GPU_EXCLUDE:-2}"
 POLL_INTERVAL="${HAR_POLL_INTERVAL:-20}"
 WARMUP_SEC="${HAR_WARMUP_SEC:-40}"

@@ -17,7 +17,8 @@
   * ``--reserve-file`` 存放 "本调度器会话" 刚刚挑过的 GPU id，避免
     进程起步阶段 nvidia-smi 还未体现占用导致重复派发。
   * ``--min-free`` 是 "启动前必须的空闲数" 门槛:
-      - min-free=3  → 剩余>2 时才挂任务；启动 1 张后仍保留 ≥2 张空闲。
+      - min-free=2  → 剩余>=2 时才挂任务；启动 1 张后仍保留 ≥1 张空闲（默认）。
+      - min-free=3  → 剩余>=3 时才挂任务；启动 1 张后仍保留 ≥2 张空闲。
 """
 from __future__ import annotations
 
@@ -181,8 +182,8 @@ def main() -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_wait = sub.add_parser("wait", help="阻塞轮询直到有足够空闲 GPU")
-    p_wait.add_argument("--min-free", type=int, default=3,
-                        help="启动前必须的空闲 GPU 数量 (默认 3: 剩余>2 才挂)")
+    p_wait.add_argument("--min-free", type=int, default=2,
+                        help="启动前必须的空闲 GPU 数量 (默认 2: 剩余>=2 才挂, 启动后仍保留 >=1 张)")
     p_wait.add_argument("--exclude", type=int, nargs="*", default=[2],
                         help="永远不使用的 GPU id 列表 (默认 [2])")
     p_wait.add_argument("--reserve-file", type=str, default="",

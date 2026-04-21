@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FedCSL Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #161b22;
+      --panel-2: #1c232b;
+      --border: #2a313a;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-strong: #2f81f7;
+      --ok: #3fb950;
+      --warn: #d29922;
+      --danger: #f85149;
+      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, system-ui, "Segoe UI", sans-serif; height: 100%; }
+    a { color: var(--accent); text-decoration: none; }
+    header {
+      display: flex; align-items: center; padding: 10px 18px; gap: 14px;
+      background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10;
+    }
+    header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.5px; }
+    header .project { font-family: var(--mono); color: var(--muted); font-size: 12px; }
+    header .spacer { flex: 1; }
+    nav button {
+      background: transparent; color: var(--muted); border: 1px solid transparent; padding: 6px 12px;
+      border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    nav button.active { color: var(--text); background: var(--panel-2); border-color: var(--border); }
+    nav button:hover:not(.active) { color: var(--text); }
+
+    main { padding: 18px; max-width: 1400px; margin: 0 auto; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .panel h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
+
+    /* GPU grid */
+    .gpu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+    .gpu-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+    .gpu-card.excluded { opacity: 0.55; }
+    .gpu-card h3 { margin: 0 0 6px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+    .gpu-card .name { color: var(--muted); font-weight: normal; font-size: 12px; }
+    .gpu-card .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--danger); color: #fff; }
+    .bar { height: 6px; background: #2a313a; border-radius: 3px; overflow: hidden; margin: 4px 0 6px; }
+    .bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
+    .bar.mem > span { background: var(--warn); }
+    .metric { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+    .procs { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); max-height: 80px; overflow-y: auto; }
+    .procs .p { display: flex; justify-content: space-between; gap: 6px; padding: 2px 0; }
+    .procs .p .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; color: var(--text); }
+
+    /* Scripts */
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
+    tbody tr:hover { background: var(--panel-2); }
+    .kind-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-family: var(--mono); }
+    .kind-shell { background: #3d2d00; color: #ffdf5d; }
+    .kind-python { background: #1c3d1e; color: #7ee787; }
+    .desc { font-family: var(--mono); color: var(--muted); font-size: 11px; white-space: pre-wrap; max-width: 560px; }
+    .desc.empty { font-style: italic; color: #555; }
+
+    button.btn { background: var(--accent-strong); color: #fff; border: none; padding: 6px 12px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+    button.btn:hover { background: var(--accent); }
+    button.btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    button.btn.danger { background: var(--danger); }
+    button.btn.danger:hover { background: #d73a49; }
+    button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Configs */
+    .cfg-layout { display: grid; grid-template-columns: 240px 1fr; gap: 12px; }
+    .cfg-list { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px; max-height: 600px; overflow-y: auto; }
+    .cfg-list .item { padding: 6px 10px; border-radius: 4px; cursor: pointer; font-family: var(--mono); font-size: 12px; }
+    .cfg-list .item:hover { background: var(--panel); }
+    .cfg-list .item.active { background: var(--accent-strong); color: #fff; }
+    .cfg-editor { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; }
+    .cfg-editor .toolbar { padding: 8px 10px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; }
+    .cfg-editor .toolbar .name { font-family: var(--mono); font-size: 13px; flex: 1; }
+    .cfg-editor textarea { width: 100%; min-height: 500px; background: #0b0f14; color: var(--text); border: none; padding: 12px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; resize: vertical; outline: none; }
+
+    /* Runs */
+    .runs-layout { display: grid; grid-template-columns: minmax(420px, 1fr) 1fr; gap: 12px; }
+    .run-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 12.5px; }
+    .run-row:hover { background: var(--panel-2); }
+    .run-row.active { background: var(--panel-2); border-left: 3px solid var(--accent-strong); padding-left: 7px; }
+    .status { font-size: 10px; padding: 2px 6px; border-radius: 3px; font-family: var(--mono); text-transform: uppercase; }
+    .status.running { background: var(--ok); color: #fff; }
+    .status.exited { background: #484f58; color: #fff; }
+    .status.killed { background: var(--danger); color: #fff; }
+    .run-row .meta { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .run-row .meta .script { font-family: var(--mono); color: var(--text); }
+    .run-row .meta .time { color: var(--muted); font-size: 11px; }
+
+    .log-pane { background: #0b0f14; border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; max-height: 640px; overflow-y: auto; color: #cdd9e5; }
+    .log-pane.empty { color: var(--muted); font-style: italic; }
+
+    /* Modal */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 100; }
+    .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; width: 560px; max-width: calc(100vw - 32px); }
+    .modal h3 { margin: 0 0 10px; font-size: 14px; }
+    .modal label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
+    .modal input[type=text], .modal textarea {
+      width: 100%; background: #0b0f14; color: var(--text); border: 1px solid var(--border);
+      border-radius: 5px; padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; outline: none;
+    }
+    .modal textarea { min-height: 100px; resize: vertical; }
+    .modal .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    .modal pre { background: #0b0f14; border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; max-height: 140px; overflow-y: auto; font-size: 11px; color: var(--muted); }
+
+    .muted { color: var(--muted); }
+    .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; font-size: 13px; z-index: 200; }
+    .toast.err { border-color: var(--danger); color: var(--danger); }
+    .toast.ok { border-color: var(--ok); color: var(--ok); }
+
+    .inline { display: inline-flex; align-items: center; gap: 6px; }
+    code { font-family: var(--mono); font-size: 12px; background: var(--panel-2); padding: 1px 5px; border-radius: 3px; }
+    .tag { font-family: var(--mono); font-size: 10.5px; padding: 1px 5px; border-radius: 3px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>FedCSL Dashboard</h1>
+    <span class="project" id="project-root">loading…</span>
+    <span class="spacer"></span>
+    <nav>
+      <button data-tab="gpus" class="active">GPU 监控</button>
+      <button data-tab="scripts">脚本</button>
+      <button data-tab="configs">配置</button>
+      <button data-tab="runs">运行</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- GPU Tab -->
+    <section id="tab-gpus" class="tab">
+      <div class="panel">
+        <h2>GPU 状态
+          <span class="muted" style="text-transform:none; font-size:11px; margin-left:8px;" id="gpu-updated"></span>
+          <button class="btn ghost" style="float:right" onclick="refreshGpus()">刷新</button>
+          <label style="float:right; margin-right: 10px; font-size:12px; color:var(--muted); cursor:pointer;">
+            <input type="checkbox" id="gpu-auto" checked /> 自动刷新 (5s)
+          </label>
+        </h2>
+        <div id="gpu-grid" class="gpu-grid"><div class="muted">加载中…</div></div>
+      </div>
+    </section>
+
+    <!-- Scripts Tab -->
+    <section id="tab-scripts" class="tab" style="display:none">
+      <div class="panel">
+        <h2>可运行脚本
+          <button class="btn ghost" style="float:right" onclick="refreshScripts()">刷新</button>
+        </h2>
+        <table>
+          <thead>
+            <tr><th style="width:28%">脚本</th><th style="width:52%">说明</th><th style="width:20%">操作</th></tr>
+          </thead>
+          <tbody id="scripts-body"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Configs Tab -->
+    <section id="tab-configs" class="tab" style="display:none">
+      <div class="panel">
+        <h2>训练配置
+          <span class="muted" style="text-transform:none; font-size:11px; margin-left:8px;">编辑后点"保存"会做 yaml 语法校验</span>
+        </h2>
+        <div class="cfg-layout">
+          <div class="cfg-list" id="cfg-list"><div class="muted">加载中…</div></div>
+          <div class="cfg-editor">
+            <div class="toolbar">
+              <span class="name" id="cfg-name">(未选择)</span>
+              <button class="btn" id="cfg-save" onclick="saveCurrentConfig()" disabled>保存</button>
+              <button class="btn ghost" onclick="reloadCurrentConfig()" id="cfg-reload" disabled>重载</button>
+            </div>
+            <textarea id="cfg-text" spellcheck="false" placeholder="选择左侧文件开始编辑"></textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Runs Tab -->
+    <section id="tab-runs" class="tab" style="display:none">
+      <div class="panel">
+        <h2>训练任务
+          <button class="btn ghost" style="float:right" onclick="refreshRuns()">刷新</button>
+          <label style="float:right; margin-right: 10px; font-size:12px; color:var(--muted); cursor:pointer;">
+            <input type="checkbox" id="runs-auto" checked /> 自动刷新 (3s)
+          </label>
+        </h2>
+        <div class="runs-layout">
+          <div>
+            <div id="runs-list"><div class="muted">暂无</div></div>
+          </div>
+          <div>
+            <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+              <span class="muted" id="log-title">选中任务查看日志</span>
+              <span class="spacer" style="flex:1"></span>
+              <button class="btn danger" id="stop-btn" onclick="stopSelected()" disabled>终止</button>
+            </div>
+            <div class="log-pane empty" id="log-pane">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 启动脚本 Modal -->
+  <div id="launch-modal" class="modal-backdrop" style="display:none" onclick="if(event.target===this)closeLaunchModal()">
+    <div class="modal">
+      <h3>启动脚本</h3>
+      <div class="muted" id="launch-script-path" style="font-family: var(--mono); font-size: 12px;"></div>
+      <label>附加参数 (空格分隔)</label>
+      <input type="text" id="launch-args" placeholder="例: -dataset HAR" />
+      <label>环境变量 (每行一个 KEY=VALUE)</label>
+      <textarea id="launch-env" placeholder="HAR_MIN_FREE=2&#10;CUDA_VISIBLE_DEVICES=0"></textarea>
+      <label>脚本说明</label>
+      <pre id="launch-desc"></pre>
+      <div class="row">
+        <button class="btn ghost" onclick="closeLaunchModal()">取消</button>
+        <button class="btn" onclick="doLaunch()">启动</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" style="display:none"></div>
+
+<script>
+const api = (path, opts={}) => fetch('/api' + path, opts).then(async r => {
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${r.status}: ${text}`);
+  }
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('application/json') ? r.json() : r.text();
+});
+
+const fmtTime = (t) => {
+  if (!t) return '—';
+  const d = new Date(t * 1000);
+  return d.toLocaleString('zh-CN', { hour12: false });
+};
+const fmtDuration = (s) => {
+  if (!s || s < 0) return '—';
+  s = Math.floor(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h > 0 ? `${h}h${m}m${sec}s` : m > 0 ? `${m}m${sec}s` : `${sec}s`;
+};
+
+function toast(msg, kind='ok') {
+  const el = document.getElementById('toast');
+  el.className = 'toast ' + kind;
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.style.display = 'none', 3200);
+}
+
+// ---------------- Tab 切换 ----------------
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.tab').forEach(el => el.style.display = 'none');
+    document.getElementById('tab-' + tab).style.display = '';
+    if (tab === 'gpus') refreshGpus();
+    if (tab === 'scripts') refreshScripts();
+    if (tab === 'configs') refreshConfigs();
+    if (tab === 'runs') refreshRuns();
+  };
+});
+
+// ---------------- GPU ----------------
+async function refreshGpus() {
+  const el = document.getElementById('gpu-grid');
+  try {
+    const data = await api('/gpus');
+    if (!data.available) {
+      el.innerHTML = '<div class="muted">nvidia-smi 不可用（无 NVIDIA 驱动或未安装）。</div>';
+      return;
+    }
+    if (!data.gpus.length) {
+      el.innerHTML = '<div class="muted">未检测到 GPU。</div>';
+      return;
+    }
+    el.innerHTML = data.gpus.map(g => {
+      const memPct = Math.round(g.memory_used_mb / g.memory_total_mb * 100);
+      const excluded = g.index === 2;
+      const procs = g.processes.length
+        ? g.processes.map(p => `<div class="p"><span class="name" title="${p.name}">${p.name}</span><span>${p.user}</span><span>${p.mem_mb} MB</span><span class="muted">pid ${p.pid}</span></div>`).join('')
+        : '<div class="muted" style="padding:2px 0">空闲</div>';
+      return `<div class="gpu-card ${excluded?'excluded':''}">
+        <h3>GPU ${g.index} <span class="name">${g.name}</span> ${excluded?'<span class="badge">EXCLUDED</span>':''}</h3>
+        <div class="metric"><span>Util</span><span>${g.utilization}%</span></div>
+        <div class="bar"><span style="width:${g.utilization}%"></span></div>
+        <div class="metric"><span>VRAM</span><span>${g.memory_used_mb} / ${g.memory_total_mb} MB (${memPct}%)</span></div>
+        <div class="bar mem"><span style="width:${memPct}%"></span></div>
+        <div class="metric"><span>Temp</span><span>${g.temperature_c}°C</span></div>
+        <div class="procs">${procs}</div>
+      </div>`;
+    }).join('');
+    document.getElementById('gpu-updated').textContent = '已更新 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  } catch (e) {
+    el.innerHTML = `<div class="muted">错误：${e.message}</div>`;
+  }
+}
+
+// ---------------- Scripts ----------------
+let scriptCache = [];
+async function refreshScripts() {
+  const tbody = document.getElementById('scripts-body');
+  try {
+    scriptCache = await api('/scripts');
+    if (!scriptCache.length) {
+      tbody.innerHTML = '<tr><td colspan="3" class="muted">无脚本</td></tr>';
+      return;
+    }
+    tbody.innerHTML = scriptCache.map((s, i) => `
+      <tr>
+        <td>
+          <div><code>${s.path}</code></div>
+          <div style="margin-top:3px"><span class="kind-badge kind-${s.kind}">${s.kind}</span></div>
+        </td>
+        <td><div class="desc ${s.description?'':'empty'}">${s.description ? escapeHtml(s.description) : '(无说明)'}</div></td>
+        <td><button class="btn" onclick="openLaunchModal(${i})">启动 ▶</button></td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="3" class="muted">错误：${e.message}</td></tr>`;
+  }
+}
+
+function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function openLaunchModal(idx) {
+  const s = scriptCache[idx];
+  document.getElementById('launch-script-path').textContent = s.path;
+  document.getElementById('launch-desc').textContent = s.description || '(无说明)';
+  document.getElementById('launch-args').value = '';
+  document.getElementById('launch-env').value = '';
+  document.getElementById('launch-modal').style.display = 'flex';
+  document.getElementById('launch-modal').dataset.script = s.path;
+}
+function closeLaunchModal() {
+  document.getElementById('launch-modal').style.display = 'none';
+}
+async function doLaunch() {
+  const script = document.getElementById('launch-modal').dataset.script;
+  const argsRaw = document.getElementById('launch-args').value.trim();
+  const envRaw = document.getElementById('launch-env').value.trim();
+  const args = argsRaw ? argsRaw.split(/\s+/) : [];
+  const env = {};
+  for (const line of envRaw.split(/\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    const eq = t.indexOf('=');
+    if (eq <= 0) { toast(`环境变量格式错误: ${t}`, 'err'); return; }
+    env[t.slice(0, eq).trim()] = t.slice(eq + 1);
+  }
+  try {
+    const run = await api('/runs', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({script, args, env}) });
+    closeLaunchModal();
+    toast(`已启动 ${run.id} (pid ${run.pid})`);
+    switchTab('runs');
+  } catch (e) {
+    toast('启动失败: ' + e.message, 'err');
+  }
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab').forEach(el => el.style.display = 'none');
+  document.getElementById('tab-' + tab).style.display = '';
+  if (tab === 'runs') refreshRuns();
+}
+
+// ---------------- Configs ----------------
+let currentConfig = null;
+let cfgDirty = false;
+async function refreshConfigs() {
+  try {
+    const list = await api('/configs');
+    const el = document.getElementById('cfg-list');
+    el.innerHTML = list.map(c => `<div class="item" data-name="${c.name}" onclick="selectConfig('${c.name}')">${c.name}</div>`).join('');
+    if (currentConfig) highlightActiveConfig();
+  } catch (e) { toast('加载配置列表失败: ' + e.message, 'err'); }
+}
+async function selectConfig(name) {
+  if (cfgDirty && !confirm('当前配置有未保存修改，切换将丢弃，继续？')) return;
+  try {
+    const text = await api('/configs/' + encodeURIComponent(name));
+    currentConfig = name;
+    cfgDirty = false;
+    document.getElementById('cfg-name').textContent = name;
+    document.getElementById('cfg-text').value = text;
+    document.getElementById('cfg-save').disabled = true;
+    document.getElementById('cfg-reload').disabled = false;
+    highlightActiveConfig();
+  } catch (e) { toast('加载失败: ' + e.message, 'err'); }
+}
+function highlightActiveConfig() {
+  document.querySelectorAll('#cfg-list .item').forEach(el => {
+    el.classList.toggle('active', el.dataset.name === currentConfig);
+  });
+}
+document.getElementById('cfg-text').addEventListener('input', () => {
+  cfgDirty = true;
+  document.getElementById('cfg-save').disabled = !currentConfig;
+});
+async function saveCurrentConfig() {
+  if (!currentConfig) return;
+  const content = document.getElementById('cfg-text').value;
+  try {
+    await api('/configs/' + encodeURIComponent(currentConfig), {
+      method: 'PUT', headers: {'content-type':'application/json'}, body: JSON.stringify({content}),
+    });
+    cfgDirty = false;
+    document.getElementById('cfg-save').disabled = true;
+    toast('已保存 ' + currentConfig);
+  } catch (e) { toast('保存失败: ' + e.message, 'err'); }
+}
+async function reloadCurrentConfig() {
+  if (currentConfig) selectConfig(currentConfig);
+}
+
+// ---------------- Runs ----------------
+let selectedRun = null;
+let runsCache = [];
+async function refreshRuns() {
+  try {
+    runsCache = await api('/runs');
+    const el = document.getElementById('runs-list');
+    if (!runsCache.length) { el.innerHTML = '<div class="muted" style="padding:12px">暂无任务</div>'; return; }
+    el.innerHTML = runsCache.map(r => {
+      const dur = r.ended_at ? r.ended_at - r.started_at : (Date.now()/1000) - r.started_at;
+      const envStr = Object.entries(r.env || {}).map(([k,v]) => `${k}=${v}`).join(' ');
+      return `<div class="run-row ${r.id===selectedRun?'active':''}" onclick="selectRun('${r.id}')">
+        <span class="status ${r.status}">${r.status}</span>
+        <div class="meta">
+          <span class="script">${r.script}</span>
+          <span class="time">id=${r.id} · pid=${r.pid} · ${fmtTime(r.started_at)} · ${fmtDuration(dur)}${envStr?' · <span class="tag">'+escapeHtml(envStr)+'</span>':''}</span>
+        </div>
+      </div>`;
+    }).join('');
+    if (selectedRun) refreshSelectedLog();
+  } catch (e) { toast('加载任务失败: ' + e.message, 'err'); }
+}
+async function selectRun(id) {
+  selectedRun = id;
+  const r = runsCache.find(x => x.id === id);
+  document.getElementById('log-title').textContent = r ? `${r.script} (${id})` : id;
+  document.getElementById('stop-btn').disabled = !r || r.status !== 'running';
+  document.querySelectorAll('.run-row').forEach(el => el.classList.toggle('active', el.textContent.includes(id)));
+  refreshSelectedLog();
+}
+async function refreshSelectedLog() {
+  if (!selectedRun) return;
+  try {
+    const text = await api('/runs/' + selectedRun + '/log?tail=800');
+    const pane = document.getElementById('log-pane');
+    if (!text) {
+      pane.textContent = '(暂无日志)'; pane.classList.add('empty');
+    } else {
+      const wasAtBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40;
+      pane.textContent = text; pane.classList.remove('empty');
+      if (wasAtBottom) pane.scrollTop = pane.scrollHeight;
+    }
+  } catch (e) { /* ignore */ }
+}
+async function stopSelected() {
+  if (!selectedRun) return;
+  if (!confirm(`确定终止任务 ${selectedRun} ？`)) return;
+  try {
+    await api('/runs/' + selectedRun + '/stop', { method: 'POST' });
+    toast('已发送终止信号');
+    setTimeout(refreshRuns, 300);
+  } catch (e) { toast('终止失败: ' + e.message, 'err'); }
+}
+
+// ---------------- 自动刷新 ----------------
+setInterval(() => {
+  if (document.getElementById('tab-gpus').style.display !== 'none'
+      && document.getElementById('gpu-auto').checked) refreshGpus();
+}, 5000);
+setInterval(() => {
+  if (document.getElementById('tab-runs').style.display !== 'none'
+      && document.getElementById('runs-auto').checked) refreshRuns();
+}, 3000);
+
+// ---------------- init ----------------
+(async () => {
+  try {
+    const h = await api('/health');
+    document.getElementById('project-root').textContent = h.project_root;
+  } catch {}
+  refreshGpus();
+})();
+</script>
+</body>
+</html>

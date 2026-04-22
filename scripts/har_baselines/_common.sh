@@ -6,13 +6,16 @@
 # 职责：
 #   1. 通过 gpu_sched.py 监听可用 GPU，按 "显存空闲比 ≥ HAR_MEM_FREE_RATIO" 派给本次训练；
 #      —— 允许**同一张 GPU 运行多个自家任务**，只要显存还剩得够。
-#   2. 每个任务在后台启动（&），脚本末尾用 har_wait_all 等待全部完成；
-#   3. 2 号卡永远排除。
+#   2. 硬约束：派发前可用 GPU 数 ≥ HAR_MIN_FREE（默认 2；派发 1 张后仍保留 ≥1 张可用），
+#      且 **始终要求派发前至少有 1 张严格空闲（无 compute 进程）的卡**，
+#      并把那张严格空闲的卡留给别人——挑 mem 阈值满足的非严格空闲卡优先。
+#   3. 每个任务在后台启动（&），脚本末尾用 har_wait_all 等待全部完成；
+#   4. 2 号卡永远排除。
 #
 # 可调环境变量（均可选）：
 #   HAR_STRATEGY         调度策略: "mem" (默认, 按显存阈值) 或 "idle" (严格空闲)
 #   HAR_MEM_FREE_RATIO   mem 策略下的显存空闲比阈值 (默认 0.70; 即 "已用 ≤ 30%")
-#   HAR_MIN_FREE         idle 策略下的空闲 GPU 下限 (默认 1)；mem 策略忽略
+#   HAR_MIN_FREE         派发前必须的 "可用 GPU" 下限 (默认 2; 预留 1 张空闲)
 #   HAR_GPU_EXCLUDE      禁用 GPU id，空格分隔，默认 "2"
 #   HAR_POLL_INTERVAL    GPU 轮询间隔（秒），默认 20
 #   HAR_WARMUP_SEC       启动任务后等待的时间（秒），让 GPU 真正吃显存再挑下一张，默认 15
@@ -35,7 +38,7 @@ SEED="${HAR_SEED:-42}"
 
 STRATEGY="${HAR_STRATEGY:-mem}"
 MEM_FREE_RATIO="${HAR_MEM_FREE_RATIO:-0.70}"
-MIN_FREE="${HAR_MIN_FREE:-1}"
+MIN_FREE="${HAR_MIN_FREE:-2}"
 GPU_EXCLUDE="${HAR_GPU_EXCLUDE:-2}"
 POLL_INTERVAL="${HAR_POLL_INTERVAL:-20}"
 WARMUP_SEC="${HAR_WARMUP_SEC:-15}"
@@ -97,7 +100,7 @@ run_baseline() {
   cd "${PROJECT_ROOT}"
 
   if [[ "${STRATEGY}" == "mem" ]]; then
-    echo "[$(date +%H:%M:%S)] ⏳ ${desc}  等待可用 GPU (strategy=mem, mem_free≥${MEM_FREE_RATIO}, exclude=${GPU_EXCLUDE})"
+    echo "[$(date +%H:%M:%S)] ⏳ ${desc}  等待可用 GPU (strategy=mem, mem_free≥${MEM_FREE_RATIO}, min_free=${MIN_FREE}, 预留≥1 张严格空闲, exclude=${GPU_EXCLUDE})"
   else
     echo "[$(date +%H:%M:%S)] ⏳ ${desc}  等待空闲 GPU (strategy=idle, min_free=${MIN_FREE}, exclude=${GPU_EXCLUDE})"
   fi

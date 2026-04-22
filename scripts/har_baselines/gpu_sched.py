@@ -18,9 +18,15 @@
 
 两种模式通过 ``--strategy`` 控制；默认 ``mem``。
 
-为避免 ``nvidia-smi`` 反映更新迟滞导致的瞬时重复派发，依然保留 reserve-file，
-不过在 mem 模式下它仅作为 "本轮挑过、还没来得及吃显存" 的短期提示
-—— 新版本允许挑中已在 reserve-file 里的卡（当它显存余额仍满足阈值时）。
+**硬约束（两种模式共享）**：
+  * ``--min-free`` 指定 "派发前所需的可用 GPU 数下限"，默认 2——
+    保证派发 1 张后系统仍保留 ``min_free - 1`` 张可用的卡。
+  * 同时 **始终要求派发前至少有 1 张 "严格空闲" 的卡**（与 ``idle`` 模式同义），
+    并且派发时优先挑 "mem 阈值满足、但非严格空闲" 的卡，把严格空闲那张
+    留给下次派发 / 其它用户——这条件由代码硬写死，不可关闭。
+
+为避免 ``nvidia-smi`` 反映更新迟滞导致的瞬时重复派发，依然保留 reserve-file。
+mem 模式下允许挑中已在 reserve-file 里的卡（当它显存余额仍满足阈值时）。
 """
 from __future__ import annotations
 
@@ -202,17 +208,35 @@ def cmd_wait(args: argparse.Namespace) -> int:
     strategy = args.strategy
     mem_ratio = float(args.mem_free_ratio)
 
+    # min_free 在两种模式下含义统一：
+    #   "派发前必须有这么多 GPU 可用"——派发 1 张后仍保留 (min_free - 1) 张可用。
+    # 默认 2，即 "至少给机器保留 1 张不挂本调度器任务的卡"。
+    min_free = max(1, int(args.min_free))
+
     while True:
         reserved = _read_reserved(args.reserve_file) if args.reserve_file else set()
         avail = list_available_gpus(
             strategy=strategy, exclude=exclude, reserved=reserved, mem_free_ratio=mem_ratio
         )
 
-        # idle 模式沿用 min-free 语义；mem 模式只要有 1 张满足阈值就挑
-        min_free = max(1, int(args.min_free)) if strategy == "idle" else 1
+        # "严格空闲" 的卡数（不管策略如何，始终用来保证 "至少剩一张空卡" 的硬约束）。
+        strict_free = list_free_gpus(exclude=exclude, reserved=reserved)
 
-        if len(avail) >= min_free:
-            gpu_id = avail[0][0]
+        # 核心条件 1：可挑的 GPU 数 ≥ min_free（派发后仍保留 min_free-1 张可用）
+        cond_avail = len(avail) >= min_free
+        # 核心条件 2：派发前至少要有一张 **严格空闲** 的卡；
+        #            派发后这张 "严格空闲" 的卡要么被本次派发占用，要么留给别人。
+        #            因此：当 min_free >= 2 时，严格空闲 GPU 数必须 ≥ 1，
+        #            派发后才可能"至少剩一张空卡"（如果可挑的 GPU 就是那张严格空闲的，
+        #            还要再多一张；但实际更保守的做法——直接要求 strict_free >= 1）。
+        cond_strict = (min_free < 2) or (len(strict_free) >= 1)
+
+        if cond_avail and cond_strict:
+            # 优先挑 "mem 阈值满足但非严格空闲" 的卡（把严格空闲留给别人），
+            # 否则退而挑 mem 阈值满足中显存最空的那张。
+            non_strict_avail = [(g, r) for g, r in avail if g not in set(strict_free)]
+            pick_pool = non_strict_avail if non_strict_avail else avail
+            gpu_id = pick_pool[0][0]
             if args.reserve_file:
                 _reserve(args.reserve_file, gpu_id)
             print(gpu_id)
@@ -221,10 +245,17 @@ def cmd_wait(args: argparse.Namespace) -> int:
         now = time.time()
         if now - last_msg >= max(30, poll * 2):
             elapsed = int(now - started)
+            why = []
+            if not cond_avail:
+                why.append(f"avail<{min_free}")
+            if not cond_strict:
+                why.append("无严格空闲卡")
             print(
                 f"[gpu_sched] 等待可用 GPU: strategy={strategy} "
-                f"mem_free>={mem_ratio:.2f} avail={[(g,round(r,2)) for g,r in avail]} "
-                f"reserved={sorted(reserved)} exclude={sorted(exclude)} 已等待 {elapsed}s",
+                f"mem_free>={mem_ratio:.2f} min_free={min_free} "
+                f"avail={[(g,round(r,2)) for g,r in avail]} strict_free={strict_free} "
+                f"reserved={sorted(reserved)} exclude={sorted(exclude)} "
+                f"原因={'/'.join(why) or '—'} 已等待 {elapsed}s",
                 file=sys.stderr,
             )
             last_msg = now
@@ -274,8 +305,9 @@ def main() -> int:
         help="mem 模式下的显存空闲比阈值 (默认 0.7; 即已用 <= 30%%)",
     )
     p_wait.add_argument(
-        "--min-free", type=int, default=1,
-        help="idle 模式下启动前必须的空闲 GPU 数量 (默认 1)",
+        "--min-free", type=int, default=2,
+        help="派发前必须可用的 GPU 数量下限 (默认 2: 派发 1 张后仍保留 >=1 张可用; "
+             "且无论策略如何都要求派发前 >=1 张 **严格空闲** 的 GPU)",
     )
     p_wait.add_argument("--exclude", type=int, nargs="*", default=[2],
                         help="永远不使用的 GPU id 列表 (默认 [2])")

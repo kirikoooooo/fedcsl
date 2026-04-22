@@ -185,7 +185,29 @@ class LearningShapeletsCL:
         #-----------------checked
         pscore = None
         if config['ablation']['UseACF']:
-            pscore = period_score(x,alpha=self.beta)
+            pscore = period_score(x, alpha=self.beta)
+
+        # --- fedcsl-onehot: 每个 client 在本 batch 只激活一个尺度 ------------
+        # 做法：把 pscore 退化为 one-hot（保留 argmax），让其它尺度的权重为 0；
+        # 由于后续 loss_local/global_CLKD_mutiscale 以 precisions[length_i] 为权重，
+        # 权重为 0 即等价于该尺度不参与对比/蒸馏。所有数据流保持一致，梯度路径不变。
+        onehot_scale_idx = None
+        if config.get('algo', 'fedcsl') == 'fedcsl-onehot':
+            # 若未启用 ACF，退化为使用每个尺度表征的 L2 范数作打分
+            if pscore is None or (hasattr(pscore, "__len__") and len(pscore) == 0):
+                with torch.no_grad():
+                    _q_tmp = self.model(x, optimize=None, masking=False)
+                    _q_tmp = nn.functional.normalize(_q_tmp, dim=1)
+                    pscore = np.zeros(num_shapelet_lengths, dtype=np.float32)
+                    for _li in range(num_shapelet_lengths):
+                        _qi = _q_tmp[:, _li * num_shapelet_per_length: (_li + 1) * num_shapelet_per_length]
+                        pscore[_li] = float(_qi.pow(2).sum().item())
+            pscore = np.asarray(pscore, dtype=np.float32).ravel()
+            onehot_scale_idx = int(np.argmax(pscore))
+            onehot_vec = np.zeros_like(pscore)
+            if 0 <= onehot_scale_idx < len(onehot_vec):
+                onehot_vec[onehot_scale_idx] = 1.0
+            pscore = onehot_vec
 
         with torch.autograd.set_detect_anomaly(True):
             # q,k  =(8x320)
@@ -204,7 +226,9 @@ class LearningShapeletsCL:
             loss_local_jointCLKD = torch.tensor(0.0, device=torch.cuda.current_device())
 
             # 全局模型与本地模型的 Joint CL/KD
-            if self.Global_Model is not None and config.get('algo', 'fedcsl') == 'fedcsl':
+            _cur_algo = config.get('algo', 'fedcsl')
+            _is_fedcsl_like = _cur_algo in ('fedcsl', 'fedcsl-onehot')
+            if self.Global_Model is not None and _is_fedcsl_like:
                 k_g = self.Global_Model(x_k, optimize=None, masking=False)
                 k_g = nn.functional.normalize(k_g, dim=1)
                 q_g = self.Global_Model(x_q, optimize=None, masking=False)
@@ -249,13 +273,21 @@ class LearningShapeletsCL:
                 qi = q[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
                 ki = k[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
 
-                # 尺度不确定性权重：UseACF=True 时用 pscore，否则常数 1
+                # 尺度不确定性权重：UseACF=True 时用 pscore，否则常数 1。
+                # - fedcsl-onehot 下 pscore 是 one-hot（仅 argmax=1，其余=0），
+                #   使得其它尺度的 contrastive / KD 权重为 0（不参与）。
                 if config['ablation']['UseACF'] and pscore is not None:
                     self.shapelet_weight = pscore
                     w = float(pscore[length_i]) if length_i < len(pscore) else 1.0
-                    if not (np.isfinite(w) and w > 0):
+                    if not np.isfinite(w):
                         w = 1.0
-                    precisions[length_i] = w * 5
+                    if _cur_algo == 'fedcsl-onehot':
+                        # one-hot: w ∈ {0, 1}，保持原样（不回退到 1）
+                        precisions[length_i] = w * 5
+                    else:
+                        if w <= 0:
+                            w = 1.0
+                        precisions[length_i] = w * 5
                 else:
                     precisions[length_i] = 1.0
 
@@ -264,7 +296,7 @@ class LearningShapeletsCL:
                     qi, ki, self.loss_func, self.T
                 )
 
-                if self.Global_Model is not None and config.get('algo', 'fedcsl') == 'fedcsl':
+                if self.Global_Model is not None and _is_fedcsl_like:
                     qi_g = q_g[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
                     ki_g = k_g[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
 
@@ -330,7 +362,7 @@ class LearningShapeletsCL:
             #print("loss_sdl: ",loss_sdl.item())
             #print("loss: ",loss.item())
 
-            if config.get('algo', 'fedcsl') == 'fedcsl':
+            if _is_fedcsl_like:
                 loss_global_CLKD_mutiscale = loss_global_CLKD_mutiscale * zeta *0.1
                 loss_local_jointCLKD =  loss_local_jointCLKD * gamma * 0.5
                 loss_local_CLKD_mutiscale   =loss_local_CLKD_mutiscale *gamma * 0.1

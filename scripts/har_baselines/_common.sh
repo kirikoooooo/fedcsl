@@ -4,21 +4,23 @@
 # 被 scripts/har_baselines/har_dir*.sh 以及 run_all.sh 以 ``source`` 方式引用。
 #
 # 职责：
-#   1. 通过 gpu_sched.py 监听空闲 GPU，按调度条件挑一张派给本次训练；
+#   1. 通过 gpu_sched.py 监听可用 GPU，按 "显存空闲比 ≥ HAR_MEM_FREE_RATIO" 派给本次训练；
+#      —— 允许**同一张 GPU 运行多个自家任务**，只要显存还剩得够。
 #   2. 每个任务在后台启动（&），脚本末尾用 har_wait_all 等待全部完成；
-#   3. 2 号卡永远排除；启动前要求空闲 GPU 数 ≥ HAR_MIN_FREE（默认 2），
-#      即 "剩余>=2 才挂，且启动后至少保留 1 张空闲"。
+#   3. 2 号卡永远排除。
 #
 # 可调环境变量（均可选）：
-#   HAR_MIN_FREE       启动前的空闲 GPU 下限，默认 2（至少给机器剩 1 张空闲）
-#   HAR_GPU_EXCLUDE    禁用 GPU id，空格分隔，默认 "2"
-#   HAR_POLL_INTERVAL  GPU 轮询间隔（秒），默认 20
-#   HAR_WARMUP_SEC     启动任务后等待的时间（秒），让 GPU 真正占用再挑下一张，默认 40
-#   HAR_TIMEOUT        单次 wait 的最大等待秒数，0=无限（默认 0）
-#   HAR_NUM_ROUND      暂未对接（预留）
-#   HAR_SEED           随机种子，默认 42
-#   HAR_EXTRA_ARGS     追加到 FedCSL_All.py 命令末尾的自由参数（按空白切分）
-#   PY_BIN             Python 可执行文件，默认 python
+#   HAR_STRATEGY         调度策略: "mem" (默认, 按显存阈值) 或 "idle" (严格空闲)
+#   HAR_MEM_FREE_RATIO   mem 策略下的显存空闲比阈值 (默认 0.70; 即 "已用 ≤ 30%")
+#   HAR_MIN_FREE         idle 策略下的空闲 GPU 下限 (默认 1)；mem 策略忽略
+#   HAR_GPU_EXCLUDE      禁用 GPU id，空格分隔，默认 "2"
+#   HAR_POLL_INTERVAL    GPU 轮询间隔（秒），默认 20
+#   HAR_WARMUP_SEC       启动任务后等待的时间（秒），让 GPU 真正吃显存再挑下一张，默认 15
+#   HAR_TIMEOUT          单次 wait 的最大等待秒数，0=无限（默认 0）
+#   HAR_SEED             随机种子，默认 42
+#   HAR_EXTRA_ARGS       追加到 FedCSL_All.py 命令末尾的自由参数（按空白切分）
+#   PY_BIN               训练用 Python 可执行文件，默认 python
+#   SCHED_PY_BIN         调度器用 Python，默认 python3
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -31,10 +33,12 @@ PY_BIN="${PY_BIN:-python}"               # 用于训练（FedCSL_All.py）
 SCHED_PY_BIN="${SCHED_PY_BIN:-python3}"   # 用于调度器（gpu_sched.py）
 SEED="${HAR_SEED:-42}"
 
-MIN_FREE="${HAR_MIN_FREE:-2}"
+STRATEGY="${HAR_STRATEGY:-mem}"
+MEM_FREE_RATIO="${HAR_MEM_FREE_RATIO:-0.70}"
+MIN_FREE="${HAR_MIN_FREE:-1}"
 GPU_EXCLUDE="${HAR_GPU_EXCLUDE:-2}"
 POLL_INTERVAL="${HAR_POLL_INTERVAL:-20}"
-WARMUP_SEC="${HAR_WARMUP_SEC:-40}"
+WARMUP_SEC="${HAR_WARMUP_SEC:-15}"
 TIMEOUT="${HAR_TIMEOUT:-0}"
 
 # 本会话专属 reserve-file：用 PPID 隔离不同 run_all.sh 实例。
@@ -53,6 +57,7 @@ BASELINES=(
   "scaffold:configSCAFFOLD.yml"
   "fedproto:configFedProto.yml"
   "fedcsl:configACF.yml"
+  "fedcsl-onehot:configFedCSL_OneHot.yml"
 )
 
 # ---------------------------------------------------------------------------
@@ -62,6 +67,8 @@ _pick_gpu() {
   # shellcheck disable=SC2206
   local exclude_args=(${GPU_EXCLUDE})
   "${SCHED_PY_BIN}" "${_HERE}/gpu_sched.py" wait \
+    --strategy "${STRATEGY}" \
+    --mem-free-ratio "${MEM_FREE_RATIO}" \
     --min-free "${MIN_FREE}" \
     --exclude "${exclude_args[@]}" \
     --reserve-file "${RESERVE_FILE}" \
@@ -89,7 +96,11 @@ run_baseline() {
 
   cd "${PROJECT_ROOT}"
 
-  echo "[$(date +%H:%M:%S)] ⏳ ${desc}  等待空闲 GPU (min_free=${MIN_FREE}, exclude=${GPU_EXCLUDE})"
+  if [[ "${STRATEGY}" == "mem" ]]; then
+    echo "[$(date +%H:%M:%S)] ⏳ ${desc}  等待可用 GPU (strategy=mem, mem_free≥${MEM_FREE_RATIO}, exclude=${GPU_EXCLUDE})"
+  else
+    echo "[$(date +%H:%M:%S)] ⏳ ${desc}  等待空闲 GPU (strategy=idle, min_free=${MIN_FREE}, exclude=${GPU_EXCLUDE})"
+  fi
   local gpu_id
   gpu_id="$(_pick_gpu)" || {
     echo "[$(date +%H:%M:%S)] ✗ ${desc} 调度失败，跳过"

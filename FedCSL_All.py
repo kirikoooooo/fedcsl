@@ -333,6 +333,29 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     best_round = -1
     best_state_dict = None  # 只保存 state_dict 的 CPU 副本，避免频繁 deepcopy GPU 模型
 
+    # ----- 断点续训（auto-resume） ----------------------------------------
+    ckpt_every = int(fed_cfg.get('checkpoint_every', 30) or 0)
+    auto_resume = bool(fed_cfg.get('auto_resume', True))
+    resume_path = _resume_ckpt_path(dataset, formatted_date)
+    start_round = 0
+    if auto_resume:
+        payload = _try_load_resume_ckpt(resume_path, server, clientList)
+        if payload is not None:
+            start_round = int(payload.get("round_idx", -1)) + 1
+            best_acc = float(payload.get("best_acc", 0.0))
+            best_round = int(payload.get("best_round", -1))
+            best_state_dict = payload.get("best_state_dict", None)
+            # w_locals 也恢复，保证首轮聚合时其它未被本轮训练的客户端权重不丢
+            loaded_w_locals = payload.get("w_locals", [])
+            if len(loaded_w_locals) == numClient:
+                w_locals = list(loaded_w_locals)
+                # 把恢复的权重同步给各 client.model（若 clients_state 字段缺失时兜底）
+                for c, sd in zip(clientList, w_locals):
+                    try:
+                        c.model.load_state_dict(sd, strict=False)
+                    except Exception:
+                        pass
+
     # ----- 客户端选择器：策略工厂见 algo/client_selection/ ----------------------
     selector = None
     if use_client_selection:
@@ -363,7 +386,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     use_distribution = config['ablation'].get('UseDistribution', True)
     total_samples = len(X_all)
 
-    for round in range(numRound):
+    for round in range(start_round, numRound):
         avg_loss = 0.0
         client_losses = [0.0] * numClient  # 供 Oort 更新 reward
 
@@ -378,7 +401,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             # 空客户端兜底：保留上一轮权重
             if len(X_fed[idx]) == 0 or len(y_fed[idx]) == 0:
                 print(f"[warn] client {idx} 数据为空，跳过训练")
-                if round == 0:
+                if len(w_locals) <= idx:
                     w_locals.append(c.model.state_dict())
                 else:
                     w_locals[idx] = c.model.state_dict()
@@ -396,7 +419,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             client_losses[idx] = loss_all
             avg_loss += loss_all * len(y_fed[idx]) / total_samples
 
-            if round == 0:
+            # 兼容 resume（round 可能 >0，但 w_locals 还未被填满时）：
+            if len(w_locals) <= idx:
                 w_locals.append(c.model.state_dict())
             else:
                 w_locals[idx] = c.model.state_dict()
@@ -468,6 +492,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 f" testACC:{test_acc} trainACC:{train_acc} avg_loss:{avg_loss_str}\n"
             )
 
+        # 断点续训：每 ckpt_every 轮覆盖保存一次
+        if ckpt_every > 0 and (round + 1) % ckpt_every == 0:
+            try:
+                _save_resume_ckpt(
+                    resume_path, round, server, clientList,
+                    w_locals, best_acc, best_round, best_state_dict,
+                )
+            except Exception as e:  # pragma: no cover
+                print(f"[fedcsl] 保存 checkpoint 失败: {e}")
+
     print(f"best round is {best_round}, acc is {best_acc:.6f}")
     if best_state_dict is not None:
         save_model(best_state_dict, dataset, formatted_date)
@@ -483,6 +517,65 @@ def save_model(state_dict, dataset, formatted_date):
     os.makedirs(checkpoint_dir, exist_ok=True)
     torch.save(state_dict, model_path)
     print(f"Model saved to {model_path}")
+
+
+# ---------------------------------------------------------------------------
+# 断点续训：每 N round 覆盖保存 server+clients state_dict + 元信息
+# 文件：./checkpoint/resume/fedcsl_<dataset>_<desc>.pt
+# ---------------------------------------------------------------------------
+_RESUME_DIR = "./checkpoint/resume"
+
+
+def _resume_ckpt_path(dataset, formatted_date):
+    os.makedirs(_RESUME_DIR, exist_ok=True)
+    safe = _sanitize_filename(formatted_date) if formatted_date else "default"
+    return os.path.join(_RESUME_DIR, f"fedcsl_{dataset}_{safe}.pt")
+
+
+def _save_resume_ckpt(path, round_idx, server, clientList,
+                       w_locals, best_acc, best_round, best_state_dict):
+    payload = {
+        "round_idx": int(round_idx),
+        "server_state": {k: v.detach().cpu().clone() for k, v in server.model.state_dict().items()},
+        "clients_state": [
+            {k: v.detach().cpu().clone() for k, v in c.model.state_dict().items()}
+            for c in clientList
+        ],
+        "w_locals": [
+            {k: (v.detach().cpu().clone() if hasattr(v, "detach") else v) for k, v in sd.items()}
+            for sd in w_locals
+        ],
+        "best_acc": float(best_acc),
+        "best_round": int(best_round),
+        "best_state_dict": best_state_dict,
+    }
+    tmp = path + ".tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
+    print(f"[fedcsl] checkpoint saved → {path} (round={round_idx + 1})", flush=True)
+
+
+def _try_load_resume_ckpt(path, server, clientList):
+    if not os.path.isfile(path):
+        return None
+    try:
+        payload = torch.load(path, map_location="cpu")
+    except Exception as e:
+        print(f"[fedcsl] 读取 checkpoint 失败（{path}）：{e}，从零开始", flush=True)
+        return None
+    try:
+        server.model.load_state_dict(payload["server_state"], strict=False)
+        for c, state in zip(clientList, payload.get("clients_state", [])):
+            c.model.load_state_dict(state, strict=False)
+    except Exception as e:
+        print(f"[fedcsl] checkpoint 结构不兼容：{e}，从零开始", flush=True)
+        return None
+    resume_round = int(payload.get("round_idx", -1)) + 1
+    print(
+        f"[fedcsl] checkpoint loaded ← {path}，将从 round {resume_round + 1} 继续",
+        flush=True,
+    )
+    return payload
 
 
 if __name__ == '__main__':

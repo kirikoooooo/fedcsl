@@ -133,6 +133,7 @@
       <button data-tab="scripts">脚本</button>
       <button data-tab="configs">配置</button>
       <button data-tab="runs">运行</button>
+      <button data-tab="logs">日志浏览</button>
     </nav>
   </header>
 
@@ -212,6 +213,44 @@
     </section>
   </main>
 
+    <!-- Logs Tab -->
+    <section id="tab-logs" class="tab" style="display:none">
+      <div class="panel">
+        <h2>训练日志浏览
+          <span class="muted" style="text-transform:none; font-size:11px; margin-left:8px;">
+            扫描 result/ 与 dashboard/logs/ 下的 .log/.txt/.out；点击文件 tail 末尾 800 行
+          </span>
+          <button class="btn ghost" style="float:right" onclick="refreshLogs()">刷新</button>
+          <label style="float:right; margin-right: 10px; font-size:12px; color:var(--muted); cursor:pointer;">
+            <input type="checkbox" id="logs-auto" checked /> 自动刷新 (5s)
+          </label>
+        </h2>
+        <div class="runs-layout">
+          <div>
+            <div style="margin-bottom:8px">
+              <input type="text" id="logs-filter" placeholder="按路径过滤…" style="width:100%; background:#0b0f14; color:var(--text); border:1px solid var(--border); border-radius:5px; padding:6px 10px; font-family:var(--mono); font-size:12px; outline:none;" oninput="renderLogsList()" />
+            </div>
+            <div id="logs-list" style="max-height:640px; overflow-y:auto"><div class="muted">加载中…</div></div>
+          </div>
+          <div>
+            <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+              <span class="muted" id="log-path-title">选中文件查看内容</span>
+              <span style="flex:1"></span>
+              <label style="font-size:12px; color:var(--muted)">tail:
+                <select id="log-tail-size" onchange="refreshSelectedLogFile()" style="background:#0b0f14; color:var(--text); border:1px solid var(--border); border-radius:4px; padding:2px 6px; font-size:12px">
+                  <option value="400">400</option>
+                  <option value="800" selected>800</option>
+                  <option value="2000">2000</option>
+                  <option value="5000">5000</option>
+                </select>
+              </label>
+            </div>
+            <div class="log-pane empty" id="log-file-pane">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
   <!-- 启动脚本 Modal -->
   <div id="launch-modal" class="modal-backdrop" style="display:none" onclick="if(event.target===this)closeLaunchModal()">
     <div class="modal">
@@ -275,6 +314,7 @@ document.querySelectorAll('nav button').forEach(btn => {
     if (tab === 'scripts') refreshScripts();
     if (tab === 'configs') refreshConfigs();
     if (tab === 'runs') refreshRuns();
+    if (tab === 'logs') refreshLogs();
   };
 });
 
@@ -294,15 +334,24 @@ async function refreshGpus() {
     el.innerHTML = data.gpus.map(g => {
       const memPct = Math.round(g.memory_used_mb / g.memory_total_mb * 100);
       const excluded = g.index === 2;
+      // 调度阈值：显存已用 ≤ 30% 视为可用（mem_free_ratio ≥ 0.70）
+      const schedOK = !excluded && memPct <= 30;
       const procs = g.processes.length
         ? g.processes.map(p => `<div class="p"><span class="name" title="${p.name}">${p.name}</span><span>${p.user}</span><span>${p.mem_mb} MB</span><span class="muted">pid ${p.pid}</span></div>`).join('')
         : '<div class="muted" style="padding:2px 0">空闲</div>';
+      const schedBadge = excluded
+        ? '<span class="badge">EXCLUDED</span>'
+        : (schedOK ? '<span class="badge" style="background:#1c8139; color:#e1eadb">调度可用</span>'
+                   : '<span class="badge" style="background:#6c3a0d; color:#ffd9b3">显存紧张</span>');
       return `<div class="gpu-card ${excluded?'excluded':''}">
-        <h3>GPU ${g.index} <span class="name">${g.name}</span> ${excluded?'<span class="badge">EXCLUDED</span>':''}</h3>
+        <h3>GPU ${g.index} <span class="name">${g.name}</span> ${schedBadge}</h3>
         <div class="metric"><span>Util</span><span>${g.utilization}%</span></div>
         <div class="bar"><span style="width:${g.utilization}%"></span></div>
-        <div class="metric"><span>VRAM</span><span>${g.memory_used_mb} / ${g.memory_total_mb} MB (${memPct}%)</span></div>
-        <div class="bar mem"><span style="width:${memPct}%"></span></div>
+        <div class="metric"><span>VRAM</span><span>${g.memory_used_mb} / ${g.memory_total_mb} MB (${memPct}%) <span class="muted" style="margin-left:6px">阈值 ≤30%</span></span></div>
+        <div class="bar mem" style="position:relative">
+          <span style="width:${memPct}%"></span>
+          <span style="position:absolute; top:0; bottom:0; left:30%; width:1px; background:#d4882f; box-shadow:0 0 0 1px rgba(212,136,47,0.25);"></span>
+        </div>
         <div class="metric"><span>Temp</span><span>${g.temperature_c}°C</span></div>
         <div class="procs">${procs}</div>
       </div>`;
@@ -485,6 +534,66 @@ async function stopSelected() {
   } catch (e) { toast('终止失败: ' + e.message, 'err'); }
 }
 
+// ---------------- 日志浏览 ----------------
+let logsCache = [];
+let selectedLogPath = null;
+
+async function refreshLogs() {
+  try {
+    logsCache = await api('/logs');
+    renderLogsList();
+  } catch (e) { toast('加载日志列表失败: ' + e.message, 'err'); }
+}
+
+function renderLogsList() {
+  const kw = (document.getElementById('logs-filter').value || '').trim().toLowerCase();
+  const el = document.getElementById('logs-list');
+  const list = kw ? logsCache.filter(x => x.path.toLowerCase().includes(kw)) : logsCache;
+  if (!list.length) { el.innerHTML = '<div class="muted" style="padding:12px">无匹配文件</div>'; return; }
+  const groups = {};
+  list.forEach(f => { (groups[f.group] = groups[f.group] || []).push(f); });
+  const order = Object.keys(groups).sort();
+  el.innerHTML = order.map(g => {
+    const items = groups[g].slice(0, 200).map(f => {
+      const kb = (f.size / 1024).toFixed(1);
+      const date = new Date(f.mtime * 1000).toLocaleString('zh-CN', { hour12: false });
+      const active = f.path === selectedLogPath;
+      return `<div class="run-row ${active?'active':''}" style="cursor:pointer" onclick="selectLogFile(${JSON.stringify(f.path)})">
+        <div class="meta" style="flex:1; min-width:0">
+          <span class="script" style="font-size:11.5px">${escapeHtml(f.path)}</span>
+          <span class="time">${kb} KB · ${date}</span>
+        </div>
+      </div>`;
+    }).join('');
+    return `<div style="margin-bottom:10px">
+      <div class="muted" style="font-size:11px; padding:4px 6px; letter-spacing:0.5px">${escapeHtml(g)} (${groups[g].length})</div>
+      ${items}
+    </div>`;
+  }).join('');
+}
+
+async function selectLogFile(path) {
+  selectedLogPath = path;
+  document.getElementById('log-path-title').textContent = path;
+  document.querySelectorAll('#logs-list .run-row').forEach(el => {
+    el.classList.toggle('active', el.textContent.includes(path));
+  });
+  refreshSelectedLogFile();
+}
+
+async function refreshSelectedLogFile() {
+  if (!selectedLogPath) return;
+  const tail = document.getElementById('log-tail-size').value || '800';
+  try {
+    const text = await api('/logs/tail?path=' + encodeURIComponent(selectedLogPath) + '&tail=' + tail);
+    const pane = document.getElementById('log-file-pane');
+    if (!text) { pane.textContent = '(空文件)'; pane.classList.add('empty'); return; }
+    const wasAtBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40;
+    pane.textContent = text; pane.classList.remove('empty');
+    if (wasAtBottom) pane.scrollTop = pane.scrollHeight;
+  } catch (e) { /* ignore */ }
+}
+
 // ---------------- 自动刷新 ----------------
 setInterval(() => {
   if (document.getElementById('tab-gpus').style.display !== 'none'
@@ -494,6 +603,13 @@ setInterval(() => {
   if (document.getElementById('tab-runs').style.display !== 'none'
       && document.getElementById('runs-auto').checked) refreshRuns();
 }, 3000);
+setInterval(() => {
+  if (document.getElementById('tab-logs').style.display !== 'none'
+      && document.getElementById('logs-auto').checked) {
+    refreshLogs();
+    refreshSelectedLogFile();
+  }
+}, 5000);
 
 // ---------------- init ----------------
 (async () => {

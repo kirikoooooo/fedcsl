@@ -6,7 +6,9 @@
 2. 构造对应的 ``Server`` 与一组 ``Client`` 并跑 ``Server.train(numRound)``；
 3. 每轮后在全局测试集上做与 FedCSL 相同的 SVC 下游评估，把结果写入 FedCSL 的结果文件，
    使得 baseline 曲线与 FedCSL 的日志格式、绘图脚本完全兼容；
-4. **完全不碰** CSL 多尺度对比 / 联合蒸馏 / 结构对齐等逻辑。
+4. **完全不碰** CSL 多尺度对比 / 联合蒸馏 / 结构对齐等逻辑；
+5. 支持每 ``checkpoint_every`` 轮覆盖保存 checkpoint + 启动时 auto-resume
+   （文件：``./checkpoint/resume/baseline_<algo>_<dataset>_<desc>.pt``）。
 """
 from __future__ import annotations
 
@@ -100,6 +102,116 @@ def _build_args(
             "lamda": float(config.get("fedproto", {}).get("lamda", 1.0)),
         }),
     })
+
+
+# -----------------------------------------------------------------------------
+# Checkpoint：每 N round 覆盖保存 + 启动时 resume
+# -----------------------------------------------------------------------------
+_CKPT_DIR = "./checkpoint/resume"
+
+
+def _ckpt_path(algo: str, dataset: str, formatted_date: str) -> str:
+    # 同一算法+数据集+description 的多次实验共用一个 ckpt（覆盖式保存）
+    os.makedirs(_CKPT_DIR, exist_ok=True)
+    safe_date = (formatted_date or "default").replace("/", "_").replace("\\", "_")
+    return os.path.join(_CKPT_DIR, f"baseline_{algo}_{dataset}_{safe_date}.pt")
+
+
+def _save_baseline_checkpoint(
+    *,
+    algo: str,
+    dataset: str,
+    formatted_date: str,
+    round_idx: int,
+    server,
+    server_model,
+    clients,
+    best: Dict[str, Any],
+) -> None:
+    """覆盖式保存：server / 每个 client 的 state_dict + 必要元信息。"""
+    import torch
+
+    path = _ckpt_path(algo, dataset, formatted_date)
+    payload: Dict[str, Any] = {
+        "algo": algo,
+        "dataset": dataset,
+        "formatted_date": formatted_date,
+        "round_idx": int(round_idx),
+        "best": dict(best),
+        "server_model_state": {
+            k: v.detach().cpu().clone() for k, v in server_model.state_dict().items()
+        },
+        "public_model_params": {
+            k: v.detach().cpu().clone() for k, v in server.public_model_params.items()
+        },
+        "clients_state": [
+            {k: v.detach().cpu().clone() for k, v in c.model.state_dict().items()}
+            for c in clients
+        ],
+    }
+    if algo == "scaffold":
+        payload["c_global"] = [t.detach().cpu().clone() for t in server.c_global]
+        payload["c_local"] = [
+            [t.detach().cpu().clone() for t in vec] for vec in server.c_local
+        ]
+    elif algo == "fedproto":
+        payload["global_prototypes"] = {
+            int(k): v.detach().cpu().clone() for k, v in server.global_prototypes.items()
+        }
+
+    tmp = path + ".tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
+    print(f"[{algo.upper()}] checkpoint saved → {path} (round={round_idx + 1})", flush=True)
+
+
+def _try_load_baseline_checkpoint(
+    *,
+    algo: str,
+    dataset: str,
+    formatted_date: str,
+    server,
+    server_model,
+    clients,
+) -> Optional[Dict[str, Any]]:
+    """尝试从 ckpt 恢复状态。返回 checkpoint payload（含 round_idx 与 best）或 None。"""
+    import torch
+
+    path = _ckpt_path(algo, dataset, formatted_date)
+    if not os.path.isfile(path):
+        return None
+    try:
+        payload = torch.load(path, map_location="cpu")
+    except Exception as e:
+        print(f"[{algo.upper()}] 读取 checkpoint 失败（{path}）：{e}，从零开始", flush=True)
+        return None
+
+    try:
+        server_model.load_state_dict(payload["server_model_state"], strict=False)
+        server.public_model_params = OrderedDict(
+            (k, v.clone()) for k, v in payload["public_model_params"].items()
+        )
+        for c, state in zip(clients, payload.get("clients_state", [])):
+            c.model.load_state_dict(state, strict=False)
+        if algo == "scaffold" and "c_global" in payload:
+            server.c_global = [t.clone() for t in payload["c_global"]]
+            server.c_local = [
+                [t.clone() for t in vec] for vec in payload["c_local"]
+            ]
+        elif algo == "fedproto" and "global_prototypes" in payload:
+            server.global_prototypes = {
+                int(k): v.clone() for k, v in payload["global_prototypes"].items()
+            }
+    except Exception as e:  # pragma: no cover
+        print(f"[{algo.upper()}] checkpoint 结构不兼容：{e}，从零开始", flush=True)
+        return None
+
+    resume_round = int(payload.get("round_idx", -1)) + 1
+    print(
+        f"[{algo.upper()}] checkpoint loaded ← {path}，将从 round {resume_round + 1} 继续",
+        flush=True,
+    )
+    return payload
 
 
 # -----------------------------------------------------------------------------
@@ -242,10 +354,40 @@ def run_baseline(
     from sklearn.preprocessing import RobustScaler
 
     original_after = server.after_round
+    original_train_one_round = server.train_one_round
+
+    # 包一层：在每轮训练开始/结束时打印耗时与异常，定位卡顿和错误。
+    def _wrapped_train_one_round():
+        round_idx = int(server.current_epoch)
+        t0 = time.time()
+        print(
+            f"[{algo.upper()}] round {round_idx + 1}/{int(num_rounds)} start  "
+            f"selected={server.selected_clients}",
+            flush=True,
+        )
+        try:
+            packages = original_train_one_round()
+        except Exception as e:  # pragma: no cover
+            import traceback
+            print(
+                f"[{algo.upper()}] round {round_idx} TRAIN ERROR: {type(e).__name__}: {e}",
+                flush=True,
+            )
+            traceback.print_exc()
+            raise
+        dt = time.time() - t0
+        print(
+            f"[{algo.upper()}] round {round_idx + 1}/{int(num_rounds)} local_train done in {dt:.1f}s",
+            flush=True,
+        )
+        return packages
+
+    server.train_one_round = _wrapped_train_one_round
 
     def _after_round(client_packages):
         original_after(client_packages)
         round_idx = int(server.current_epoch)
+
         # 聚合各客户端本轮 loss（若 package 里有 eval_results 会为 dict；没有就跳过）
         client_losses = []
         for pkg in client_packages.values():
@@ -256,31 +398,46 @@ def run_baseline(
                 client_losses.append(float(tr.loss))
         avg_loss = float(np.mean(client_losses)) if client_losses else float("nan")
 
-        # 下游 SVC 评估（与 FedCSL 相同的流程）
-        transformation = server_model.transform(X_all, batch_size=int(batch_size), normalize=True, result_type="numpy")
-        transformation_test = server_model.transform(X_test, batch_size=int(batch_size), normalize=True, result_type="numpy")
-        scaler = RobustScaler()
-        transformation = scaler.fit_transform(transformation)
-        transformation_test = scaler.transform(transformation_test)
-        if has_val and X_val is not None and y_val_np is not None:
-            transformation_val = server_model.transform(X_val, batch_size=int(batch_size), normalize=True, result_type="numpy")
-            transformation_val = scaler.transform(transformation_val)
-            train_acc, test_acc = eval_tstcc_fn(
-                transformation_train=transformation,
-                transformation_test=transformation_test,
-                transformation_val=transformation_val,
-                y_train=y_all_np, y_test=y_test_np, y_val=y_val_np,
-            )
-        else:
-            train_acc, test_acc = eval_train_test_fn(transformation, transformation_test, y_train=y_all_np, y_test=y_test_np)
+        # 下游 SVC 评估用 try/except 包裹，单轮评估失败不应中断训练。
+        try:
+            t_eval = time.time()
+            transformation = server_model.transform(X_all, batch_size=int(batch_size), normalize=True, result_type="numpy")
+            transformation_test = server_model.transform(X_test, batch_size=int(batch_size), normalize=True, result_type="numpy")
+            scaler = RobustScaler()
+            transformation = scaler.fit_transform(transformation)
+            transformation_test = scaler.transform(transformation_test)
+            if has_val and X_val is not None and y_val_np is not None:
+                transformation_val = server_model.transform(X_val, batch_size=int(batch_size), normalize=True, result_type="numpy")
+                transformation_val = scaler.transform(transformation_val)
+                train_acc, test_acc = eval_tstcc_fn(
+                    transformation_train=transformation,
+                    transformation_test=transformation_test,
+                    transformation_val=transformation_val,
+                    y_train=y_all_np, y_test=y_test_np, y_val=y_val_np,
+                )
+            else:
+                train_acc, test_acc = eval_train_test_fn(transformation, transformation_test, y_train=y_all_np, y_test=y_test_np)
+            eval_dt = time.time() - t_eval
+        except Exception as e:  # pragma: no cover
+            import traceback
+            print(f"[{algo.upper()}] round {round_idx} EVAL ERROR: {type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
+            train_acc, test_acc, eval_dt = float("nan"), float("nan"), 0.0
 
-        if test_acc > best["acc"]:
+        if np.isfinite(test_acc) and test_acc > best["acc"]:
             best["acc"] = float(test_acc)
             best["round"] = round_idx
-        print(f"[{algo.upper()}] round {round_idx} train_acc={train_acc:.4f} test_acc={test_acc:.4f} best={best['acc']:.4f} avg_loss={avg_loss}")
+
+        print(
+            f"[{algo.upper()}] round {round_idx + 1}/{int(num_rounds)} done  "
+            f"train_acc={train_acc:.4f} test_acc={test_acc:.4f} "
+            f"best={best['acc']:.4f}@r{best['round'] + 1 if best['round'] >= 0 else -1} "
+            f"avg_loss={avg_loss} eval={eval_dt:.1f}s",
+            flush=True,
+        )
         try:
             with open(logTxt, mode="a+") as f:
-                loss_str = str(avg_loss) if not (np.isnan(avg_loss) or np.isinf(avg_loss)) else "nan"
+                loss_str = str(avg_loss) if np.isfinite(avg_loss) else "nan"
                 f.write(
                     f"dataset: {dataset}round:{round_idx} server aggregation  "
                     f"testACC:{test_acc} trainACC:{train_acc} avg_loss:{loss_str}\n"
@@ -288,11 +445,70 @@ def run_baseline(
         except Exception as e:  # pragma: no cover - 日志失败不致命
             print(f"[{algo.upper()}] 写日志失败: {e}")
 
+        # 断点续训：每 checkpoint_every 轮保存一次（0 表示关闭）
+        ckpt_every = int(config.get("federated", {}).get("checkpoint_every", 0) or 0)
+        if ckpt_every > 0 and (round_idx + 1) % ckpt_every == 0:
+            try:
+                _save_baseline_checkpoint(
+                    algo=algo,
+                    dataset=dataset,
+                    formatted_date=formatted_date,
+                    round_idx=round_idx,
+                    server=server,
+                    server_model=server_model,
+                    clients=clients,
+                    best=best,
+                )
+            except Exception as e:  # pragma: no cover
+                print(f"[{algo.upper()}] 保存 checkpoint 失败: {e}")
+
     server.after_round = _after_round
+
+    # 7.5. 尝试 auto-resume（若 config.federated.auto_resume != False 且存在 ckpt）
+    auto_resume = bool(config.get("federated", {}).get("auto_resume", True))
+    start_round = 0
+    if auto_resume:
+        payload = _try_load_baseline_checkpoint(
+            algo=algo, dataset=dataset, formatted_date=formatted_date,
+            server=server, server_model=server_model, clients=clients,
+        )
+        if payload is not None:
+            start_round = int(payload.get("round_idx", -1)) + 1
+            best["acc"] = float(payload.get("best", {}).get("acc", 0.0))
+            best["round"] = int(payload.get("best", {}).get("round", -1))
+            # 让 FL-bench 主循环从 start_round 开始
+            server.current_epoch = start_round
 
     # 8. 正式训练
     t0 = time.time()
-    server.train(int(num_rounds))
+    remaining = max(0, int(num_rounds) - start_round)
+    if remaining > 0:
+        # server.train 里 for E in range(num_rounds)，需要改成 range(start_round, num_rounds)；
+        # 此处通过简单 monkey-patch 实现，不动 FedAvgServer 基类。
+        if start_round > 0:
+            _orig_train = server.train
+
+            def _resumable_train(num_rounds_: int) -> None:
+                for E in range(start_round, int(num_rounds_)):
+                    server.current_epoch = E
+                    server.selected_clients = server.select_clients()
+                    client_packages = server.train_one_round()
+                    if server.model is not None:
+                        server.model.load_state_dict(server.public_model_params, strict=False)
+                    server.after_round(client_packages)
+
+            server.train = _resumable_train  # type: ignore[assignment]
+
+        try:
+            server.train(int(num_rounds))
+        except Exception as e:
+            import traceback
+            print(f"[{algo.upper()}] 训练异常终止：{type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
+            raise
+    else:
+        print(f"[{algo.upper()}] checkpoint 已完成 {start_round}/{int(num_rounds)} 轮，无需继续训练。")
+
     dt = time.time() - t0
     print(f"[{algo.upper()}] training done in {dt:.1f}s, best round={best['round']} best_acc={best['acc']:.4f}")
 

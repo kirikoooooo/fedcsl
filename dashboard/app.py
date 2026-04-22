@@ -283,6 +283,78 @@ def write_config(name: str, content: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 训练日志浏览：扫描 result/ 下 .log / .txt
+# ---------------------------------------------------------------------------
+RESULT_DIR = PROJECT_ROOT / "result"
+
+_LOG_SUFFIXES = {".log", ".txt", ".out"}
+
+
+def list_result_logs() -> List[Dict[str, Any]]:
+    """递归扫描 ``result/`` 与 ``dashboard/logs/`` 下的日志文件，按 mtime 倒排。"""
+    roots = [RESULT_DIR, LOGS_DIR]
+    files: List[Dict[str, Any]] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() not in _LOG_SUFFIXES:
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            try:
+                rel = p.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+            files.append({
+                "path": rel,
+                "size": int(st.st_size),
+                "mtime": float(st.st_mtime),
+                "group": rel.split("/")[1] if rel.startswith("result/") and "/" in rel[len("result/"):] else (
+                    "dashboard" if rel.startswith("dashboard/") else "misc"
+                ),
+            })
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return files
+
+
+def tail_result_log(rel_path: str, tail: int = 800) -> str:
+    """按项目根相对路径读取 tail。安全校验限制在 ``result/`` 或 ``dashboard/logs/`` 下。"""
+    abs_path = _safe_under(PROJECT_ROOT, PROJECT_ROOT / rel_path)
+    try:
+        abs_path.resolve().relative_to(RESULT_DIR.resolve())
+    except ValueError:
+        try:
+            abs_path.resolve().relative_to(LOGS_DIR.resolve())
+        except ValueError:
+            raise HTTPException(400, "only result/ or dashboard/logs/ logs are allowed")
+    if abs_path.suffix.lower() not in _LOG_SUFFIXES:
+        raise HTTPException(400, "not a log/txt file")
+    if not abs_path.exists():
+        raise HTTPException(404, "log not found")
+    with abs_path.open("rb") as f:
+        try:
+            f.seek(0, 2)
+            size = f.tell()
+            block = 64 * 1024
+            data = b""
+            while size > 0 and data.count(b"\n") <= tail:
+                read_size = min(block, size)
+                size -= read_size
+                f.seek(size)
+                data = f.read(read_size) + data
+        except OSError:
+            f.seek(0)
+            data = f.read()
+    text = data.decode("utf-8", errors="replace")
+    return "\n".join(text.splitlines()[-tail:])
+
+
+# ---------------------------------------------------------------------------
 # Run 管理
 # ---------------------------------------------------------------------------
 class LaunchRequest(BaseModel):
@@ -479,6 +551,17 @@ def api_run_log(run_id: str, tail: int = 500) -> str:
 @app.post("/api/runs/{run_id}/stop")
 def api_run_stop(run_id: str) -> Dict[str, Any]:
     return stop_run(run_id)
+
+
+# ---- 日志浏览 ---------------------------------------------------------------
+@app.get("/api/logs")
+def api_logs_list() -> List[Dict[str, Any]]:
+    return list_result_logs()
+
+
+@app.get("/api/logs/tail", response_class=PlainTextResponse)
+def api_logs_tail(path: str, tail: int = 800) -> str:
+    return tail_result_log(path, tail=tail)
 
 
 # 静态前端

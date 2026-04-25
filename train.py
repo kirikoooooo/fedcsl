@@ -52,18 +52,23 @@ class LearningShapeletsCL:
     def __init__(self, shapelets_size_and_len,
                  loss_func, in_channels=1, num_classes=2,
                  dist_measure='euclidean', verbose=0, to_cuda=True, l3=0.0, l4=0.0, T=0.1, alpha=0.0, is_ddp=False, checkpoint=False, seed=None,
-                 shapelet_weight=None,configDir=None,config=None,beta=0.4):
+                 shapelet_weight=None,configDir=None,config=None,beta=0.4, device=None):
         self.is_ddp = is_ddp
         self.checkpoint = checkpoint
         self.seed = seed
+        self.device = torch.device(device) if device is not None else torch.device(
+            "cuda" if to_cuda and torch.cuda.is_available() else "cpu"
+        )
+        self.to_cuda = self.device.type == "cuda"
         if dist_measure == 'mix':
             self.model = LearningShapeletsModelMixDistances(shapelets_size_and_len=shapelets_size_and_len,
                                             in_channels=in_channels, num_classes=num_classes, dist_measure=dist_measure,
-                                            to_cuda=to_cuda, checkpoint=checkpoint)
+                                            to_cuda=self.to_cuda, checkpoint=checkpoint, device=self.device)
         else:
             self.model = LearningShapeletsModel(shapelets_size_and_len=shapelets_size_and_len,
                                             in_channels=in_channels, num_classes=num_classes, dist_measure=dist_measure,
-                                            to_cuda=to_cuda, checkpoint=checkpoint,shapelet_weight=shapelet_weight)
+                                            to_cuda=self.to_cuda, checkpoint=checkpoint,shapelet_weight=shapelet_weight,
+                                            device=self.device)
 
             # self.model = Attention(shapelets_size_and_len=shapelets_size_and_len,
             #                                 in_channels=in_channels, num_classes=num_classes, dist_measure=dist_measure,
@@ -72,9 +77,7 @@ class LearningShapeletsCL:
             # self.model = MMoE(shapelets_size_and_len=shapelets_size_and_len,expert_dim=32,n_expert=8,n_task=8,
             #                   in_channels = in_channels, num_classes=num_classes)
 
-        self.to_cuda = to_cuda
-        if self.to_cuda:
-            self.model.cuda()
+        self.model.to(self.device)
 
         self.shapelets_size_and_len = shapelets_size_and_len
         self.num_shapelets = sum(shapelets_size_and_len.values())
@@ -91,7 +94,10 @@ class LearningShapeletsCL:
         self.beta = beta
         self.use_regularizer = False
 
-        self.log_vars = nn.Parameter(torch.zeros(sum(shapelets_size_and_len.values())),requires_grad=True) # 可学习的权重列表 len=8
+        self.log_vars = nn.Parameter(
+            torch.zeros(sum(shapelets_size_and_len.values()), device=self.device),
+            requires_grad=True,
+        ) # 可学习的权重列表 len=8
 
         #self.mask = MaskBlock(p=0.5)
 
@@ -117,6 +123,19 @@ class LearningShapeletsCL:
 
         self.shapelet_weight = shapelet_weight
         self.config = config
+
+    def set_device(self, device):
+        self.device = torch.device(device)
+        self.to_cuda = self.device.type == "cuda"
+        self.model.to(self.device)
+        self.log_vars.data = self.log_vars.data.to(self.device)
+        if self.optimizer is not None:
+            for state in self.optimizer.state.values():
+                for key, value in state.items():
+                    if hasattr(value, "to"):
+                        state[key] = value.to(self.device)
+        if self.Global_Model is not None:
+            self.Global_Model.to(self.device)
 
     def set_optimizer(self, optimizer):
         self.optimizer = optimizer
@@ -229,7 +248,7 @@ class LearningShapeletsCL:
         x_q = x_q.transpose(1,2)
 
         if self.to_cuda:
-            x_q = x_q.cuda()
+            x_q = x_q.to(self.device)
 
 
         aug2 = np.random.choice(augmentation_list, 1, replace=False)
@@ -243,7 +262,7 @@ class LearningShapeletsCL:
         x_k = x_k.transpose(1,2)
 
         if self.to_cuda:
-            x_k = x_k.cuda()
+            x_k = x_k.to(self.device)
 
 
 
@@ -290,7 +309,7 @@ class LearningShapeletsCL:
 
             # [基础项] 局部 InfoNCE (algo/contrastive/local_infonce.py)
             loss = local_infonce_loss(q, k, self.loss_func, self.T) * gamma
-            loss_local_jointCLKD = torch.tensor(0.0, device=torch.cuda.current_device())
+            loss_local_jointCLKD = torch.tensor(0.0, device=self.device)
 
             # 全局模型与本地模型的 Joint CL/KD
             _cur_algo = algo_name
@@ -336,8 +355,8 @@ class LearningShapeletsCL:
 
 
             scale_index = 0
-            loss_global_CLKD_mutiscale = torch.tensor(0.0,device=torch.cuda.current_device())
-            loss_local_CLKD_mutiscale = torch.tensor(0.0,device=torch.cuda.current_device())
+            loss_global_CLKD_mutiscale = torch.tensor(0.0,device=self.device)
+            loss_local_CLKD_mutiscale = torch.tensor(0.0,device=self.device)
 
             # 多尺度本地与全局对齐（见 algo/contrastive/*）。
             for length_i in range(num_shapelet_lengths):
@@ -514,8 +533,8 @@ class LearningShapeletsCL:
 
                 # check if training should be done with regularizer
                 if self.to_cuda:
-                    x = x.cuda()
-                    y = y.cuda()
+                    x = x.to(self.device)
+                    y = y.to(self.device)
                     #print("Training data", idx, " on cuda ", torch.cuda.current_device())
                 loss_ce = self.update(x, y)
                 losses_ce.append(loss_ce)
@@ -565,16 +584,10 @@ class LearningShapeletsCL:
         self.model.train()
 
         # C_accu的清空需要放在此处，不然1个epoch就清零了。指望本地训练多个epoch
-        if self.to_cuda:
-            c_normalising_factor_q = torch.tensor([0], dtype=torch.float).cuda()
-            C_accu_q = [torch.tensor([0], dtype=torch.float).cuda() for _ in range(len(self.shapelets_size_and_len))]
-            c_normalising_factor_k = torch.tensor([0], dtype=torch.float).cuda()
-            C_accu_k = [torch.tensor([0], dtype=torch.float).cuda() for _ in range(len(self.shapelets_size_and_len))]
-        else:
-            c_normalising_factor_q = torch.tensor([0], dtype=torch.float).cuda()
-            C_accu_q = [torch.tensor([0], dtype=torch.float).cuda() for _ in range(len(self.shapelets_size_and_len))]
-            c_normalising_factor_k = torch.tensor([0], dtype=torch.float).cuda()
-            C_accu_k = [torch.tensor([0], dtype=torch.float).cuda() for _ in range(len(self.shapelets_size_and_len))]
+        c_normalising_factor_q = torch.tensor([0], dtype=torch.float, device=self.device)
+        C_accu_q = [torch.tensor([0], dtype=torch.float, device=self.device) for _ in range(len(self.shapelets_size_and_len))]
+        c_normalising_factor_k = torch.tensor([0], dtype=torch.float, device=self.device)
+        C_accu_k = [torch.tensor([0], dtype=torch.float, device=self.device) for _ in range(len(self.shapelets_size_and_len))]
 
 
         for epoch in progress_bar:
@@ -583,22 +596,16 @@ class LearningShapeletsCL:
 
             # if self.C_accu_Server==None: #不采用全局相似度矩阵
             #     #print("不采用全局相似度矩阵！")
-            if self.to_cuda:
-                c_normalising_factor_q = torch.tensor([0], dtype=torch.float).cuda()
-                C_accu_q = [torch.tensor([0], dtype=torch.float).cuda() for _ in range(len(self.shapelets_size_and_len))]
-                c_normalising_factor_k = torch.tensor([0], dtype=torch.float).cuda()
-                C_accu_k = [torch.tensor([0], dtype=torch.float).cuda() for _ in range(len(self.shapelets_size_and_len))]
-            else:
-                c_normalising_factor_q = torch.tensor([0], dtype=torch.float).cuda()
-                C_accu_q = [torch.tensor([0], dtype=torch.float).cuda() for _ in range(len(self.shapelets_size_and_len))]
-                c_normalising_factor_k = torch.tensor([0], dtype=torch.float).cuda()
-                C_accu_k = [torch.tensor([0], dtype=torch.float).cuda() for _ in range(len(self.shapelets_size_and_len))]
+            c_normalising_factor_q = torch.tensor([0], dtype=torch.float, device=self.device)
+            C_accu_q = [torch.tensor([0], dtype=torch.float, device=self.device) for _ in range(len(self.shapelets_size_and_len))]
+            c_normalising_factor_k = torch.tensor([0], dtype=torch.float, device=self.device)
+            C_accu_k = [torch.tensor([0], dtype=torch.float, device=self.device) for _ in range(len(self.shapelets_size_and_len))]
 
             for (x, idx) in train_dl:
 
                 # check if training should be done with regularizer
                 if self.to_cuda:
-                    x = x.cuda()
+                    x = x.to(self.device)
                     #print("Training data", idx, " on cuda ", torch.cuda.current_device())
 
 
@@ -660,7 +667,7 @@ class LearningShapeletsCL:
         shapelet_transform = []
         for (x, ) in dataloader:
             if self.to_cuda:
-                x = x.cuda()
+                x = x.to(self.device)
             with torch.no_grad():
             #shapelet_transform = self.model.transform(X)
                 shapelet_transform.append(self.model(x, optimize=None).cpu())
@@ -702,7 +709,7 @@ class LearningShapeletsCL:
         preds = []
         for (x, ) in dataloader:
             if self.to_cuda:
-                x = x.cuda()
+                x = x.to(self.device)
             with torch.no_grad():
             #shapelet_transform = self.model.transform(X)
                 preds.append(self.model(x).cpu())
@@ -714,8 +721,6 @@ class LearningShapeletsCL:
         preds = torch.cat(preds, 0)
 
         return preds.detach().numpy()
-
-
 
 
 

@@ -224,8 +224,13 @@ def TSC_multivariate_data_loader(dataset_path, dataset_name):
 
     return set_nan_to_zero(X_train), y_train, set_nan_to_zero(X_test), y_test
 
-def generate_binomial_mask(size, p=0.5):
-    return torch.from_numpy(np.random.binomial(1, p, size=size)).cuda()
+def generate_binomial_mask(size, p=0.5, device=None):
+    mask = torch.from_numpy(np.random.binomial(1, p, size=size)).float()
+    if device is not None:
+        mask = mask.to(device)
+    elif torch.cuda.is_available():
+        mask = mask.cuda()
+    return mask
 
 
 def eval_accuracy(model, X, Y, X_test, Y_test, normalize=False, lr=1e-3, wd=1e-4):

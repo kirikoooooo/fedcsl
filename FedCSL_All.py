@@ -5,8 +5,10 @@ SCAFFOLD / FedProto 等 FL-bench 原生算法会在识别到 ``algo`` 字段后�
 """
 
 import argparse
+import copy
 import os
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import numpy as np
@@ -23,6 +25,7 @@ from dataset_utils import *   # noqa: F401,F403  (LoadDataset_* 全家桶)
 from fedavg import fedavg
 from fedutil import cal_score, normalize_to_near_one
 from train import LearningShapeletsCL
+from utils import period_score
 
 
 
@@ -53,6 +56,11 @@ parser.add_argument('--min-selection-prob', type=float, default=None, help='Mini
 parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
 parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
 parser.add_argument('--dirichlet-alpha', type=float, default=None, help='Dirichlet alpha for data heterogeneity (overrides config file)')
+parser.add_argument('--server-gpu', type=int, default=None, help='GPU id used by the server/model evaluation thread')
+parser.add_argument('--client-gpus', type=str, default=None,
+                    help='Comma-separated GPU ids for client worker threads, e.g. "0,1,2"')
+parser.add_argument('--client-workers', type=int, default=None,
+                    help='Number of client training worker threads; default comes from config or 3')
 
 args = parser.parse_args()
 def _resolve_config_path(path):
@@ -95,7 +103,56 @@ def _is_splitteacher_algo(algo_name):
     return str(algo_name).lower() == "fedcsl-onehot-splitteacher"
 
 
-def _client_scale_score_batch(X_client, model, beta, batch_size=64):
+def _parse_gpu_list(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(x) for x in value]
+    value = str(value).strip()
+    if not value:
+        return []
+    gpu_ids = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_s, end_s = part.split("-", 1)
+            start, end = int(start_s), int(end_s)
+            step = 1 if end >= start else -1
+            gpu_ids.extend(range(start, end + step, step))
+        else:
+            gpu_ids.append(int(part))
+    return gpu_ids
+
+
+def _make_device(gpu_id, to_cuda=True):
+    if to_cuda and torch.cuda.is_available():
+        return torch.device(f"cuda:{int(gpu_id)}")
+    return torch.device("cpu")
+
+
+def _state_dict_to_cpu(state_dict, clone=True):
+    out = {}
+    for key, value in state_dict.items():
+        if hasattr(value, "detach"):
+            tensor = value.detach().cpu()
+            out[key] = tensor.clone() if clone else tensor
+        else:
+            out[key] = copy.deepcopy(value) if clone else value
+    return out
+
+
+def _load_state_to_model(model, state_dict):
+    model_device = next(model.parameters()).device
+    device_state = {
+        key: value.to(model_device) if hasattr(value, "to") else value
+        for key, value in state_dict.items()
+    }
+    model.load_state_dict(device_state, strict=False)
+
+
+def _client_scale_score_batch(X_client, model, beta, batch_size=64, device=None):
     """用少量本地样本估计该 client 本轮应使用的尺度索引。"""
     if isinstance(X_client, list):
         if len(X_client) == 0:
@@ -111,8 +168,9 @@ def _client_scale_score_batch(X_client, model, beta, batch_size=64):
         X_arr = np.asarray(X_client[: batch_size], dtype=np.float32)
 
     x = torch.from_numpy(X_arr).float()
+    model_device = device if device is not None else next(model.parameters()).device
     if next(model.parameters()).is_cuda:
-        x = x.cuda()
+        x = x.to(model_device)
     num_shapelet_lengths = len(model.shapelets_size_and_len)
     num_shapelet_per_length = model.num_shapelets // num_shapelet_lengths
     pscore = period_score(x, alpha=beta)
@@ -152,6 +210,100 @@ def _aggregate_scale_updates(server_state, client_scale_states, y_fed):
                 agg = value * weight if agg is None else agg + value * weight
             out[key] = agg
     return out
+
+
+def _train_client_worker(
+    worker_id,
+    client_indices,
+    device,
+    clientList,
+    X_fed,
+    y_fed,
+    total_samples,
+    round_idx,
+    numEpoch,
+    batch_size,
+    lr,
+    wd,
+    use_scale_split_comm,
+    server_state_cpu,
+    beta,
+    shared_kwargs,
+):
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
+
+    teacher = None
+    if round_idx != 0 or use_scale_split_comm:
+        teacher = LearningShapeletsCL(**{**shared_kwargs, "device": device})
+        _load_state_to_model(teacher.model, server_state_cpu)
+        teacher.model.eval()
+        for p in teacher.model.parameters():
+            p.requires_grad_(False)
+
+    results = []
+    for idx in client_indices:
+        c = clientList[idx]
+        c.set_device(device)
+        if c.optimizer is None:
+            c.set_optimizer(optim.SGD(c.model.parameters(), lr=lr, weight_decay=wd))
+        else:
+            for group in c.optimizer.param_groups:
+                group["params"] = list(c.model.parameters())
+
+        c.Q = len(y_fed[idx]) / total_samples if total_samples > 0 else 0.0
+        c.Global_Model = teacher.model if round_idx != 0 and teacher is not None else None
+
+        result = {
+            "idx": idx,
+            "loss": 0.0,
+            "state": None,
+            "scale_idx": -1,
+            "scale_state": None,
+            "worker_id": worker_id,
+            "device": str(device),
+            "skipped": False,
+        }
+
+        if len(X_fed[idx]) == 0 or len(y_fed[idx]) == 0:
+            print(f"[warn] client {idx} 数据为空，跳过训练")
+            result["state"] = _state_dict_to_cpu(c.model.state_dict())
+            result["skipped"] = True
+            c.Global_Model = None
+            results.append(result)
+            continue
+
+        if use_scale_split_comm:
+            scale_idx = _client_scale_score_batch(X_fed[idx], teacher.model if teacher is not None else c.model,
+                                                  beta=beta, device=device)
+            scale_state = {}
+            for key, value in server_state_cpu.items():
+                prefixes = c.model._scale_state_prefixes(scale_idx)
+                if any(key.startswith(prefix) for prefix in prefixes):
+                    scale_state[key] = value
+            local_state = c.model.state_dict()
+            local_state.update(scale_state)
+            _load_state_to_model(c.model, local_state)
+            result["scale_idx"] = int(scale_idx)
+
+        losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size,
+                         epoch_idx=-1, lr=lr)
+        if not losses:
+            loss_all = 0.0
+        else:
+            loss_all = float(np.mean([loss[0] for loss in losses]))
+            if not np.isfinite(loss_all):
+                print(f"[warn] client {idx} loss NaN/Inf，置 0")
+                loss_all = 0.0
+
+        result["loss"] = loss_all
+        result["state"] = _state_dict_to_cpu(c.model.state_dict())
+        if use_scale_split_comm and result["scale_idx"] >= 0:
+            result["scale_state"] = c.model.scale_state_dict(result["scale_idx"], clone=True, cpu=True)
+        c.Global_Model = None
+        results.append(result)
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +389,40 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     ls = model_cfg['ls']
     l = model_cfg['l']
     beta = model_cfg.get('beta', 0.4)
+    client_workers = int(
+        args.client_workers if args.client_workers is not None
+        else fed_cfg.get('client_workers', 3)
+    )
+    client_workers = max(1, client_workers)
+    client_groups = [[] for _ in range(client_workers)]
+    for idx in range(numClient):
+        client_groups[idx % client_workers].append(idx)
+
+    client_gpu_ids = (
+        _parse_gpu_list(args.client_gpus)
+        if args.client_gpus is not None
+        else _parse_gpu_list(fed_cfg.get('client_gpus', None))
+    )
+    server_gpu = args.server_gpu if args.server_gpu is not None else fed_cfg.get('server_gpu', None)
+    if not client_gpu_ids:
+        if server_gpu is None:
+            server_gpu = 0
+        client_gpu_ids = [server_gpu]
+    if server_gpu is None:
+        server_gpu = client_gpu_ids[0]
+
+    server_device = _make_device(server_gpu, to_cuda=to_cuda)
+    client_devices = [
+        _make_device(client_gpu_ids[worker_id % len(client_gpu_ids)], to_cuda=to_cuda)
+        for worker_id in range(client_workers)
+    ]
+    client_device_by_idx = {
+        idx: client_devices[worker_id]
+        for worker_id, indices in enumerate(client_groups)
+        for idx in indices
+    }
+    if server_device.type == "cuda":
+        torch.cuda.set_device(server_device)
 
     shapelet_weight_X = np.load('./algoutils/shapelet_weight_All.npy')
 
@@ -304,6 +490,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         f"batch size: {batch_size}",
         f"lr: {lr}",
         f"use_client_selection: {use_client_selection}",
+        f"server_device: {server_device}",
+        f"client_workers: {client_workers}",
+        f"client_worker_devices: {[str(d) for d in client_devices]}",
+        f"client_groups: {client_groups}",
     ]
     if use_client_selection:
         header_lines += [
@@ -374,6 +564,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         configDir=args.config,
         config=config,
         beta=beta,
+        device=server_device,
     )
 
     w_locals = []
@@ -385,12 +576,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         p.requires_grad_(False)
 
     for idx in range(numClient):
-        client = LearningShapeletsCL(**shared_kwargs)
+        client = LearningShapeletsCL(**{**shared_kwargs, "device": client_device_by_idx[idx]})
         optimizer = optim.SGD(client.model.parameters(), lr=lr, weight_decay=wd)
         client.set_optimizer(optimizer)
         clientList.append(client)
 
     print(f"All {len(clientList)} clients initialized.")
+    print(f"Server device: {server_device}")
+    print(f"Client worker groups: {client_groups}")
+    print(f"Client worker devices: {[str(d) for d in client_devices]}")
 
     best_acc = 0.0
     best_round = -1
@@ -411,11 +605,11 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             # w_locals 也恢复，保证首轮聚合时其它未被本轮训练的客户端权重不丢
             loaded_w_locals = payload.get("w_locals", [])
             if len(loaded_w_locals) == numClient:
-                w_locals = list(loaded_w_locals)
+                w_locals = [_state_dict_to_cpu(sd) for sd in loaded_w_locals]
                 # 把恢复的权重同步给各 client.model（若 clients_state 字段缺失时兜底）
                 for c, sd in zip(clientList, w_locals):
                     try:
-                        c.model.load_state_dict(sd, strict=False)
+                        _load_state_to_model(c.model, sd)
                     except Exception:
                         pass
 
@@ -449,6 +643,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     use_distribution = config['ablation'].get('UseDistribution', True)
     total_samples = len(X_all)
     use_scale_split_comm = _is_splitteacher_algo(algo)
+    if not w_locals:
+        w_locals = [_state_dict_to_cpu(c.model.state_dict()) for c in clientList]
 
     for round in range(start_round, numRound):
         avg_loss = 0.0
@@ -456,57 +652,45 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         client_scale_states = [None] * numClient
         client_scale_indices = [-1] * numClient
 
-        if use_scale_split_comm:
-            server_state_cpu = {k: v.detach().cpu().clone() for k, v in server.model.state_dict().items()}
+        server_state_cpu = _state_dict_to_cpu(server.model.state_dict())
 
-        # ----- 本地训练阶段：每个客户端在本地数据上训练 numEpoch -----
-        for idx, c in enumerate(clientList):
-            c.Q = len(y_fed[idx]) / total_samples
-            # 客户端对比学习/FedProx 需要参考 Global_Model：直接共享 server.model 引用即可
-            # （只做 forward；server.model 已冻结 requires_grad，无副作用且节省一次 deepcopy）
-            if round != 0:
-                c.Global_Model = server.model
-
-            # 空客户端兜底：保留上一轮权重
-            if len(X_fed[idx]) == 0 or len(y_fed[idx]) == 0:
-                print(f"[warn] client {idx} 数据为空，跳过训练")
-                if len(w_locals) <= idx:
-                    w_locals.append(c.model.state_dict())
-                else:
-                    w_locals[idx] = c.model.state_dict()
-                continue
-
-            if use_scale_split_comm:
-                scale_idx = _client_scale_score_batch(X_fed[idx], server.model, beta=beta)
-                client_scale_indices[idx] = scale_idx
-                scale_state = server.model.scale_state_dict(scale_idx, clone=True, cpu=True)
-                local_state = c.model.state_dict()
-                local_state.update(scale_state)
-                c.model.load_state_dict(local_state, strict=False)
-
-            losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size,
-                             epoch_idx=-1, lr=lr)
-            if not losses:
-                loss_all = 0.0
-            else:
-                loss_all = float(np.mean([loss[0] for loss in losses]))
-                if not np.isfinite(loss_all):
-                    print(f"[warn] client {idx} loss NaN/Inf，置 0")
-                    loss_all = 0.0
-            client_losses[idx] = loss_all
-            avg_loss += loss_all * len(y_fed[idx]) / total_samples
-
-            # 兼容 resume（round 可能 >0，但 w_locals 还未被填满时）：
-            if len(w_locals) <= idx:
-                w_locals.append(c.model.state_dict())
-            else:
-                w_locals[idx] = c.model.state_dict()
-
-            if use_scale_split_comm and client_scale_indices[idx] >= 0:
-                client_scale_states[idx] = {
-                    "scale_idx": int(client_scale_indices[idx]),
-                    "state": c.model.scale_state_dict(client_scale_indices[idx], clone=True, cpu=True),
-                }
+        # ----- 本地训练阶段：多个 client worker 并行训练，client 按 round-robin 均分到 worker -----
+        with ThreadPoolExecutor(max_workers=client_workers) as executor:
+            futures = []
+            for worker_id, indices in enumerate(client_groups):
+                if not indices:
+                    continue
+                futures.append(executor.submit(
+                    _train_client_worker,
+                    worker_id,
+                    indices,
+                    client_devices[worker_id],
+                    clientList,
+                    X_fed,
+                    y_fed,
+                    total_samples,
+                    round,
+                    numEpoch,
+                    batch_size,
+                    lr,
+                    wd,
+                    use_scale_split_comm,
+                    server_state_cpu,
+                    beta,
+                    shared_kwargs,
+                ))
+            for future in as_completed(futures):
+                for result in future.result():
+                    idx = result["idx"]
+                    client_losses[idx] = result["loss"]
+                    avg_loss += result["loss"] * len(y_fed[idx]) / total_samples
+                    w_locals[idx] = result["state"]
+                    if use_scale_split_comm and result["scale_idx"] >= 0:
+                        client_scale_indices[idx] = result["scale_idx"]
+                        client_scale_states[idx] = {
+                            "scale_idx": int(result["scale_idx"]),
+                            "state": result["scale_state"],
+                        }
 
         # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----
         scores = []
@@ -535,7 +719,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     else:
                         filtered_payloads.append({})
                 w_global = _aggregate_scale_updates(server_state_cpu, filtered_payloads, y_fed)
-                server.model.load_state_dict(w_global, strict=False)
+                _load_state_to_model(server.model, w_global)
                 selector.on_round_end(
                     round,
                     w_locals=w_locals, w_global=w_global,
@@ -544,7 +728,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             else:
                 filtered_payloads = [payload if payload is not None else {} for payload in client_scale_states]
                 w_global = _aggregate_scale_updates(server_state_cpu, filtered_payloads, y_fed)
-                server.model.load_state_dict(w_global, strict=False)
+                _load_state_to_model(server.model, w_global)
         elif use_client_selection and selector is not None:
             select_mask = selector.on_round_start(round, client_losses=client_losses, y_fed=y_fed)
             print(f"[{selector.name}] 选择掩码: {select_mask}")
@@ -552,7 +736,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             if w_global is None:  # 策略未覆盖时回退默认 FedAvg
                 combined_scores = [scores[i] * select_mask[i] for i in range(numClient)]
                 w_global = fedavg(w_locals, y_fed, combined_scores)
-            server.model.load_state_dict(w_global)
+            _load_state_to_model(server.model, w_global)
             selector.on_round_end(
                 round,
                 w_locals=w_locals, w_global=w_global,
@@ -560,7 +744,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             )
         else:
             w_global = fedavg(w_locals, y_fed, scores)
-            server.model.load_state_dict(w_global)
+            _load_state_to_model(server.model, w_global)
 
         # ----- 下游 SVC 评估 -----
         transformation = server.transform(X_all, result_type='numpy', normalize=True, batch_size=batch_size)
@@ -585,7 +769,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             best_acc = test_acc
             best_round = round
             # 只 clone 到 CPU，避免 deepcopy 整个 GPU 模型（显著更快、更省显存）
-            best_state_dict = {k: v.detach().cpu().clone() for k, v in server.model.state_dict().items()}
+            best_state_dict = _state_dict_to_cpu(server.model.state_dict())
 
         print(f"Classification: train={train_acc:.4f} test={test_acc:.4f} round={round}")
 
@@ -640,13 +824,13 @@ def _save_resume_ckpt(path, round_idx, server, clientList,
                        w_locals, best_acc, best_round, best_state_dict):
     payload = {
         "round_idx": int(round_idx),
-        "server_state": {k: v.detach().cpu().clone() for k, v in server.model.state_dict().items()},
+        "server_state": _state_dict_to_cpu(server.model.state_dict()),
         "clients_state": [
-            {k: v.detach().cpu().clone() for k, v in c.model.state_dict().items()}
+            _state_dict_to_cpu(c.model.state_dict())
             for c in clientList
         ],
         "w_locals": [
-            {k: (v.detach().cpu().clone() if hasattr(v, "detach") else v) for k, v in sd.items()}
+            _state_dict_to_cpu(sd)
             for sd in w_locals
         ],
         "best_acc": float(best_acc),
@@ -668,9 +852,9 @@ def _try_load_resume_ckpt(path, server, clientList):
         print(f"[fedcsl] 读取 checkpoint 失败（{path}）：{e}，从零开始", flush=True)
         return None
     try:
-        server.model.load_state_dict(payload["server_state"], strict=False)
+        _load_state_to_model(server.model, payload["server_state"])
         for c, state in zip(clientList, payload.get("clients_state", [])):
-            c.model.load_state_dict(state, strict=False)
+            _load_state_to_model(c.model, state)
     except Exception as e:
         print(f"[fedcsl] checkpoint 结构不兼容：{e}，从零开始", flush=True)
         return None

@@ -91,6 +91,69 @@ def _sanitize_filename(s):
     return s.strip() or "run"
 
 
+def _is_splitteacher_algo(algo_name):
+    return str(algo_name).lower() == "fedcsl-onehot-splitteacher"
+
+
+def _client_scale_score_batch(X_client, model, beta, batch_size=64):
+    """用少量本地样本估计该 client 本轮应使用的尺度索引。"""
+    if isinstance(X_client, list):
+        if len(X_client) == 0:
+            return 0
+        X_arr = np.asarray(X_client[: batch_size], dtype=np.float32)
+    elif isinstance(X_client, np.ndarray):
+        if X_client.shape[0] == 0:
+            return 0
+        X_arr = X_client[: batch_size].astype(np.float32, copy=False)
+    else:
+        if len(X_client) == 0:
+            return 0
+        X_arr = np.asarray(X_client[: batch_size], dtype=np.float32)
+
+    x = torch.from_numpy(X_arr).float()
+    if next(model.parameters()).is_cuda:
+        x = x.cuda()
+    num_shapelet_lengths = len(model.shapelets_size_and_len)
+    num_shapelet_per_length = model.num_shapelets // num_shapelet_lengths
+    pscore = period_score(x, alpha=beta)
+    if pscore is None or len(pscore) == 0:
+        with torch.no_grad():
+            feat = model(x, optimize=None, masking=False)
+            feat = nn.functional.normalize(feat, dim=1)
+            pscore = np.zeros(num_shapelet_lengths, dtype=np.float32)
+            for i in range(num_shapelet_lengths):
+                sl = feat[:, i * num_shapelet_per_length: (i + 1) * num_shapelet_per_length]
+                pscore[i] = float(sl.pow(2).sum().item())
+    pscore = np.asarray(pscore, dtype=np.float32).ravel()
+    return int(np.argmax(pscore))
+
+
+def _aggregate_scale_updates(server_state, client_scale_states, y_fed):
+    """仅聚合每个尺度被上传的参数，其它参数保持 server 原值。"""
+    out = {k: v.detach().cpu().clone() for k, v in server_state.items()}
+    scale_to_clients = {}
+    for cid, payload in enumerate(client_scale_states):
+        scale_idx = payload.get("scale_idx", None)
+        state = payload.get("state", None)
+        if scale_idx is None or not state:
+            continue
+        scale_to_clients.setdefault(int(scale_idx), []).append((cid, state))
+
+    for _, client_items in scale_to_clients.items():
+        total = sum(len(y_fed[cid]) for cid, _ in client_items)
+        if total <= 0:
+            continue
+        keys = list(client_items[0][1].keys())
+        for key in keys:
+            agg = None
+            for cid, state in client_items:
+                weight = len(y_fed[cid]) / total
+                value = state[key].detach().cpu()
+                agg = value * weight if agg is None else agg + value * weight
+            out[key] = agg
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 下游 SVC 评估：在 [10^-4, 10^4] 的 9 个 C 里挑最优，再在测试集上评估
 # ---------------------------------------------------------------------------
@@ -385,10 +448,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     use_distribution = config['ablation'].get('UseDistribution', True)
     total_samples = len(X_all)
+    use_scale_split_comm = _is_splitteacher_algo(algo)
 
     for round in range(start_round, numRound):
         avg_loss = 0.0
         client_losses = [0.0] * numClient  # 供 Oort 更新 reward
+        client_scale_states = [None] * numClient
+        client_scale_indices = [-1] * numClient
+
+        if use_scale_split_comm:
+            server_state_cpu = {k: v.detach().cpu().clone() for k, v in server.model.state_dict().items()}
 
         # ----- 本地训练阶段：每个客户端在本地数据上训练 numEpoch -----
         for idx, c in enumerate(clientList):
@@ -406,6 +475,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 else:
                     w_locals[idx] = c.model.state_dict()
                 continue
+
+            if use_scale_split_comm:
+                scale_idx = _client_scale_score_batch(X_fed[idx], server.model, beta=beta)
+                client_scale_indices[idx] = scale_idx
+                scale_state = server.model.scale_state_dict(scale_idx, clone=True, cpu=True)
+                local_state = c.model.state_dict()
+                local_state.update(scale_state)
+                c.model.load_state_dict(local_state, strict=False)
 
             losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size,
                              epoch_idx=-1, lr=lr)
@@ -425,6 +502,12 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             else:
                 w_locals[idx] = c.model.state_dict()
 
+            if use_scale_split_comm and client_scale_indices[idx] >= 0:
+                client_scale_states[idx] = {
+                    "scale_idx": int(client_scale_indices[idx]),
+                    "state": c.model.scale_state_dict(client_scale_indices[idx], clone=True, cpu=True),
+                }
+
         # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----
         scores = []
         for idx, c in enumerate(clientList):
@@ -441,7 +524,28 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             scores = [1] * numClient
 
         # ----- 客户端选择 + 聚合（策略见 algo/client_selection/）-----
-        if use_client_selection and selector is not None:
+        if use_scale_split_comm:
+            if use_client_selection and selector is not None:
+                select_mask = selector.on_round_start(round, client_losses=client_losses, y_fed=y_fed)
+                print(f"[{selector.name}] 选择掩码: {select_mask}")
+                filtered_payloads = []
+                for i, payload in enumerate(client_scale_states):
+                    if payload is not None and select_mask[i] != 0:
+                        filtered_payloads.append(payload)
+                    else:
+                        filtered_payloads.append({})
+                w_global = _aggregate_scale_updates(server_state_cpu, filtered_payloads, y_fed)
+                server.model.load_state_dict(w_global, strict=False)
+                selector.on_round_end(
+                    round,
+                    w_locals=w_locals, w_global=w_global,
+                    select_mask=select_mask, client_losses=client_losses,
+                )
+            else:
+                filtered_payloads = [payload if payload is not None else {} for payload in client_scale_states]
+                w_global = _aggregate_scale_updates(server_state_cpu, filtered_payloads, y_fed)
+                server.model.load_state_dict(w_global, strict=False)
+        elif use_client_selection and selector is not None:
             select_mask = selector.on_round_start(round, client_losses=client_losses, y_fed=y_fed)
             print(f"[{selector.name}] 选择掩码: {select_mask}")
             w_global = selector.aggregate(w_locals, y_fed, scores, select_mask)
@@ -580,5 +684,3 @@ def _try_load_resume_ckpt(path, server, clientList):
 
 if __name__ == '__main__':
     train(dataset=args.dataset, seed=args.seed)
-
-

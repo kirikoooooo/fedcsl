@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """SCAFFOLD 服务端：移植自 FL-bench ``src/server/scaffold.py``。
 
 与原版的唯一差异：

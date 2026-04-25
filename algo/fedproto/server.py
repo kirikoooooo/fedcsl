@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """FedProto 服务端：移植自 FL-bench ``src/server/fedproto.py``。
 
 相对 FL-bench 原版的改动：

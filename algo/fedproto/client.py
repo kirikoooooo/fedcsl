@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """FedProto 客户端：移植自 FL-bench ``src/client/fedproto.py``。
 
 与原版差异：

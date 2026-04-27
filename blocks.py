@@ -235,6 +235,24 @@ class ShapeletsDistBlocks(nn.Module):
 
         return out #[8,1,320]
 
+    def forward_scale(self, x, scale_idx, masking=False):
+        """仅前向一个尺度对应的 block，避免 one-hot 变体把其它尺度也白算一遍。"""
+        if self.dist_measure == 'mix':
+            base = int(scale_idx) * 3
+            block_indices = range(base, base + 3)
+        else:
+            block_indices = [int(scale_idx)]
+
+        parts = []
+        for idx in block_indices:
+            block = self.blocks[idx]
+            if self.checkpoint and self.dist_measure != 'cross-correlation':
+                parts.append(checkpoint(block, x, masking))
+            else:
+                parts.append(block(x, masking))
+
+        return torch.cat(parts, dim=2)
+
 
 
 
@@ -277,6 +295,44 @@ class LearningShapeletsModel(nn.Module):
 
         if self.to_cuda:
             self.cuda()
+
+    def _scale_feature_bounds(self, scale_idx):
+        dims = list(self.shapelets_size_and_len.values())
+        if scale_idx < 0 or scale_idx >= len(dims):
+            raise IndexError(f"scale_idx={scale_idx} 超出范围 [0, {len(dims) - 1}]")
+        start = int(sum(dims[:scale_idx]))
+        end = start + int(dims[scale_idx])
+        return start, end
+
+    def slice_scale_features(self, feat, scale_idx):
+        start, end = self._scale_feature_bounds(scale_idx)
+        return feat[:, start:end]
+
+    def _scale_state_prefixes(self, scale_idx):
+        if self.shapelets_blocks.dist_measure == 'mix':
+            base = int(scale_idx) * 3
+            return [f"shapelets_blocks.blocks.{idx}." for idx in range(base, base + 3)]
+        return [f"shapelets_blocks.blocks.{int(scale_idx)}."]
+
+    def scale_state_dict(self, scale_idx, clone=True, cpu=False):
+        prefixes = self._scale_state_prefixes(scale_idx)
+        state = self.state_dict()
+        picked = {}
+        for key, value in state.items():
+            if any(key.startswith(prefix) for prefix in prefixes):
+                tensor = value.detach()
+                if clone:
+                    tensor = tensor.clone()
+                if cpu:
+                    tensor = tensor.cpu()
+                picked[key] = tensor
+        return picked
+
+    def encode_scale(self, x, scale_idx, masking=False):
+        """仅编码一个尺度，输出该尺度的小模型特征。"""
+        x = self.shapelets_blocks.forward_scale(x, scale_idx, masking)
+        x = torch.squeeze(x, 1)
+        return nn.functional.layer_norm(x, (x.shape[1],))
 
     def forward(self, x, optimize='acc', masking=False,isProdictor=False):
 
@@ -370,6 +426,48 @@ class LearningShapeletsModelMixDistances(nn.Module):
         if self.to_cuda:
             self.cuda()
 
+    def _scale_feature_bounds(self, scale_idx):
+        dims = list(self.shapelets_size_and_len.values())
+        if scale_idx < 0 or scale_idx >= len(dims):
+            raise IndexError(f"scale_idx={scale_idx} 超出范围 [0, {len(dims) - 1}]")
+        start = int(sum(dims[:scale_idx]))
+        end = start + int(dims[scale_idx])
+        return start, end
+
+    def slice_scale_features(self, feat, scale_idx):
+        start, end = self._scale_feature_bounds(scale_idx)
+        return feat[:, start:end]
+
+    def _scale_state_prefixes(self, scale_idx):
+        scale_idx = int(scale_idx)
+        return [
+            f"shapelets_euclidean.blocks.{scale_idx}.",
+            f"shapelets_cosine.blocks.{scale_idx}.",
+            f"shapelets_cross_correlation.blocks.{scale_idx}.",
+        ]
+
+    def scale_state_dict(self, scale_idx, clone=True, cpu=False):
+        prefixes = self._scale_state_prefixes(scale_idx)
+        state = self.state_dict()
+        picked = {}
+        for key, value in state.items():
+            if any(key.startswith(prefix) for prefix in prefixes):
+                tensor = value.detach()
+                if clone:
+                    tensor = tensor.clone()
+                if cpu:
+                    tensor = tensor.cpu()
+                picked[key] = tensor
+        return picked
+
+    def encode_scale(self, x, scale_idx, masking=False):
+        """仅编码一个尺度，保留 mix-distance 的三个分支，但只跑该尺度。"""
+        eu = torch.squeeze(self.shapelets_euclidean.forward_scale(x, scale_idx, masking), 1)
+        co = torch.squeeze(self.shapelets_cosine.forward_scale(x, scale_idx, masking), 1)
+        cc = torch.squeeze(self.shapelets_cross_correlation.forward_scale(x, scale_idx, masking), 1)
+        out = torch.cat((eu, co, cc), dim=1)
+        return nn.functional.layer_norm(out, (out.shape[1],))
+
     def forward(self, x, optimize='acc', masking=False):
 
 
@@ -416,7 +514,5 @@ class LearningShapeletsModelMixDistances(nn.Module):
 
 
         return out
-
-
 
 

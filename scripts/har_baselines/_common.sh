@@ -61,6 +61,8 @@ BASELINES=(
   "fedproto:configFedProto.yml"
   "fedcsl:configACF.yml"
   "fedcsl-onehot:configFedCSL_OneHot.yml"
+  "fedcsl-onehot-fullteacher:configFedCSL_OneHot_FullTeacher.yml"
+  "fedcsl-onehot-splitteacher:configFedCSL_OneHot_SplitTeacher.yml"
 )
 
 # ---------------------------------------------------------------------------

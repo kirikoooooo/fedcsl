@@ -7,11 +7,21 @@ from utils import compute_gap_scores
 
 from utils import generate_binomial_mask
 
+
+def _resolve_device(to_cuda=True, device=None):
+    if device is not None:
+        return torch.device(device)
+    if to_cuda and torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
 class MinEuclideanDistBlock(nn.Module):
 
-    def __init__(self, shapelets_size, num_shapelets, in_channels=1, to_cuda=True):
+    def __init__(self, shapelets_size, num_shapelets, in_channels=1, to_cuda=True, device=None):
         super(MinEuclideanDistBlock, self).__init__()
-        self.to_cuda = to_cuda
+        self.device = _resolve_device(to_cuda, device)
+        self.to_cuda = self.device.type == "cuda"
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
         self.in_channels = in_channels
@@ -20,8 +30,8 @@ class MinEuclideanDistBlock(nn.Module):
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True,
                                dtype=torch.float)
         if self.to_cuda:
-            shapelets = shapelets.cuda()
-        self.shapelets = nn.Parameter(shapelets).contiguous()
+            shapelets = shapelets.to(self.device)
+        self.shapelets = nn.Parameter(shapelets.contiguous())
         # otherwise gradients will not be backpropagated
         self.shapelets.retain_grad()
 
@@ -70,9 +80,10 @@ class MinEuclideanDistBlock(nn.Module):
 # 每个block 负责一个 scale的40个shapelets
 class MaxCosineSimilarityBlock(nn.Module):
 
-    def __init__(self, shapelets_size, num_shapelets, in_channels=1, to_cuda=True):
+    def __init__(self, shapelets_size, num_shapelets, in_channels=1, to_cuda=True, device=None):
         super(MaxCosineSimilarityBlock, self).__init__()
-        self.to_cuda = to_cuda
+        self.device = _resolve_device(to_cuda, device)
+        self.to_cuda = self.device.type == "cuda"
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
         self.in_channels = in_channels
@@ -84,8 +95,8 @@ class MaxCosineSimilarityBlock(nn.Module):
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True,
                                 dtype=torch.float)
         if self.to_cuda:
-            shapelets = shapelets.cuda()
-        self.shapelets = nn.Parameter(shapelets).contiguous()
+            shapelets = shapelets.to(self.device)
+        self.shapelets = nn.Parameter(shapelets.contiguous())
         # otherwise gradients will not be backpropagated
         self.shapelets.retain_grad()
 
@@ -156,14 +167,15 @@ class MaxCosineSimilarityBlock(nn.Module):
 
 class MaxCrossCorrelationBlock(nn.Module):
 
-    def __init__(self, shapelets_size, num_shapelets, in_channels=1, to_cuda=True):
+    def __init__(self, shapelets_size, num_shapelets, in_channels=1, to_cuda=True, device=None):
         super(MaxCrossCorrelationBlock, self).__init__()
+        self.device = _resolve_device(to_cuda, device)
         self.shapelets = nn.Conv1d(in_channels, num_shapelets, kernel_size=shapelets_size)
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
-        self.to_cuda = to_cuda
+        self.to_cuda = self.device.type == "cuda"
         if self.to_cuda:
-            self.cuda()
+            self.to(self.device)
 
 
 
@@ -171,7 +183,7 @@ class MaxCrossCorrelationBlock(nn.Module):
 
         x = self.shapelets(x)
         if masking:
-            mask = generate_binomial_mask(x.shape)
+            mask = generate_binomial_mask(x.shape, device=x.device)
             x *= mask
         x, _ = torch.max(x, 2, keepdim=True)
         return x.transpose(2, 1)
@@ -182,10 +194,11 @@ class MaxCrossCorrelationBlock(nn.Module):
 
 class ShapeletsDistBlocks(nn.Module):
 
-    def __init__(self, shapelets_size_and_len, in_channels=1, dist_measure='euclidean', to_cuda=True, checkpoint=False,shapelet_weight=None):
+    def __init__(self, shapelets_size_and_len, in_channels=1, dist_measure='euclidean', to_cuda=True, checkpoint=False,shapelet_weight=None, device=None):
         super(ShapeletsDistBlocks, self).__init__()
         self.checkpoint = checkpoint
-        self.to_cuda = to_cuda
+        self.device = _resolve_device(to_cuda, device)
+        self.to_cuda = self.device.type == "cuda"
         self.shapelets_size_and_len = OrderedDict(sorted(shapelets_size_and_len.items(), key=lambda x: x[0]))
         self.in_channels = in_channels
         self.dist_measure = dist_measure
@@ -193,47 +206,43 @@ class ShapeletsDistBlocks(nn.Module):
         if dist_measure == 'euclidean':
             self.blocks = nn.ModuleList(
                 [MinEuclideanDistBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets,
-                                       in_channels=in_channels, to_cuda=self.to_cuda)
+                                       in_channels=in_channels, to_cuda=self.to_cuda, device=self.device)
                  for shapelets_size, num_shapelets in self.shapelets_size_and_len.items()])
         elif dist_measure == 'cross-correlation':
             self.blocks = nn.ModuleList(
                 [MaxCrossCorrelationBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets,
-                                          in_channels=in_channels, to_cuda=self.to_cuda)
+                                          in_channels=in_channels, to_cuda=self.to_cuda, device=self.device)
                  for shapelets_size, num_shapelets in self.shapelets_size_and_len.items()])
         elif dist_measure == 'cosine':
             self.blocks = nn.ModuleList(
                 [MaxCosineSimilarityBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets,
-                                          in_channels=in_channels, to_cuda=self.to_cuda)
+                                          in_channels=in_channels, to_cuda=self.to_cuda, device=self.device)
                  for shapelets_size, num_shapelets in self.shapelets_size_and_len.items()])
         elif dist_measure == 'mix':
             module_list = []
             for shapelets_size, num_shapelets in self.shapelets_size_and_len.items():
                 module_list.append(MinEuclideanDistBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets//3,
-                                                         in_channels=in_channels, to_cuda=self.to_cuda))
+                                                         in_channels=in_channels, to_cuda=self.to_cuda, device=self.device))
                 module_list.append(MaxCosineSimilarityBlock(shapelets_size=shapelets_size, num_shapelets=num_shapelets//3,
-                                                         in_channels=in_channels, to_cuda=self.to_cuda))
+                                                         in_channels=in_channels, to_cuda=self.to_cuda, device=self.device))
                 module_list.append(MaxCrossCorrelationBlock(shapelets_size=shapelets_size,
                                                             num_shapelets=num_shapelets - 2 * num_shapelets//3,
-                                                            in_channels=in_channels, to_cuda=self.to_cuda))
+                                                            in_channels=in_channels, to_cuda=self.to_cuda, device=self.device))
             self.blocks = nn.ModuleList(module_list)
 
         else:
             raise ValueError("dist_measure must be either of 'euclidean', 'cross-correlation', 'cosine'")
 
     def forward(self, x, masking=False):
-
-
-        out = torch.tensor([], dtype=torch.float).cuda() if self.to_cuda else torch.tensor([], dtype=torch.float)
+        parts = []
         for block in self.blocks:
             if self.checkpoint and self.dist_measure != 'cross-correlation':
-                out = torch.cat((out, checkpoint(block, x, masking)), dim=2)
+                parts.append(checkpoint(block, x, masking))
 
             else:
-                out = torch.cat((out, block(x, masking)), dim=2)
+                parts.append(block(x, masking))
 
-
-
-        return out #[8,1,320]
+        return torch.cat(parts, dim=2) #[8,1,320]
 
     def forward_scale(self, x, scale_idx, masking=False):
         """仅前向一个尺度对应的 block，避免 one-hot 变体把其它尺度也白算一遍。"""
@@ -260,16 +269,18 @@ class ShapeletsDistBlocks(nn.Module):
 class LearningShapeletsModel(nn.Module):
 
     def __init__(self, shapelets_size_and_len, in_channels=1, num_classes=2, dist_measure='euclidean',
-                 to_cuda=True, checkpoint=False,shapelet_weight=None):
+                 to_cuda=True, checkpoint=False,shapelet_weight=None, device=None):
         super(LearningShapeletsModel, self).__init__()
 
-        self.to_cuda = to_cuda
+        self.device = _resolve_device(to_cuda, device)
+        self.to_cuda = self.device.type == "cuda"
         self.checkpoint = checkpoint
         self.shapelets_size_and_len = shapelets_size_and_len
         self.num_shapelets = sum(shapelets_size_and_len.values())
         self.shapelets_blocks = ShapeletsDistBlocks(in_channels=in_channels,
                                                     shapelets_size_and_len=shapelets_size_and_len,
-                                                    dist_measure=dist_measure, to_cuda=to_cuda, checkpoint=checkpoint)
+                                                    dist_measure=dist_measure, to_cuda=self.to_cuda,
+                                                    checkpoint=checkpoint, device=self.device)
 
         self.linear = nn.Linear(self.num_shapelets, num_classes)
 
@@ -294,7 +305,7 @@ class LearningShapeletsModel(nn.Module):
                                         nn.Linear(self.num_shapelets, self.num_shapelets))
 
         if self.to_cuda:
-            self.cuda()
+            self.to(self.device)
 
     def _scale_feature_bounds(self, scale_idx):
         dims = list(self.shapelets_size_and_len.values())
@@ -383,26 +394,30 @@ class LearningShapeletsModel(nn.Module):
 class LearningShapeletsModelMixDistances(nn.Module):
 
     def __init__(self, shapelets_size_and_len, in_channels=1, num_classes=2, dist_measure='mix',
-                 to_cuda=True, checkpoint=False):
+                 to_cuda=True, checkpoint=False, device=None):
         super(LearningShapeletsModelMixDistances, self).__init__()
 
         self.checkpoint = checkpoint
-        self.to_cuda = to_cuda
+        self.device = _resolve_device(to_cuda, device)
+        self.to_cuda = self.device.type == "cuda"
         self.shapelets_size_and_len = shapelets_size_and_len
         self.num_shapelets = sum(shapelets_size_and_len.values())
 
         self.shapelets_euclidean = ShapeletsDistBlocks(in_channels=in_channels,
                                                     shapelets_size_and_len={item[0]: item[1] // 3 for item in shapelets_size_and_len.items()},
-                                                    dist_measure='euclidean', to_cuda=to_cuda, checkpoint=checkpoint)
+                                                    dist_measure='euclidean', to_cuda=self.to_cuda,
+                                                    checkpoint=checkpoint, device=self.device)
 
 
         self.shapelets_cosine = ShapeletsDistBlocks(in_channels=in_channels,
                                                     shapelets_size_and_len={item[0]: item[1] // 3 for item in shapelets_size_and_len.items()},
-                                                    dist_measure='cosine', to_cuda=to_cuda, checkpoint=checkpoint)
+                                                    dist_measure='cosine', to_cuda=self.to_cuda,
+                                                    checkpoint=checkpoint, device=self.device)
 
         self.shapelets_cross_correlation = ShapeletsDistBlocks(in_channels=in_channels,
                                                     shapelets_size_and_len={item[0]: item[1] - 2 * (item[1] // 3) for item in shapelets_size_and_len.items()},
-                                                    dist_measure='cross-correlation', to_cuda=to_cuda, checkpoint=checkpoint)
+                                                    dist_measure='cross-correlation', to_cuda=self.to_cuda,
+                                                    checkpoint=checkpoint, device=self.device)
 
 
         self.linear = nn.Linear(self.num_shapelets, num_classes)
@@ -424,7 +439,7 @@ class LearningShapeletsModelMixDistances(nn.Module):
                                               nn.Linear(256, 128))
 
         if self.to_cuda:
-            self.cuda()
+            self.to(self.device)
 
     def _scale_feature_bounds(self, scale_idx):
         dims = list(self.shapelets_size_and_len.values())
@@ -475,7 +490,7 @@ class LearningShapeletsModelMixDistances(nn.Module):
         n_samples = x.shape[0]
         num_lengths = len(self.shapelets_size_and_len)
 
-        out = torch.tensor([], dtype=torch.float).cuda() if self.to_cuda else torch.tensor([], dtype=torch.float)
+        outs = []
 
         x_out = self.shapelets_euclidean(x, masking)
         x_out = torch.squeeze(x_out, 1)
@@ -483,7 +498,7 @@ class LearningShapeletsModelMixDistances(nn.Module):
         x_out = self.ln1(x_out)
         x_out = x_out.reshape(n_samples, num_lengths, -1)
         #print(x_out.shape)
-        out = torch.cat((out, x_out), dim=2)
+        outs.append(x_out)
 
         x_out = self.shapelets_cosine(x, masking)
         x_out = torch.squeeze(x_out, 1)
@@ -491,7 +506,7 @@ class LearningShapeletsModelMixDistances(nn.Module):
         x_out = self.ln2(x_out)
         x_out = x_out.reshape(n_samples, num_lengths, -1)
         #print(x_out.shape)
-        out = torch.cat((out, x_out), dim=2)
+        outs.append(x_out)
 
         x_out = self.shapelets_cross_correlation(x, masking)
         x_out = torch.squeeze(x_out, 1)
@@ -499,9 +514,10 @@ class LearningShapeletsModelMixDistances(nn.Module):
         x_out = self.ln3(x_out)
         x_out = x_out.reshape(n_samples, num_lengths, -1)
         #print(x_out.shape)
-        out = torch.cat((out, x_out), dim=2)
+        outs.append(x_out)
 
 
+        out = torch.cat(outs, dim=2)
         out = out.reshape(n_samples, -1)
 
 
@@ -514,5 +530,4 @@ class LearningShapeletsModelMixDistances(nn.Module):
 
 
         return out
-
 

@@ -45,3 +45,29 @@ For anomaly detection, use the following command:
 `python CSL_AD.py [dataset_name] --window-size [window-size]`
 
 Use `-h` or `--help` option for the detailed messages of the other options, such as the hyper-parameters and the random seed.
+
+## Federated Client Threads and GPUs
+
+`FedCSL_All.py` now runs local client training through client worker threads. By default it uses one server thread plus three client worker threads; if `federated.numClient` is larger than three, clients are assigned to the three workers in round-robin order.
+
+Example for an 8-GPU server:
+
+```bash
+python3 -u FedCSL_All.py -dataset AtrialFibrillation \
+  --config configFedCSL_OneHot_SplitTeacher.yml \
+  --server-gpu 0 \
+  --client-workers 3 \
+  --client-gpus 1-3
+```
+
+The same settings can be placed under `federated` in YAML:
+
+```yaml
+federated:
+  numClient: 30
+  client_workers: 3
+  server_gpu: 0
+  client_gpus: "1-3"
+```
+
+`client_gpus` accepts comma lists such as `"0,2,4"` or ranges such as `"0-7"`. Client workers are distributed evenly across that GPU list.

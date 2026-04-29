@@ -286,7 +286,7 @@ class LearningShapeletsCL:
                 x, pscore, num_shapelet_lengths, num_shapelet_per_length
             )
 
-        with torch.autograd.set_detect_anomaly(True):
+        with torch.autograd.set_detect_anomaly(False):
             gamma = config['model']['params'].get('gamma', 0.5)  # local, 默认值0.5
             zeta = 1 - gamma  # global
 

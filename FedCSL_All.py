@@ -103,6 +103,11 @@ def _is_splitteacher_algo(algo_name):
     return str(algo_name).lower() == "fedcsl-onehot-splitteacher"
 
 
+def _is_teacher_scale_set_algo(algo_name):
+    algo = str(algo_name).lower()
+    return algo in ("fedcsl-onehot-fullteacher", "fedcsl-onehot-splitteacher")
+
+
 def _parse_gpu_list(value):
     if value is None:
         return None
@@ -186,16 +191,131 @@ def _client_scale_score_batch(X_client, model, beta, batch_size=64, device=None)
     return int(np.argmax(pscore))
 
 
+def _normalize_scale_scores(pscore, num_shapelet_lengths):
+    pscore = np.asarray(pscore, dtype=np.float32).ravel()
+    if pscore.size < num_shapelet_lengths:
+        padded = np.zeros(num_shapelet_lengths, dtype=np.float32)
+        padded[:pscore.size] = pscore
+        pscore = padded
+    elif pscore.size > num_shapelet_lengths:
+        pscore = pscore[:num_shapelet_lengths]
+    return np.nan_to_num(pscore, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _client_scale_scores_batch(X_client, model, beta, batch_size=64, device=None):
+    """返回该 client 的整条尺度打分向量，供 server 做多尺度规划。"""
+    if isinstance(X_client, list):
+        if len(X_client) == 0:
+            return np.zeros(len(model.shapelets_size_and_len), dtype=np.float32)
+        X_arr = np.asarray(X_client[: batch_size], dtype=np.float32)
+    elif isinstance(X_client, np.ndarray):
+        if X_client.shape[0] == 0:
+            return np.zeros(len(model.shapelets_size_and_len), dtype=np.float32)
+        X_arr = X_client[: batch_size].astype(np.float32, copy=False)
+    else:
+        if len(X_client) == 0:
+            return np.zeros(len(model.shapelets_size_and_len), dtype=np.float32)
+        X_arr = np.asarray(X_client[: batch_size], dtype=np.float32)
+
+    x = torch.from_numpy(X_arr).float()
+    model_device = device if device is not None else next(model.parameters()).device
+    if next(model.parameters()).is_cuda:
+        x = x.to(model_device)
+
+    num_shapelet_lengths = len(model.shapelets_size_and_len)
+    num_shapelet_per_length = model.num_shapelets // num_shapelet_lengths
+    pscore = period_score(x, alpha=beta)
+    if pscore is None or len(pscore) == 0:
+        with torch.no_grad():
+            feat = model(x, optimize=None, masking=False)
+            feat = nn.functional.normalize(feat, dim=1)
+            pscore = np.zeros(num_shapelet_lengths, dtype=np.float32)
+            for i in range(num_shapelet_lengths):
+                sl = feat[:, i * num_shapelet_per_length: (i + 1) * num_shapelet_per_length]
+                pscore[i] = float(sl.pow(2).sum().item())
+    return _normalize_scale_scores(pscore, num_shapelet_lengths)
+
+
+def _pick_grouped_scales_from_scores(pscore):
+    """按前半/后半尺度各选一个高分尺度，近似对应中短/中长各保留一个。"""
+    num_shapelet_lengths = len(pscore)
+    if num_shapelet_lengths <= 0:
+        return []
+    if num_shapelet_lengths == 1:
+        return [0]
+
+    split = max(1, num_shapelet_lengths // 2)
+    groups = [list(range(0, split))]
+    if split < num_shapelet_lengths:
+        groups.append(list(range(split, num_shapelet_lengths)))
+
+    selected = []
+    for group in groups:
+        if not group:
+            continue
+        group_scores = pscore[group]
+        scale_idx = group[int(np.argmax(group_scores))]
+        if scale_idx not in selected:
+            selected.append(int(scale_idx))
+
+    if not selected:
+        selected.append(int(np.argmax(pscore)))
+    return selected
+
+
+def _plan_balanced_client_scales(X_fed, model, beta, device=None, batch_size=64, extra_scale_count=2):
+    """每个 client 保留 2 个本地主尺度，再由 server 额外分配 2 个均衡尺度。"""
+    num_clients = len(X_fed)
+    num_scales = len(model.shapelets_size_and_len)
+    if num_scales <= 0:
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64)
+
+    client_scores = []
+    client_selected = []
+    scale_counts = np.zeros(num_scales, dtype=np.int64)
+
+    for X_client in X_fed:
+        scores = _client_scale_scores_batch(
+            X_client, model, beta=beta, batch_size=batch_size, device=device
+        )
+        client_scores.append(scores)
+        selected = _pick_grouped_scales_from_scores(scores)
+        client_selected.append(list(selected))
+        for scale_idx in selected:
+            scale_counts[scale_idx] += 1
+
+    for _ in range(max(0, int(extra_scale_count))):
+        for cid in range(num_clients):
+            available = [scale_idx for scale_idx in range(num_scales) if scale_idx not in client_selected[cid]]
+            if not available:
+                continue
+            best_scale = min(
+                available,
+                key=lambda scale_idx: (
+                    int(scale_counts[scale_idx]),
+                    -float(client_scores[cid][scale_idx]),
+                    int(scale_idx),
+                ),
+            )
+            client_selected[cid].append(int(best_scale))
+            scale_counts[best_scale] += 1
+
+    return client_selected, scale_counts
+
+
 def _aggregate_scale_updates(server_state, client_scale_states, y_fed):
     """仅聚合每个尺度被上传的参数，其它参数保持 server 原值。"""
     out = {k: v.detach().cpu().clone() for k, v in server_state.items()}
     scale_to_clients = {}
     for cid, payload in enumerate(client_scale_states):
-        scale_idx = payload.get("scale_idx", None)
-        state = payload.get("state", None)
-        if scale_idx is None or not state:
+        if not payload:
             continue
-        scale_to_clients.setdefault(int(scale_idx), []).append((cid, state))
+        states = payload.get("states", None)
+        if not states:
+            continue
+        for scale_idx, state in states.items():
+            if state:
+                scale_to_clients.setdefault(int(scale_idx), []).append((cid, state))
 
     for _, client_items in scale_to_clients.items():
         total = sum(len(y_fed[cid]) for cid, _ in client_items)
@@ -229,6 +349,7 @@ def _train_client_worker(
     server_state_cpu,
     beta,
     shared_kwargs,
+    client_scale_plans,
 ):
     if device.type == "cuda":
         torch.cuda.set_device(device)
@@ -253,13 +374,17 @@ def _train_client_worker(
 
         c.Q = len(y_fed[idx]) / total_samples if total_samples > 0 else 0.0
         c.Global_Model = teacher.model if round_idx != 0 and teacher is not None else None
+        selected_scales = []
+        if client_scale_plans is not None and idx < len(client_scale_plans):
+            selected_scales = [int(scale_idx) for scale_idx in client_scale_plans[idx]]
+        c.Selected_Scales = selected_scales if selected_scales else None
 
         result = {
             "idx": idx,
             "loss": 0.0,
             "state": None,
-            "scale_idx": -1,
-            "scale_state": None,
+            "scale_indices": list(selected_scales),
+            "scale_states": None,
             "worker_id": worker_id,
             "device": str(device),
             "skipped": False,
@@ -270,21 +395,29 @@ def _train_client_worker(
             result["state"] = _state_dict_to_cpu(c.model.state_dict())
             result["skipped"] = True
             c.Global_Model = None
+            c.Selected_Scales = None
             results.append(result)
             continue
 
         if use_scale_split_comm:
-            scale_idx = _client_scale_score_batch(X_fed[idx], teacher.model if teacher is not None else c.model,
-                                                  beta=beta, device=device)
             scale_state = {}
-            for key, value in server_state_cpu.items():
+            selected_scale_indices = selected_scales or [
+                _client_scale_score_batch(
+                    X_fed[idx],
+                    teacher.model if teacher is not None else c.model,
+                    beta=beta,
+                    device=device,
+                )
+            ]
+            for scale_idx in selected_scale_indices:
                 prefixes = c.model._scale_state_prefixes(scale_idx)
-                if any(key.startswith(prefix) for prefix in prefixes):
-                    scale_state[key] = value
+                for key, value in server_state_cpu.items():
+                    if any(key.startswith(prefix) for prefix in prefixes):
+                        scale_state[key] = value
             local_state = c.model.state_dict()
             local_state.update(scale_state)
             _load_state_to_model(c.model, local_state)
-            result["scale_idx"] = int(scale_idx)
+            result["scale_indices"] = [int(scale_idx) for scale_idx in selected_scale_indices]
 
         losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size,
                          epoch_idx=-1, lr=lr)
@@ -298,9 +431,13 @@ def _train_client_worker(
 
         result["loss"] = loss_all
         result["state"] = _state_dict_to_cpu(c.model.state_dict())
-        if use_scale_split_comm and result["scale_idx"] >= 0:
-            result["scale_state"] = c.model.scale_state_dict(result["scale_idx"], clone=True, cpu=True)
+        if use_scale_split_comm and result["scale_indices"]:
+            result["scale_states"] = {
+                int(scale_idx): c.model.scale_state_dict(scale_idx, clone=True, cpu=True)
+                for scale_idx in result["scale_indices"]
+            }
         c.Global_Model = None
+        c.Selected_Scales = None
         results.append(result)
 
     return results
@@ -650,9 +787,21 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         avg_loss = 0.0
         client_losses = [0.0] * numClient  # 供 Oort 更新 reward
         client_scale_states = [None] * numClient
-        client_scale_indices = [-1] * numClient
+        client_scale_indices = [[] for _ in range(numClient)]
 
         server_state_cpu = _state_dict_to_cpu(server.model.state_dict())
+        client_scale_plans = None
+        round_scale_hist = None
+        if _is_teacher_scale_set_algo(algo):
+            client_scale_plans, round_scale_hist = _plan_balanced_client_scales(
+                X_fed,
+                server.model,
+                beta=beta,
+                device=server_device,
+                batch_size=batch_size,
+                extra_scale_count=2,
+            )
+            print(f"[round {round}] planned scale coverage: {round_scale_hist.tolist()}")
 
         # ----- 本地训练阶段：多个 client worker 并行训练，client 按 round-robin 均分到 worker -----
         with ThreadPoolExecutor(max_workers=client_workers) as executor:
@@ -678,6 +827,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     server_state_cpu,
                     beta,
                     shared_kwargs,
+                    client_scale_plans,
                 ))
             for future in as_completed(futures):
                 for result in future.result():
@@ -685,11 +835,12 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     client_losses[idx] = result["loss"]
                     avg_loss += result["loss"] * len(y_fed[idx]) / total_samples
                     w_locals[idx] = result["state"]
-                    if use_scale_split_comm and result["scale_idx"] >= 0:
-                        client_scale_indices[idx] = result["scale_idx"]
+                    if result.get("scale_indices"):
+                        client_scale_indices[idx] = list(result["scale_indices"])
+                    if use_scale_split_comm and result.get("scale_states"):
                         client_scale_states[idx] = {
-                            "scale_idx": int(result["scale_idx"]),
-                            "state": result["scale_state"],
+                            "scale_indices": list(result.get("scale_indices", [])),
+                            "states": result["scale_states"],
                         }
 
         # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----

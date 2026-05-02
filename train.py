@@ -120,6 +120,7 @@ class LearningShapeletsCL:
         self.C_accu_Server = None
         self.Q = None
         self.Global_Model = None
+        self.Selected_Scales = None
 
         self.shapelet_weight = shapelet_weight
         self.config = config
@@ -146,10 +147,27 @@ class LearningShapeletsCL:
     def _algo_name(self):
         return self.config.get('algo', 'fedcsl')
 
-    def _is_single_scale_algo(self):
+    def _uses_teacher_scale_set_algo(self):
         return self._algo_name() in ('fedcsl-onehot-fullteacher', 'fedcsl-onehot-splitteacher')
 
-    def _pick_onehot_scale(self, x, pscore, num_shapelet_lengths, num_shapelet_per_length):
+    @staticmethod
+    def _normalize_scale_indices(scale_indices, num_shapelet_lengths):
+        if scale_indices is None:
+            return []
+        if isinstance(scale_indices, (int, np.integer)):
+            scale_indices = [int(scale_indices)]
+
+        normalized = []
+        for scale_idx in scale_indices:
+            try:
+                scale_idx = int(scale_idx)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= scale_idx < num_shapelet_lengths and scale_idx not in normalized:
+                normalized.append(scale_idx)
+        return normalized
+
+    def _resolve_scale_scores(self, x, pscore, num_shapelet_lengths, num_shapelet_per_length):
         if pscore is None or (hasattr(pscore, "__len__") and len(pscore) == 0):
             with torch.no_grad():
                 _q_tmp = self.model(x, optimize=None, masking=False)
@@ -159,51 +177,114 @@ class LearningShapeletsCL:
                     _qi = _q_tmp[:, _li * num_shapelet_per_length: (_li + 1) * num_shapelet_per_length]
                     pscore[_li] = float(_qi.pow(2).sum().item())
         pscore = np.asarray(pscore, dtype=np.float32).ravel()
+        if pscore.size < num_shapelet_lengths:
+            padded = np.zeros(num_shapelet_lengths, dtype=np.float32)
+            padded[:pscore.size] = pscore
+            pscore = padded
+        elif pscore.size > num_shapelet_lengths:
+            pscore = pscore[:num_shapelet_lengths]
+        pscore = np.nan_to_num(pscore, nan=0.0, posinf=0.0, neginf=0.0)
+        return pscore
+
+    def _pick_onehot_scale(self, x, pscore, num_shapelet_lengths, num_shapelet_per_length):
+        pscore = self._resolve_scale_scores(x, pscore, num_shapelet_lengths, num_shapelet_per_length)
         onehot_scale_idx = int(np.argmax(pscore))
         onehot_vec = np.zeros_like(pscore)
         if 0 <= onehot_scale_idx < len(onehot_vec):
             onehot_vec[onehot_scale_idx] = 1.0
         return onehot_scale_idx, onehot_vec
 
-    def _compute_single_scale_losses(self, x_q, x_k, scale_idx, gamma, zeta, algo_name):
-        device = x_q.device
-        q = self.model.encode_scale(x_q, scale_idx, masking=False)
-        k = self.model.encode_scale(x_k, scale_idx, masking=False)
-        q = nn.functional.normalize(q, dim=1)
-        k = nn.functional.normalize(k, dim=1)
+    def _pick_grouped_scales(self, x, pscore, num_shapelet_lengths, num_shapelet_per_length):
+        pscore = self._resolve_scale_scores(x, pscore, num_shapelet_lengths, num_shapelet_per_length)
+        if num_shapelet_lengths <= 1:
+            return [0], pscore
 
-        loss = local_infonce_loss(q, k, self.loss_func, self.T) * gamma
+        split = max(1, num_shapelet_lengths // 2)
+        groups = [list(range(0, split))]
+        if split < num_shapelet_lengths:
+            groups.append(list(range(split, num_shapelet_lengths)))
+
+        selected = []
+        for group in groups:
+            if not group:
+                continue
+            group_scores = pscore[group]
+            best_idx = group[int(np.argmax(group_scores))]
+            if best_idx not in selected:
+                selected.append(int(best_idx))
+
+        if not selected:
+            selected.append(int(np.argmax(pscore)))
+        return selected, pscore
+
+    def _resolve_teacher_scale_indices(self, x, pscore, num_shapelet_lengths, num_shapelet_per_length):
+        selected = self._normalize_scale_indices(self.Selected_Scales, num_shapelet_lengths)
+        if selected:
+            return selected
+        selected, _ = self._pick_grouped_scales(
+            x, pscore, num_shapelet_lengths, num_shapelet_per_length
+        )
+        return selected
+
+    def _compute_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
+        device = x_q.device
+        selected_scales = self._normalize_scale_indices(
+            scale_indices, len(self.shapelets_size_and_len)
+        )
+        if not selected_scales:
+            selected_scales = [0]
+
+        loss = torch.tensor(0.0, device=device)
         loss_local_jointCLKD = torch.tensor(0.0, device=device)
         loss_global_CLKD_mutiscale = torch.tensor(0.0, device=device)
-        loss_local_CLKD_mutiscale = local_infonce_loss(q, k, self.loss_func, self.T) * 5.0
+        loss_local_CLKD_mutiscale = torch.tensor(0.0, device=device)
 
-        if self.Global_Model is not None:
-            if algo_name == 'fedcsl-onehot-fullteacher':
-                q_g_full = self.Global_Model(x_q, optimize=None, masking=False)
-                k_g_full = self.Global_Model(x_k, optimize=None, masking=False)
-                q_g = self.Global_Model.slice_scale_features(q_g_full, scale_idx)
-                k_g = self.Global_Model.slice_scale_features(k_g_full, scale_idx)
-                q_g = nn.functional.layer_norm(q_g, (q_g.shape[1],))
-                k_g = nn.functional.layer_norm(k_g, (k_g.shape[1],))
-            else:
-                q_g = self.Global_Model.encode_scale(x_q, scale_idx, masking=False)
-                k_g = self.Global_Model.encode_scale(x_k, scale_idx, masking=False)
+        q_g_full = None
+        k_g_full = None
+        if self.Global_Model is not None and algo_name == 'fedcsl-onehot-fullteacher':
+            q_g_full = self.Global_Model(x_q, optimize=None, masking=False)
+            k_g_full = self.Global_Model(x_k, optimize=None, masking=False)
 
-            q_g = nn.functional.normalize(q_g, dim=1)
-            k_g = nn.functional.normalize(k_g, dim=1)
+        for scale_idx in selected_scales:
+            q = self.model.encode_scale(x_q, scale_idx, masking=False)
+            k = self.model.encode_scale(x_k, scale_idx, masking=False)
+            q = nn.functional.normalize(q, dim=1)
+            k = nn.functional.normalize(k, dim=1)
 
-            if self.config["ablation"]["UseJointCL"]:
-                loss_local_jointCLKD += joint_contrastive_loss(q_g, k, self.loss_func, self.T)
-            if self.config["ablation"]["UseJointKD"]:
-                loss_local_jointCLKD += joint_distill_loss(q, q_g, k, k_g, zeta)
-            if self.config["ablation"]["UseScaleCL"]:
-                loss_global_CLKD_mutiscale += scale_contrastive_loss(
-                    q_g, k, self.loss_func, self.T, weight=5.0
-                )
-            if self.config["ablation"]["UseScaleKD"]:
-                loss_global_CLKD_mutiscale += scale_distill_loss(
-                    q_g, q, k_g, k, weight=5.0, zeta=zeta
-                )
+            loss += local_infonce_loss(q, k, self.loss_func, self.T) * gamma
+            loss_local_CLKD_mutiscale += local_infonce_loss(q, k, self.loss_func, self.T) * 5.0
+
+            if self.Global_Model is not None:
+                if algo_name == 'fedcsl-onehot-fullteacher':
+                    q_g = self.Global_Model.slice_scale_features(q_g_full, scale_idx)
+                    k_g = self.Global_Model.slice_scale_features(k_g_full, scale_idx)
+                    q_g = nn.functional.layer_norm(q_g, (q_g.shape[1],))
+                    k_g = nn.functional.layer_norm(k_g, (k_g.shape[1],))
+                else:
+                    q_g = self.Global_Model.encode_scale(x_q, scale_idx, masking=False)
+                    k_g = self.Global_Model.encode_scale(x_k, scale_idx, masking=False)
+
+                q_g = nn.functional.normalize(q_g, dim=1)
+                k_g = nn.functional.normalize(k_g, dim=1)
+
+                if self.config["ablation"]["UseJointCL"]:
+                    loss_local_jointCLKD += joint_contrastive_loss(q_g, k, self.loss_func, self.T)
+                if self.config["ablation"]["UseJointKD"]:
+                    loss_local_jointCLKD += joint_distill_loss(q, q_g, k, k_g, zeta)
+                if self.config["ablation"]["UseScaleCL"]:
+                    loss_global_CLKD_mutiscale += scale_contrastive_loss(
+                        q_g, k, self.loss_func, self.T, weight=5.0
+                    )
+                if self.config["ablation"]["UseScaleKD"]:
+                    loss_global_CLKD_mutiscale += scale_distill_loss(
+                        q_g, q, k_g, k, weight=5.0, zeta=zeta
+                    )
+
+        num_selected = float(len(selected_scales))
+        loss = loss / num_selected
+        loss_local_jointCLKD = loss_local_jointCLKD / num_selected
+        loss_global_CLKD_mutiscale = loss_global_CLKD_mutiscale / num_selected
+        loss_local_CLKD_mutiscale = loss_local_CLKD_mutiscale / num_selected
 
         loss += loss_global_CLKD_mutiscale * zeta * 0.1
         loss += loss_local_jointCLKD * gamma * 0.5
@@ -280,9 +361,14 @@ class LearningShapeletsCL:
         # 由于后续 loss_local/global_CLKD_mutiscale 以 precisions[length_i] 为权重，
         # 权重为 0 即等价于该尺度不参与对比/蒸馏。所有数据流保持一致，梯度路径不变。
         onehot_scale_idx = None
+        selected_scale_indices = None
         algo_name = self._algo_name()
-        if algo_name == 'fedcsl-onehot' or self._is_single_scale_algo():
+        if algo_name == 'fedcsl-onehot':
             onehot_scale_idx, pscore = self._pick_onehot_scale(
+                x, pscore, num_shapelet_lengths, num_shapelet_per_length
+            )
+        elif self._uses_teacher_scale_set_algo():
+            selected_scale_indices = self._resolve_teacher_scale_indices(
                 x, pscore, num_shapelet_lengths, num_shapelet_per_length
             )
 
@@ -290,14 +376,15 @@ class LearningShapeletsCL:
             gamma = config['model']['params'].get('gamma', 0.5)  # local, 默认值0.5
             zeta = 1 - gamma  # global
 
-            if self._is_single_scale_algo():
-                loss, loss_cca, loss_sdl = self._compute_single_scale_losses(
-                    x_q, x_k, onehot_scale_idx, gamma, zeta, algo_name
+            if self._uses_teacher_scale_set_algo():
+                loss, loss_cca, loss_sdl = self._compute_selected_scale_losses(
+                    x_q, x_k, selected_scale_indices, gamma, zeta, algo_name
                 )
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                return [loss.item(), 0, loss_cca.item(), loss_sdl.item(), int(onehot_scale_idx)], C_accu_q, c_normalising_factor_q, C_accu_k, c_normalising_factor_k
+                primary_scale = int(selected_scale_indices[0]) if selected_scale_indices else -1
+                return [loss.item(), 0, loss_cca.item(), loss_sdl.item(), primary_scale], C_accu_q, c_normalising_factor_q, C_accu_k, c_normalising_factor_k
 
             # q,k  =(8x320)
             q = self.model(x_q, optimize=None, masking=False)
@@ -721,7 +808,6 @@ class LearningShapeletsCL:
         preds = torch.cat(preds, 0)
 
         return preds.detach().numpy()
-
 
 
 

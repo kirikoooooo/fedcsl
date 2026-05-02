@@ -22,7 +22,7 @@
 #   HAR_TIMEOUT          单次 wait 的最大等待秒数，0=无限（默认 0）
 #   HAR_SEED             随机种子，默认 42
 #   HAR_EXTRA_ARGS       追加到 FedCSL_All.py 命令末尾的自由参数（按空白切分）
-#   PY_BIN               训练用 Python 可执行文件，默认 python
+#   PY_BIN               训练用 Python 可执行文件，默认 python3
 #   SCHED_PY_BIN         调度器用 Python，默认 python3
 # -----------------------------------------------------------------------------
 
@@ -32,7 +32,7 @@ _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${_HERE}/../.." && pwd)"
 LOG_ROOT="${PROJECT_ROOT}/result/har_baselines"
 DATASET="HAR"
-PY_BIN="${PY_BIN:-python}"               # 用于训练（FedCSL_All.py）
+PY_BIN="${PY_BIN:-python3}"              # 用于训练（FedCSL_All.py）
 SCHED_PY_BIN="${SCHED_PY_BIN:-python3}"   # 用于调度器（gpu_sched.py）
 SEED="${HAR_SEED:-42}"
 

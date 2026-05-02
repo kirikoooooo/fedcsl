@@ -134,6 +134,7 @@
       <button data-tab="configs">配置</button>
       <button data-tab="runs">运行</button>
       <button data-tab="logs">日志浏览</button>
+      <button data-tab="weights">权重</button>
     </nav>
   </header>
 
@@ -204,6 +205,7 @@
             <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
               <span class="muted" id="log-title">选中任务查看日志</span>
               <span class="spacer" style="flex:1"></span>
+              <button class="btn ghost" id="resume-btn" onclick="resumeSelected()" disabled>继续训练</button>
               <button class="btn danger" id="stop-btn" onclick="stopSelected()" disabled>终止</button>
             </div>
             <div class="log-pane empty" id="log-pane">—</div>
@@ -216,9 +218,9 @@
     <!-- Logs Tab -->
     <section id="tab-logs" class="tab" style="display:none">
       <div class="panel">
-        <h2>训练日志浏览
+        <h2>过程日志浏览
           <span class="muted" style="text-transform:none; font-size:11px; margin-left:8px;">
-            扫描 result/ 与 dashboard/logs/ 下的 .log/.txt/.out；点击文件 tail 末尾 800 行
+            扫描 dashboard/logs/ 下每个训练脚本的过程日志；点击文件 tail 末尾内容
           </span>
           <button class="btn ghost" style="float:right" onclick="refreshLogs()">刷新</button>
           <label style="float:right; margin-right: 10px; font-size:12px; color:var(--muted); cursor:pointer;">
@@ -246,6 +248,30 @@
               </label>
             </div>
             <div class="log-pane empty" id="log-file-pane">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-weights" class="tab" style="display:none">
+      <div class="panel">
+        <h2>权重管理
+          <span class="muted" style="text-transform:none; font-size:11px; margin-left:8px;">
+            扫描 checkpoint/ 下的模型权重与 resume checkpoint，可手动删除
+          </span>
+          <button class="btn ghost" style="float:right" onclick="refreshWeights()">刷新</button>
+        </h2>
+        <div class="runs-layout">
+          <div>
+            <div id="weights-list"><div class="muted">加载中…</div></div>
+          </div>
+          <div>
+            <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+              <span class="muted" id="weight-title">选中权重查看信息</span>
+              <span style="flex:1"></span>
+              <button class="btn danger" id="delete-weight-btn" onclick="deleteSelectedWeight()" disabled>删除权重</button>
+            </div>
+            <div class="log-pane empty" id="weight-pane">—</div>
           </div>
         </div>
       </div>
@@ -315,6 +341,7 @@ document.querySelectorAll('nav button').forEach(btn => {
     if (tab === 'configs') refreshConfigs();
     if (tab === 'runs') refreshRuns();
     if (tab === 'logs') refreshLogs();
+    if (tab === 'weights') refreshWeights();
   };
 });
 
@@ -491,11 +518,12 @@ async function refreshRuns() {
     el.innerHTML = runsCache.map(r => {
       const dur = r.ended_at ? r.ended_at - r.started_at : (Date.now()/1000) - r.started_at;
       const envStr = Object.entries(r.env || {}).map(([k,v]) => `${k}=${v}`).join(' ');
+      const resumeTag = r.resume_available ? ' · 可续训' : '';
       return `<div class="run-row ${r.id===selectedRun?'active':''}" onclick="selectRun('${r.id}')">
         <span class="status ${r.status}">${r.status}</span>
         <div class="meta">
           <span class="script">${r.script}</span>
-          <span class="time">id=${r.id} · pid=${r.pid} · ${fmtTime(r.started_at)} · ${fmtDuration(dur)}${envStr?' · <span class="tag">'+escapeHtml(envStr)+'</span>':''}</span>
+          <span class="time">id=${r.id} · pid=${r.pid} · ${fmtTime(r.started_at)} · ${fmtDuration(dur)}${resumeTag}${envStr?' · <span class="tag">'+escapeHtml(envStr)+'</span>':''}</span>
         </div>
       </div>`;
     }).join('');
@@ -507,6 +535,7 @@ async function selectRun(id) {
   const r = runsCache.find(x => x.id === id);
   document.getElementById('log-title').textContent = r ? `${r.script} (${id})` : id;
   document.getElementById('stop-btn').disabled = !r || r.status !== 'running';
+  document.getElementById('resume-btn').disabled = !r || !r.resume_available;
   document.querySelectorAll('.run-row').forEach(el => el.classList.toggle('active', el.textContent.includes(id)));
   refreshSelectedLog();
 }
@@ -534,6 +563,21 @@ async function stopSelected() {
   } catch (e) { toast('终止失败: ' + e.message, 'err'); }
 }
 
+async function resumeSelected() {
+  if (!selectedRun) return;
+  const r = runsCache.find(x => x.id === selectedRun);
+  if (!r || !r.resume_available) return;
+  if (!confirm(`继续训练当前任务 ${selectedRun} ？`)) return;
+  try {
+    const run = await api('/runs/' + selectedRun + '/resume', { method: 'POST' });
+    toast(`已继续训练 ${run.id} (pid ${run.pid})`);
+    selectedRun = run.id;
+    switchTab('runs');
+    refreshRuns();
+    selectRun(run.id);
+  } catch (e) { toast('继续训练失败: ' + e.message, 'err'); }
+}
+
 // ---------------- 日志浏览 ----------------
 let logsCache = [];
 let selectedLogPath = null;
@@ -550,26 +594,17 @@ function renderLogsList() {
   const el = document.getElementById('logs-list');
   const list = kw ? logsCache.filter(x => x.path.toLowerCase().includes(kw)) : logsCache;
   if (!list.length) { el.innerHTML = '<div class="muted" style="padding:12px">无匹配文件</div>'; return; }
-  const groups = {};
-  list.forEach(f => { (groups[f.group] = groups[f.group] || []).push(f); });
-  const order = Object.keys(groups).sort();
-  el.innerHTML = order.map(g => {
-    const items = groups[g].slice(0, 200).map(f => {
+  el.innerHTML = list.slice(0, 200).map(f => {
       const kb = (f.size / 1024).toFixed(1);
       const date = new Date(f.mtime * 1000).toLocaleString('zh-CN', { hour12: false });
       const active = f.path === selectedLogPath;
       return `<div class="run-row ${active?'active':''}" style="cursor:pointer" onclick="selectLogFile(${JSON.stringify(f.path)})">
         <div class="meta" style="flex:1; min-width:0">
           <span class="script" style="font-size:11.5px">${escapeHtml(f.path)}</span>
-          <span class="time">${kb} KB · ${date}</span>
+          <span class="time">${kb} KB · ${date}${f.script ? ' · ' + escapeHtml(f.script) : ''}${f.resume_available ? ' · 可续训' : ''}</span>
         </div>
       </div>`;
     }).join('');
-    return `<div style="margin-bottom:10px">
-      <div class="muted" style="font-size:11px; padding:4px 6px; letter-spacing:0.5px">${escapeHtml(g)} (${groups[g].length})</div>
-      ${items}
-    </div>`;
-  }).join('');
 }
 
 async function selectLogFile(path) {
@@ -592,6 +627,68 @@ async function refreshSelectedLogFile() {
     pane.textContent = text; pane.classList.remove('empty');
     if (wasAtBottom) pane.scrollTop = pane.scrollHeight;
   } catch (e) { /* ignore */ }
+}
+
+// ---------------- 权重管理 ----------------
+let weightsCache = [];
+let selectedWeightPath = null;
+
+async function refreshWeights() {
+  try {
+    weightsCache = await api('/weights');
+    const el = document.getElementById('weights-list');
+    if (!weightsCache.length) { el.innerHTML = '<div class="muted" style="padding:12px">暂无权重</div>'; return; }
+    el.innerHTML = weightsCache.map(w => {
+      const kb = (w.size / 1024).toFixed(1);
+      const date = new Date(w.mtime * 1000).toLocaleString('zh-CN', { hour12: false });
+      const active = w.path === selectedWeightPath;
+      return `<div class="run-row ${active?'active':''}" style="cursor:pointer" onclick="selectWeight(${JSON.stringify(w.path)})">
+        <span class="status ${w.kind === 'resume' ? 'running' : 'exited'}">${w.kind}</span>
+        <div class="meta">
+          <span class="script">${escapeHtml(w.path)}</span>
+          <span class="time">${kb} KB · ${date}</span>
+        </div>
+      </div>`;
+    }).join('');
+    if (selectedWeightPath) showSelectedWeight();
+  } catch (e) { toast('加载权重失败: ' + e.message, 'err'); }
+}
+
+function selectWeight(path) {
+  selectedWeightPath = path;
+  document.getElementById('weight-title').textContent = path;
+  document.getElementById('delete-weight-btn').disabled = !selectedWeightPath;
+  document.querySelectorAll('#weights-list .run-row').forEach(el => {
+    el.classList.toggle('active', el.textContent.includes(path));
+  });
+  showSelectedWeight();
+}
+
+function showSelectedWeight() {
+  const w = weightsCache.find(x => x.path === selectedWeightPath);
+  const pane = document.getElementById('weight-pane');
+  if (!w) {
+    pane.textContent = '—';
+    pane.classList.add('empty');
+    return;
+  }
+  pane.classList.remove('empty');
+  pane.textContent = JSON.stringify(w, null, 2);
+}
+
+async function deleteSelectedWeight() {
+  if (!selectedWeightPath) return;
+  if (!confirm(`确定删除权重 ${selectedWeightPath} ？`)) return;
+  try {
+    await api('/weights?path=' + encodeURIComponent(selectedWeightPath), { method: 'DELETE' });
+    toast('已删除权重');
+    selectedWeightPath = null;
+    document.getElementById('weight-title').textContent = '选中权重查看信息';
+    document.getElementById('weight-pane').textContent = '—';
+    document.getElementById('weight-pane').classList.add('empty');
+    document.getElementById('delete-weight-btn').disabled = true;
+    refreshWeights();
+  } catch (e) { toast('删除失败: ' + e.message, 'err'); }
 }
 
 // ---------------- 自动刷新 ----------------

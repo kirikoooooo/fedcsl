@@ -178,6 +178,19 @@ def _try_load_baseline_checkpoint(
     import torch
 
     path = _ckpt_path(algo, dataset, formatted_date)
+    resume_ckpt_override = os.environ.get("RESUME_CKPT", "").strip()
+    if resume_ckpt_override:
+        override_path = resume_ckpt_override
+        if not os.path.isabs(override_path):
+            override_path = os.path.join(".", override_path)
+        if os.path.isfile(override_path):
+            path = override_path
+            print(f"[{algo.upper()}] using resume checkpoint override: {path}", flush=True)
+        else:
+            print(
+                f"[{algo.upper()}] resume checkpoint override not found: {resume_ckpt_override}",
+                flush=True,
+            )
     if not os.path.isfile(path):
         return None
     try:

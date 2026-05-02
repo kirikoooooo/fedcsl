@@ -11,6 +11,7 @@ PY_BIN="${PY_BIN:-python3}"
 DATASET="${DATASET:-HAR}"
 DIR_ALPHA="${DIR_ALPHA:-0.1}"
 SEED="${SEED:-42}"
+EXTRA_ARGS=("$@")
 
 if [[ -z "${CONFIG:-}" ]]; then
   echo "CONFIG 未设置" >&2
@@ -27,4 +28,5 @@ exec "${PY_BIN}" -u FedCSL_All.py \
   --config "${CONFIG}" \
   --dirichlet-alpha "${DIR_ALPHA}" \
   --seed "${SEED}" \
-  --description "${DESC}"
+  --description "${DESC}" \
+  "${EXTRA_ARGS[@]}"

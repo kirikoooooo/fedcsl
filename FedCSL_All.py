@@ -756,6 +756,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     ckpt_every = int(fed_cfg.get('checkpoint_every', 30) or 0)
     auto_resume = bool(fed_cfg.get('auto_resume', True))
     resume_path = _resume_ckpt_path(dataset, formatted_date)
+    resume_ckpt_override = os.environ.get("RESUME_CKPT", "").strip()
+    if resume_ckpt_override:
+        override_path = resume_ckpt_override
+        if not os.path.isabs(override_path):
+            override_path = os.path.join(".", override_path)
+        if os.path.isfile(override_path):
+            resume_path = override_path
+            print(f"[fedcsl] using resume checkpoint override: {resume_path}", flush=True)
+        else:
+            print(f"[fedcsl] resume checkpoint override not found: {resume_ckpt_override}", flush=True)
     start_round = 0
     if auto_resume:
         payload = _try_load_resume_ckpt(resume_path, server, clientList)

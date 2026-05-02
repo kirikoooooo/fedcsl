@@ -26,6 +26,6 @@ ALPHA=0.1
 echo "========================================"
 echo "HAR  dirichlet_alpha = ${ALPHA}  (all baselines)"
 echo "========================================"
-run_all_baselines_for_alpha "${ALPHA}"
+run_all_baselines_for_alpha "${ALPHA}" "$@"
 
 har_wait_all

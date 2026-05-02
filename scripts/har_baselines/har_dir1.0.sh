@@ -2,14 +2,14 @@
 # HAR × Dirichlet α = 1.0 × {fedavg, fedprox, scaffold, fedproto, fedcsl}
 #
 # 自动在空闲 GPU 上并行派发，核心调度逻辑见 _common.sh + gpu_sched.py。
-# 关键约束：2 号卡禁用；调度策略默认 "mem"（显存空闲比 ≥ HAR_MEM_FREE_RATIO=0.70 即可派发）。
+# 关键约束：2 号卡禁用；调度策略默认 "mem"（显存空闲比 ≥ HAR_MEM_FREE_RATIO=0.30，即显存已用不超过 70% 即可派发）。
 #
 # 用法:
 #   bash scripts/har_baselines/har_dir1.0.sh
 #
 # 常用环境变量（都可选）:
 #   HAR_STRATEGY=mem        调度策略: "mem"（显存阈值）或 "idle"（严格空闲），默认 mem
-#   HAR_MEM_FREE_RATIO=0.70 mem 模式下显存空闲比阈值（默认 0.70；即已用 ≤ 30%）
+#   HAR_MEM_FREE_RATIO=0.30 mem 模式下显存空闲比阈值（默认 0.30；即已用 ≤ 70%）
 #   HAR_GPU_EXCLUDE="2"     禁用的 GPU id（空格分隔），默认 "2"
 #   HAR_POLL_INTERVAL=20    轮询间隔（秒）
 #   HAR_WARMUP_SEC=15       任务启动后等待多少秒再挑下一张 GPU

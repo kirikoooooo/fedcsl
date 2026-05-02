@@ -31,7 +31,7 @@ set -euo pipefail
 _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${_HERE}/../.." && pwd)"
 LOG_ROOT="${PROJECT_ROOT}/result/har_baselines"
-DATASET="HAR"
+DATASET="${DATASET:-HAR}"
 PY_BIN="${PY_BIN:-python3}"              # 用于训练（FedCSL_All.py）
 SCHED_PY_BIN="${SCHED_PY_BIN:-python3}"   # 用于调度器（gpu_sched.py）
 SEED="${HAR_SEED:-42}"
@@ -96,6 +96,8 @@ run_baseline() {
   local algo="$1"
   local cfg="$2"
   local alpha="$3"
+  shift 3
+  local extra_args=("$@")
   local desc="har_${algo}_dir${alpha}"
   local log="${LOG_ROOT}/${desc}.log"
 
@@ -127,6 +129,9 @@ run_baseline() {
     # shellcheck disable=SC2206
     local _extra=(${HAR_EXTRA_ARGS})
     cmd+=("${_extra[@]}")
+  fi
+  if [[ "${#extra_args[@]}" -gt 0 ]]; then
+    cmd+=("${extra_args[@]}")
   fi
 
   echo "[$(date +%H:%M:%S)] ▶ ${desc}  on GPU ${gpu_id}  (config=${cfg}, alpha=${alpha})"
@@ -166,11 +171,13 @@ run_baseline() {
 # 给一个 dirichlet 值跑全部 baseline
 run_all_baselines_for_alpha() {
   local alpha="$1"
+  shift 1
+  local extra_args=("$@")
   local spec algo cfg
   for spec in "${BASELINES[@]}"; do
     algo="${spec%%:*}"
     cfg="${spec##*:}"
-    run_baseline "${algo}" "${cfg}" "${alpha}" || true
+    run_baseline "${algo}" "${cfg}" "${alpha}" "${extra_args[@]}" || true
   done
 }
 

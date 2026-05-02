@@ -8,6 +8,7 @@ import argparse
 import copy
 import os
 import random
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -106,6 +107,16 @@ def _is_splitteacher_algo(algo_name):
 def _is_teacher_scale_set_algo(algo_name):
     algo = str(algo_name).lower()
     return algo in ("fedcsl-onehot-fullteacher", "fedcsl-onehot-splitteacher")
+
+
+def _uses_fedcsl_scale_scores(algo_name):
+    algo = str(algo_name).lower()
+    return algo in (
+        "fedcsl",
+        "fedcsl-onehot",
+        "fedcsl-onehot-fullteacher",
+        "fedcsl-onehot-splitteacher",
+    )
 
 
 def _parse_gpu_list(value):
@@ -263,22 +274,29 @@ def _pick_grouped_scales_from_scores(pscore):
     return selected
 
 
-def _plan_balanced_client_scales(X_fed, model, beta, device=None, batch_size=64, extra_scale_count=2):
+def _precompute_client_scale_scores(X_fed, model, beta, device=None, batch_size=64):
+    """仅基于原始客户端数据做一次尺度评分，供后续各轮复用。"""
+    client_scores = []
+    for X_client in X_fed:
+        client_scores.append(
+            _client_scale_scores_batch(
+                X_client, model, beta=beta, batch_size=batch_size, device=device
+            )
+        )
+    return client_scores
+
+
+def _plan_balanced_client_scales_from_scores(client_scores, model, extra_scale_count=2):
     """每个 client 保留 2 个本地主尺度，再由 server 额外分配 2 个均衡尺度。"""
-    num_clients = len(X_fed)
+    num_clients = len(client_scores)
     num_scales = len(model.shapelets_size_and_len)
     if num_scales <= 0:
         return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64)
 
-    client_scores = []
     client_selected = []
     scale_counts = np.zeros(num_scales, dtype=np.int64)
 
-    for X_client in X_fed:
-        scores = _client_scale_scores_batch(
-            X_client, model, beta=beta, batch_size=batch_size, device=device
-        )
-        client_scores.append(scores)
+    for scores in client_scores:
         selected = _pick_grouped_scales_from_scores(scores)
         client_selected.append(list(selected))
         for scale_idx in selected:
@@ -350,6 +368,7 @@ def _train_client_worker(
     beta,
     shared_kwargs,
     client_scale_plans,
+    client_scale_scores,
 ):
     if device.type == "cuda":
         torch.cuda.set_device(device)
@@ -378,6 +397,10 @@ def _train_client_worker(
         if client_scale_plans is not None and idx < len(client_scale_plans):
             selected_scales = [int(scale_idx) for scale_idx in client_scale_plans[idx]]
         c.Selected_Scales = selected_scales if selected_scales else None
+        if client_scale_scores is not None and idx < len(client_scale_scores):
+            c.Cached_Scale_Scores = np.asarray(client_scale_scores[idx], dtype=np.float32).copy()
+        else:
+            c.Cached_Scale_Scores = None
 
         result = {
             "idx": idx,
@@ -396,6 +419,7 @@ def _train_client_worker(
             result["skipped"] = True
             c.Global_Model = None
             c.Selected_Scales = None
+            c.Cached_Scale_Scores = None
             results.append(result)
             continue
 
@@ -438,6 +462,7 @@ def _train_client_worker(
             }
         c.Global_Model = None
         c.Selected_Scales = None
+        c.Cached_Scale_Scores = None
         results.append(result)
 
     return results
@@ -731,6 +756,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     ckpt_every = int(fed_cfg.get('checkpoint_every', 30) or 0)
     auto_resume = bool(fed_cfg.get('auto_resume', True))
     resume_path = _resume_ckpt_path(dataset, formatted_date)
+    resume_ckpt_override = os.environ.get("RESUME_CKPT", "").strip()
+    if resume_ckpt_override:
+        override_path = resume_ckpt_override
+        if not os.path.isabs(override_path):
+            override_path = os.path.join(".", override_path)
+        if os.path.isfile(override_path):
+            resume_path = override_path
+            print(f"[fedcsl] using resume checkpoint override: {resume_path}", flush=True)
+        else:
+            print(f"[fedcsl] resume checkpoint override not found: {resume_ckpt_override}", flush=True)
     start_round = 0
     if auto_resume:
         payload = _try_load_resume_ckpt(resume_path, server, clientList)
@@ -783,27 +818,48 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     if not w_locals:
         w_locals = [_state_dict_to_cpu(c.model.state_dict()) for c in clientList]
 
+    cached_client_scale_scores = None
+    cached_client_scale_plans = None
+    cached_scale_hist = None
+    scale_score_prep_sec = 0.0
+    if _uses_fedcsl_scale_scores(algo):
+        scale_prep_t0 = time.perf_counter()
+        cached_client_scale_scores = _precompute_client_scale_scores(
+            X_fed,
+            server.model,
+            beta=beta,
+            device=server_device,
+            batch_size=batch_size,
+        )
+        if _is_teacher_scale_set_algo(algo):
+            cached_client_scale_plans, cached_scale_hist = _plan_balanced_client_scales_from_scores(
+                cached_client_scale_scores,
+                server.model,
+                extra_scale_count=2,
+            )
+        scale_score_prep_sec = time.perf_counter() - scale_prep_t0
+        prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
+        if cached_scale_hist is not None:
+            prep_msg += f"; planned scale coverage: {cached_scale_hist.tolist()}"
+        print(prep_msg, flush=True)
+        with open(logTxt, mode="a+", encoding="utf-8") as f:
+            f.write(prep_msg + "\n")
+
     for round in range(start_round, numRound):
+        round_t0 = time.perf_counter()
         avg_loss = 0.0
         client_losses = [0.0] * numClient  # 供 Oort 更新 reward
         client_scale_states = [None] * numClient
         client_scale_indices = [[] for _ in range(numClient)]
 
         server_state_cpu = _state_dict_to_cpu(server.model.state_dict())
-        client_scale_plans = None
-        round_scale_hist = None
-        if _is_teacher_scale_set_algo(algo):
-            client_scale_plans, round_scale_hist = _plan_balanced_client_scales(
-                X_fed,
-                server.model,
-                beta=beta,
-                device=server_device,
-                batch_size=batch_size,
-                extra_scale_count=2,
-            )
-            print(f"[round {round}] planned scale coverage: {round_scale_hist.tolist()}")
+        client_scale_plans = cached_client_scale_plans
+        round_scale_hist = cached_scale_hist
+        if round_scale_hist is not None:
+            print(f"[round {round}] reused planned scale coverage: {round_scale_hist.tolist()}", flush=True)
 
         # ----- 本地训练阶段：多个 client worker 并行训练，client 按 round-robin 均分到 worker -----
+        train_stage_t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=client_workers) as executor:
             futures = []
             for worker_id, indices in enumerate(client_groups):
@@ -828,6 +884,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     beta,
                     shared_kwargs,
                     client_scale_plans,
+                    cached_client_scale_scores,
                 ))
             for future in as_completed(futures):
                 for result in future.result():
@@ -842,8 +899,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                             "scale_indices": list(result.get("scale_indices", [])),
                             "states": result["scale_states"],
                         }
+        train_stage_sec = time.perf_counter() - train_stage_t0
 
         # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----
+        dist_stage_t0 = time.perf_counter()
         scores = []
         for idx, c in enumerate(clientList):
             if len(X_fed[idx]) == 0:
@@ -857,8 +916,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         scores = normalize_to_near_one(scores)
         if not use_distribution:
             scores = [1] * numClient
+        dist_stage_sec = time.perf_counter() - dist_stage_t0
 
         # ----- 客户端选择 + 聚合（策略见 algo/client_selection/）-----
+        agg_stage_t0 = time.perf_counter()
         if use_scale_split_comm:
             if use_client_selection and selector is not None:
                 select_mask = selector.on_round_start(round, client_losses=client_losses, y_fed=y_fed)
@@ -896,8 +957,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         else:
             w_global = fedavg(w_locals, y_fed, scores)
             _load_state_to_model(server.model, w_global)
+        agg_stage_sec = time.perf_counter() - agg_stage_t0
 
         # ----- 下游 SVC 评估 -----
+        eval_stage_t0 = time.perf_counter()
         transformation = server.transform(X_all, result_type='numpy', normalize=True, batch_size=batch_size)
         transformation_test = server.transform(X_test, result_type='numpy', normalize=True, batch_size=batch_size)
         scaler = RobustScaler()
@@ -915,6 +978,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             )
         else:
             train_acc, test_acc = eval(transformation, transformation_test, y_train=y_all, y_test=y_test)
+        eval_stage_sec = time.perf_counter() - eval_stage_t0
+        round_total_sec = time.perf_counter() - round_t0
 
         if test_acc > best_acc:
             best_acc = test_acc
@@ -923,12 +988,23 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             best_state_dict = _state_dict_to_cpu(server.model.state_dict())
 
         print(f"Classification: train={train_acc:.4f} test={test_acc:.4f} round={round}")
+        print(
+            f"[round {round}] timing train={train_stage_sec:.3f}s "
+            f"distribution={dist_stage_sec:.3f}s agg={agg_stage_sec:.3f}s "
+            f"eval={eval_stage_sec:.3f}s total={round_total_sec:.3f}s",
+            flush=True,
+        )
 
         avg_loss_str = str(avg_loss) if np.isfinite(avg_loss) else "nan"
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(
                 f"dataset: {dataset}round:{round} server aggregation "
                 f" testACC:{test_acc} trainACC:{train_acc} avg_loss:{avg_loss_str}\n"
+            )
+            f.write(
+                f"[round {round}] timing train={train_stage_sec:.3f}s "
+                f"distribution={dist_stage_sec:.3f}s agg={agg_stage_sec:.3f}s "
+                f"eval={eval_stage_sec:.3f}s total={round_total_sec:.3f}s\n"
             )
 
         # 断点续训：每 ckpt_every 轮覆盖保存一次

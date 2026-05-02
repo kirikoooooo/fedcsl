@@ -39,6 +39,7 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 LOGS_DIR = DASHBOARD_DIR / "logs"
 RUNS_FILE = DASHBOARD_DIR / "runs.json"
 STATIC_DIR = DASHBOARD_DIR / "static"
+CHECKPOINT_DIR = PROJECT_ROOT / "checkpoint"
 
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -283,16 +284,78 @@ def write_config(name: str, content: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 训练日志浏览：扫描 result/ 下 .log / .txt
+# 训练日志浏览：扫描 dashboard/logs/ 下的过程日志
 # ---------------------------------------------------------------------------
-RESULT_DIR = PROJECT_ROOT / "result"
-
 _LOG_SUFFIXES = {".log", ".txt", ".out"}
+_WEIGHT_SUFFIXES = {".pt", ".pth"}
+_ROUND_TIMING_RE = re.compile(
+    r"^\[round\s+(?P<round>\d+)\]\s+timing\s+"
+    r"train=(?P<train>[0-9.]+)s\s+"
+    r"distribution=(?P<distribution>[0-9.]+)s\s+"
+    r"agg=(?P<agg>[0-9.]+)s\s+"
+    r"eval=(?P<eval>[0-9.]+)s\s+"
+    r"total=(?P<total>[0-9.]+)s$"
+)
+_RESUME_CKPT_RE = re.compile(r"checkpoint saved → (?P<path>\S+\.pt)")
+
+
+def _project_rel_from_path_text(path_text: str) -> Optional[str]:
+    raw = (path_text or "").strip()
+    if not raw:
+        return None
+    target = Path(raw)
+    if not target.is_absolute():
+        target = (PROJECT_ROOT / target).resolve()
+    else:
+        target = target.resolve()
+    try:
+        return target.relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def _run_project_log_rel(run: Dict[str, Any]) -> Optional[str]:
+    rel = run.get("log")
+    if not rel:
+        return None
+    rel = str(rel).replace("\\", "/").lstrip("/")
+    if rel.startswith("dashboard/"):
+        return rel
+    return f"dashboard/{rel}"
+
+
+def _extract_resume_ckpt_from_text(text: str) -> Optional[str]:
+    last_rel = None
+    for match in _RESUME_CKPT_RE.finditer(text or ""):
+        rel = _project_rel_from_path_text(match.group("path"))
+        if rel:
+            last_rel = rel
+    return last_rel
+
+
+def _annotate_run_resume(run: Dict[str, Any]) -> Dict[str, Any]:
+    annotated = dict(run)
+    project_log_rel = _run_project_log_rel(annotated)
+    resume_rel = None
+    if project_log_rel:
+        try:
+            resume_rel = _extract_resume_ckpt_from_text(
+                tail_result_log(project_log_rel, tail=8000)
+            )
+        except HTTPException:
+            resume_rel = None
+    resume_abs = (PROJECT_ROOT / resume_rel) if resume_rel else None
+    annotated["resume_ckpt"] = resume_rel
+    annotated["resume_available"] = bool(
+        resume_abs is not None and resume_abs.exists() and resume_abs.is_file()
+    )
+    return annotated
 
 
 def list_result_logs() -> List[Dict[str, Any]]:
-    """递归扫描 ``result/`` 与 ``dashboard/logs/`` 下的日志文件，按 mtime 倒排。"""
-    roots = [RESULT_DIR, LOGS_DIR]
+    """扫描 ``dashboard/logs/`` 下的训练过程日志，按 mtime 倒排。"""
+    roots = [LOGS_DIR]
+    runs = {_run_project_log_rel(r): _annotate_run_resume(r) for r in _load_runs()}
     files: List[Dict[str, Any]] = []
     for root in roots:
         if not root.exists():
@@ -310,28 +373,29 @@ def list_result_logs() -> List[Dict[str, Any]]:
                 rel = p.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
             except ValueError:
                 rel = p.as_posix()
+            run = runs.get(rel)
             files.append({
                 "path": rel,
                 "size": int(st.st_size),
                 "mtime": float(st.st_mtime),
-                "group": rel.split("/")[1] if rel.startswith("result/") and "/" in rel[len("result/"):] else (
-                    "dashboard" if rel.startswith("dashboard/") else "misc"
-                ),
+                "group": "dashboard",
+                "run_id": run.get("id") if run else None,
+                "script": run.get("script") if run else None,
+                "status": run.get("status") if run else None,
+                "started_at": run.get("started_at") if run else None,
+                "resume_available": run.get("resume_available") if run else False,
             })
     files.sort(key=lambda x: x["mtime"], reverse=True)
     return files
 
 
 def tail_result_log(rel_path: str, tail: int = 800) -> str:
-    """按项目根相对路径读取 tail。安全校验限制在 ``result/`` 或 ``dashboard/logs/`` 下。"""
+    """按项目根相对路径读取过程日志 tail。安全校验限制在 ``dashboard/logs/`` 下。"""
     abs_path = _safe_under(PROJECT_ROOT, PROJECT_ROOT / rel_path)
     try:
-        abs_path.resolve().relative_to(RESULT_DIR.resolve())
+        abs_path.resolve().relative_to(LOGS_DIR.resolve())
     except ValueError:
-        try:
-            abs_path.resolve().relative_to(LOGS_DIR.resolve())
-        except ValueError:
-            raise HTTPException(400, "only result/ or dashboard/logs/ logs are allowed")
+        raise HTTPException(400, "only dashboard/logs/ logs are allowed")
     if abs_path.suffix.lower() not in _LOG_SUFFIXES:
         raise HTTPException(400, "not a log/txt file")
     if not abs_path.exists():
@@ -352,6 +416,79 @@ def tail_result_log(rel_path: str, tail: int = 800) -> str:
             data = f.read()
     text = data.decode("utf-8", errors="replace")
     return "\n".join(text.splitlines()[-tail:])
+
+
+def parse_round_timings_from_text(text: str) -> List[Dict[str, Any]]:
+    timings: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        m = _ROUND_TIMING_RE.match(line.strip())
+        if not m:
+            continue
+        timings.append(
+            {
+                "round": int(m.group("round")),
+                "train_sec": float(m.group("train")),
+                "distribution_sec": float(m.group("distribution")),
+                "agg_sec": float(m.group("agg")),
+                "eval_sec": float(m.group("eval")),
+                "total_sec": float(m.group("total")),
+            }
+        )
+    return timings
+
+
+def parse_result_log_timings(rel_path: str, tail: int = 5000) -> List[Dict[str, Any]]:
+    return parse_round_timings_from_text(tail_result_log(rel_path, tail=tail))
+
+
+def parse_run_log_timings(run_id: str, tail: int = 5000) -> List[Dict[str, Any]]:
+    return parse_round_timings_from_text(tail_log(run_id, tail=tail))
+
+
+def list_weights() -> List[Dict[str, Any]]:
+    if not CHECKPOINT_DIR.exists():
+        return []
+    files: List[Dict[str, Any]] = []
+    for p in CHECKPOINT_DIR.rglob("*"):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in _WEIGHT_SUFFIXES:
+            continue
+        try:
+            st = p.stat()
+            rel = p.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+        except (OSError, ValueError):
+            continue
+        kind = "resume" if rel.startswith("checkpoint/resume/") else "model"
+        group = "resume" if kind == "resume" else rel.split("/")[1] if "/" in rel else "checkpoint"
+        files.append(
+            {
+                "path": rel,
+                "size": int(st.st_size),
+                "mtime": float(st.st_mtime),
+                "kind": kind,
+                "group": group,
+            }
+        )
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return files
+
+
+def delete_weight(rel_path: str) -> Dict[str, Any]:
+    abs_path = _safe_under(PROJECT_ROOT, PROJECT_ROOT / rel_path)
+    try:
+        abs_path.resolve().relative_to(CHECKPOINT_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "only checkpoint weights can be deleted")
+    if abs_path.suffix.lower() not in _WEIGHT_SUFFIXES:
+        raise HTTPException(400, "not a weight file")
+    if not abs_path.exists():
+        raise HTTPException(404, "weight not found")
+    try:
+        abs_path.unlink()
+    except OSError as e:
+        raise HTTPException(500, f"delete failed: {e}")
+    return {"ok": True, "path": rel_path}
 
 
 # ---------------------------------------------------------------------------
@@ -409,10 +546,35 @@ def launch_script(req: LaunchRequest) -> Dict[str, Any]:
         "ended_at": None,
         "status": "running",
     }
+    run = _annotate_run_resume(run)
     runs = _load_runs()
     runs.insert(0, run)
     _save_runs(runs[:200])  # 最多保留 200 条历史
     return run
+
+
+def relaunch_run(run_id: str) -> Dict[str, Any]:
+    runs = _load_runs()
+    target = next((r for r in runs if r["id"] == run_id), None)
+    if target is None:
+        raise HTTPException(404, "run not found")
+    target = _annotate_run_resume(_refresh_run_status(target))
+    resume_ckpt = target.get("resume_ckpt")
+    if not resume_ckpt:
+        raise HTTPException(400, "no resume checkpoint found in run log")
+    resume_abs = _safe_under(PROJECT_ROOT, PROJECT_ROOT / resume_ckpt)
+    if not resume_abs.exists():
+        raise HTTPException(404, "resume checkpoint not found")
+
+    env = dict(target.get("env") or {})
+    env["RESUME_CKPT"] = resume_ckpt
+    return launch_script(
+        LaunchRequest(
+            script=str(target["script"]),
+            args=list(target.get("args") or []),
+            env=env,
+        )
+    )
 
 
 def stop_run(run_id: str) -> Dict[str, Any]:
@@ -533,9 +695,9 @@ def api_config_put(name: str, body: ConfigPut) -> Dict[str, Any]:
 def api_runs_list() -> List[Dict[str, Any]]:
     runs = _load_runs()
     for r in runs:
-        _refresh_run_status(r)
+        _annotate_run_resume(_refresh_run_status(r))
     _save_runs(runs)
-    return runs
+    return [_annotate_run_resume(r) for r in runs]
 
 
 @app.post("/api/runs")
@@ -548,9 +710,19 @@ def api_run_log(run_id: str, tail: int = 500) -> str:
     return tail_log(run_id, tail=tail)
 
 
+@app.get("/api/runs/{run_id}/timings")
+def api_run_timings(run_id: str, tail: int = 5000) -> List[Dict[str, Any]]:
+    return parse_run_log_timings(run_id, tail=tail)
+
+
 @app.post("/api/runs/{run_id}/stop")
 def api_run_stop(run_id: str) -> Dict[str, Any]:
     return stop_run(run_id)
+
+
+@app.post("/api/runs/{run_id}/resume")
+def api_run_resume(run_id: str) -> Dict[str, Any]:
+    return relaunch_run(run_id)
 
 
 # ---- 日志浏览 ---------------------------------------------------------------
@@ -562,6 +734,21 @@ def api_logs_list() -> List[Dict[str, Any]]:
 @app.get("/api/logs/tail", response_class=PlainTextResponse)
 def api_logs_tail(path: str, tail: int = 800) -> str:
     return tail_result_log(path, tail=tail)
+
+
+@app.get("/api/logs/timings")
+def api_logs_timings(path: str, tail: int = 5000) -> List[Dict[str, Any]]:
+    return parse_result_log_timings(path, tail=tail)
+
+
+@app.get("/api/weights")
+def api_weights_list() -> List[Dict[str, Any]]:
+    return list_weights()
+
+
+@app.delete("/api/weights")
+def api_weights_delete(path: str) -> Dict[str, Any]:
+    return delete_weight(path)
 
 
 # 静态前端

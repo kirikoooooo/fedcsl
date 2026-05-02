@@ -121,6 +121,7 @@ class LearningShapeletsCL:
         self.Q = None
         self.Global_Model = None
         self.Selected_Scales = None
+        self.Cached_Scale_Scores = None
 
         self.shapelet_weight = shapelet_weight
         self.config = config
@@ -225,6 +226,15 @@ class LearningShapeletsCL:
             x, pscore, num_shapelet_lengths, num_shapelet_per_length
         )
         return selected
+
+    def _get_cached_scale_scores(self, x, num_shapelet_lengths, num_shapelet_per_length):
+        if self.Cached_Scale_Scores is not None:
+            cached = np.asarray(self.Cached_Scale_Scores, dtype=np.float32).ravel()
+            if cached.size:
+                return self._resolve_scale_scores(
+                    x, cached, num_shapelet_lengths, num_shapelet_per_length
+                )
+        return None
 
     def _compute_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
         device = x_q.device
@@ -354,7 +364,11 @@ class LearningShapeletsCL:
         #-----------------checked
         pscore = None
         if config['ablation']['UseACF']:
-            pscore = period_score(x, alpha=self.beta)
+            pscore = self._get_cached_scale_scores(
+                x, num_shapelet_lengths, num_shapelet_per_length
+            )
+            if pscore is None:
+                pscore = period_score(x, alpha=self.beta)
 
         # --- fedcsl-onehot: 每个 client 在本 batch 只激活一个尺度 ------------
         # 做法：把 pscore 退化为 one-hot（保留 argmax），让其它尺度的权重为 0；
@@ -808,6 +822,5 @@ class LearningShapeletsCL:
         preds = torch.cat(preds, 0)
 
         return preds.detach().numpy()
-
 
 

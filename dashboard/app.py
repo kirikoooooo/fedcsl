@@ -288,6 +288,14 @@ def write_config(name: str, content: str) -> None:
 RESULT_DIR = PROJECT_ROOT / "result"
 
 _LOG_SUFFIXES = {".log", ".txt", ".out"}
+_ROUND_TIMING_RE = re.compile(
+    r"^\[round\s+(?P<round>\d+)\]\s+timing\s+"
+    r"train=(?P<train>[0-9.]+)s\s+"
+    r"distribution=(?P<distribution>[0-9.]+)s\s+"
+    r"agg=(?P<agg>[0-9.]+)s\s+"
+    r"eval=(?P<eval>[0-9.]+)s\s+"
+    r"total=(?P<total>[0-9.]+)s$"
+)
 
 
 def list_result_logs() -> List[Dict[str, Any]]:
@@ -352,6 +360,33 @@ def tail_result_log(rel_path: str, tail: int = 800) -> str:
             data = f.read()
     text = data.decode("utf-8", errors="replace")
     return "\n".join(text.splitlines()[-tail:])
+
+
+def parse_round_timings_from_text(text: str) -> List[Dict[str, Any]]:
+    timings: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        m = _ROUND_TIMING_RE.match(line.strip())
+        if not m:
+            continue
+        timings.append(
+            {
+                "round": int(m.group("round")),
+                "train_sec": float(m.group("train")),
+                "distribution_sec": float(m.group("distribution")),
+                "agg_sec": float(m.group("agg")),
+                "eval_sec": float(m.group("eval")),
+                "total_sec": float(m.group("total")),
+            }
+        )
+    return timings
+
+
+def parse_result_log_timings(rel_path: str, tail: int = 5000) -> List[Dict[str, Any]]:
+    return parse_round_timings_from_text(tail_result_log(rel_path, tail=tail))
+
+
+def parse_run_log_timings(run_id: str, tail: int = 5000) -> List[Dict[str, Any]]:
+    return parse_round_timings_from_text(tail_log(run_id, tail=tail))
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +583,11 @@ def api_run_log(run_id: str, tail: int = 500) -> str:
     return tail_log(run_id, tail=tail)
 
 
+@app.get("/api/runs/{run_id}/timings")
+def api_run_timings(run_id: str, tail: int = 5000) -> List[Dict[str, Any]]:
+    return parse_run_log_timings(run_id, tail=tail)
+
+
 @app.post("/api/runs/{run_id}/stop")
 def api_run_stop(run_id: str) -> Dict[str, Any]:
     return stop_run(run_id)
@@ -562,6 +602,11 @@ def api_logs_list() -> List[Dict[str, Any]]:
 @app.get("/api/logs/tail", response_class=PlainTextResponse)
 def api_logs_tail(path: str, tail: int = 800) -> str:
     return tail_result_log(path, tail=tail)
+
+
+@app.get("/api/logs/timings")
+def api_logs_timings(path: str, tail: int = 5000) -> List[Dict[str, Any]]:
+    return parse_result_log_timings(path, tail=tail)
 
 
 # 静态前端

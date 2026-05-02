@@ -13,20 +13,19 @@
   1. **idle** 模式：GPU 没有任何 compute 进程（``nvidia-smi --query-compute-apps``）
      —— 老版本 har_baseline 的严格模式。
   2. **memory** 模式：GPU 的 **显存空闲比** ≥ ``--mem-free-ratio`` 时即视为可用
-     —— 默认模式（阈值 0.7），允许**多个任务共享同一张卡**，
-     只要别人没把显存吃到 30% 以上就可以继续插入新任务。
+     —— 默认模式（阈值 0.3，即已用不超过 70%），允许**多个任务共享同一张卡**，
+     只要显存还够就可以继续插入新任务。
 
 两种模式通过 ``--strategy`` 控制；默认 ``mem``。
 
 **硬约束（两种模式共享）**：
-  * ``--min-free`` 指定 "派发前所需的可用 GPU 数下限"，默认 2——
-    保证派发 1 张后系统仍保留 ``min_free - 1`` 张可用的卡。
-  * 同时 **始终要求派发前至少有 1 张 "严格空闲" 的卡**（与 ``idle`` 模式同义），
-    并且派发时优先挑 "mem 阈值满足、但非严格空闲" 的卡，把严格空闲那张
-    留给下次派发 / 其它用户——这条件由代码硬写死，不可关闭。
+  * ``--min-free`` 指定 "派发前所需的可用 GPU 数下限"，默认 1。
+  * 2 号卡默认由上层脚本排除；其余 GPU 只要满足阈值即可参与调度。
+  * mem 模式下会优先选择"本会话当前已启动任务数更少"的 GPU，避免新任务过度集中。
 
 为避免 ``nvidia-smi`` 反映更新迟滞导致的瞬时重复派发，依然保留 reserve-file。
-mem 模式下允许挑中已在 reserve-file 里的卡（当它显存余额仍满足阈值时）。
+mem 模式下允许挑中已在 reserve-file 里的卡（当它显存余额仍满足阈值时）；
+reserve-file 会记录本会话对每张 GPU 的活跃任务数，用于分散派发。
 """
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import Iterable, List, Set, Tuple
+from typing import Dict, Iterable, List, Set, Tuple
 
 
 def _nvidia_smi_ok() -> bool:
@@ -157,39 +156,73 @@ def list_free_gpus(exclude: Iterable[int], reserved: Iterable[int]) -> List[int]
 # ---------------------------------------------------------------------------
 # reserve-file
 # ---------------------------------------------------------------------------
-def _read_reserved(path: str) -> Set[int]:
+def _read_reserved_counts(path: str) -> Dict[int, int]:
     if not path or not os.path.isfile(path):
-        return set()
-    out: Set[int] = set()
+        return {}
+    out: Dict[int, int] = {}
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line.isdigit():
-                out.add(int(line))
+                gpu_id = int(line)
+                out[gpu_id] = out.get(gpu_id, 0) + 1
     return out
 
 
-def _write_reserved(path: str, reserved: Set[int]) -> None:
+def _read_reserved(path: str) -> Set[int]:
+    return set(_read_reserved_counts(path))
+
+
+def _write_reserved_counts(path: str, reserved_counts: Dict[int, int]) -> None:
     if not path:
         return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = f"{path}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
-        for g in sorted(reserved):
-            f.write(f"{g}\n")
+        for gpu_id in sorted(reserved_counts):
+            count = max(0, int(reserved_counts[gpu_id]))
+            for _ in range(count):
+                f.write(f"{gpu_id}\n")
     os.replace(tmp, path)
 
 
+def _format_reserved_counts(reserved_counts: Dict[int, int]) -> Dict[int, int]:
+    return {gpu_id: reserved_counts[gpu_id] for gpu_id in sorted(reserved_counts)}
+
+
+def _write_reserved(path: str, reserved: Set[int]) -> None:
+    reserved_counts = {gpu_id: 1 for gpu_id in reserved}
+    _write_reserved_counts(path, reserved_counts)
+
+
 def _reserve(path: str, gpu_id: int) -> None:
-    reserved = _read_reserved(path)
-    reserved.add(gpu_id)
-    _write_reserved(path, reserved)
+    reserved_counts = _read_reserved_counts(path)
+    reserved_counts[gpu_id] = reserved_counts.get(gpu_id, 0) + 1
+    _write_reserved_counts(path, reserved_counts)
 
 
 def _release(path: str, gpu_id: int) -> None:
-    reserved = _read_reserved(path)
-    reserved.discard(gpu_id)
-    _write_reserved(path, reserved)
+    reserved_counts = _read_reserved_counts(path)
+    remain = reserved_counts.get(gpu_id, 0) - 1
+    if remain > 0:
+        reserved_counts[gpu_id] = remain
+    else:
+        reserved_counts.pop(gpu_id, None)
+    _write_reserved_counts(path, reserved_counts)
+
+
+def _gpu_sort_key(
+    item: Tuple[int, float], reserved_counts: Dict[int, int]
+) -> Tuple[int, float, int]:
+    gpu_id, free_ratio = item
+    return (reserved_counts.get(gpu_id, 0), -free_ratio, gpu_id)
+
+
+def _pick_gpu_with_spread(
+    avail: List[Tuple[int, float]], reserved_counts: Dict[int, int]
+) -> int:
+    ranked = sorted(avail, key=lambda item: _gpu_sort_key(item, reserved_counts))
+    return ranked[0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -209,34 +242,22 @@ def cmd_wait(args: argparse.Namespace) -> int:
     mem_ratio = float(args.mem_free_ratio)
 
     # min_free 在两种模式下含义统一：
-    #   "派发前必须有这么多 GPU 可用"——派发 1 张后仍保留 (min_free - 1) 张可用。
-    # 默认 2，即 "至少给机器保留 1 张不挂本调度器任务的卡"。
+    #   "派发前必须有这么多 GPU 可用"。
+    # 默认 1，即 "只要有 1 张满足阈值的卡就可以派发"。
     min_free = max(1, int(args.min_free))
 
     while True:
-        reserved = _read_reserved(args.reserve_file) if args.reserve_file else set()
+        reserved_counts = _read_reserved_counts(args.reserve_file) if args.reserve_file else {}
+        reserved = set(reserved_counts)
         avail = list_available_gpus(
             strategy=strategy, exclude=exclude, reserved=reserved, mem_free_ratio=mem_ratio
         )
 
-        # "严格空闲" 的卡数（不管策略如何，始终用来保证 "至少剩一张空卡" 的硬约束）。
-        strict_free = list_free_gpus(exclude=exclude, reserved=reserved)
-
-        # 核心条件 1：可挑的 GPU 数 ≥ min_free（派发后仍保留 min_free-1 张可用）
+        # 核心条件：可挑的 GPU 数 ≥ min_free。
         cond_avail = len(avail) >= min_free
-        # 核心条件 2：派发前至少要有一张 **严格空闲** 的卡；
-        #            派发后这张 "严格空闲" 的卡要么被本次派发占用，要么留给别人。
-        #            因此：当 min_free >= 2 时，严格空闲 GPU 数必须 ≥ 1，
-        #            派发后才可能"至少剩一张空卡"（如果可挑的 GPU 就是那张严格空闲的，
-        #            还要再多一张；但实际更保守的做法——直接要求 strict_free >= 1）。
-        cond_strict = (min_free < 2) or (len(strict_free) >= 1)
 
-        if cond_avail and cond_strict:
-            # 优先挑 "mem 阈值满足但非严格空闲" 的卡（把严格空闲留给别人），
-            # 否则退而挑 mem 阈值满足中显存最空的那张。
-            non_strict_avail = [(g, r) for g, r in avail if g not in set(strict_free)]
-            pick_pool = non_strict_avail if non_strict_avail else avail
-            gpu_id = pick_pool[0][0]
+        if cond_avail:
+            gpu_id = _pick_gpu_with_spread(avail, reserved_counts)
             if args.reserve_file:
                 _reserve(args.reserve_file, gpu_id)
             print(gpu_id)
@@ -248,13 +269,12 @@ def cmd_wait(args: argparse.Namespace) -> int:
             why = []
             if not cond_avail:
                 why.append(f"avail<{min_free}")
-            if not cond_strict:
-                why.append("无严格空闲卡")
             print(
                 f"[gpu_sched] 等待可用 GPU: strategy={strategy} "
                 f"mem_free>={mem_ratio:.2f} min_free={min_free} "
-                f"avail={[(g,round(r,2)) for g,r in avail]} strict_free={strict_free} "
-                f"reserved={sorted(reserved)} exclude={sorted(exclude)} "
+                f"avail={[(g,round(r,2)) for g,r in avail]} "
+                f"reserved={sorted(reserved)} reserved_counts={_format_reserved_counts(reserved_counts)} "
+                f"exclude={sorted(exclude)} "
                 f"原因={'/'.join(why) or '—'} 已等待 {elapsed}s",
                 file=sys.stderr,
             )
@@ -275,7 +295,8 @@ def cmd_release(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     exclude = set(args.exclude or [])
-    reserved = _read_reserved(args.reserve_file) if args.reserve_file else set()
+    reserved_counts = _read_reserved_counts(args.reserve_file) if args.reserve_file else {}
+    reserved = set(reserved_counts)
     all_ids = list_all_gpus()
     free_idle = list_free_gpus(exclude=exclude, reserved=reserved)
     avail_mem = list_available_gpus(
@@ -284,6 +305,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"all                 : {all_ids}")
     print(f"exclude             : {sorted(exclude)}")
     print(f"reserved            : {sorted(reserved)}")
+    print(f"reserved_counts     : {_format_reserved_counts(reserved_counts)}")
     print(f"free (idle strict)  : {free_idle}")
     print(f"avail (mem≥{args.mem_free_ratio:.2f}) : {[(g, round(r,2)) for g,r in avail_mem]}")
     return 0
@@ -301,13 +323,12 @@ def main() -> int:
         help="idle=严格空闲 (旧行为); mem=显存阈值 (默认)",
     )
     p_wait.add_argument(
-        "--mem-free-ratio", type=float, default=0.7,
-        help="mem 模式下的显存空闲比阈值 (默认 0.7; 即已用 <= 30%%)",
+        "--mem-free-ratio", type=float, default=0.3,
+        help="mem 模式下的显存空闲比阈值 (默认 0.3; 即已用 <= 70%%)",
     )
     p_wait.add_argument(
-        "--min-free", type=int, default=2,
-        help="派发前必须可用的 GPU 数量下限 (默认 2: 派发 1 张后仍保留 >=1 张可用; "
-             "且无论策略如何都要求派发前 >=1 张 **严格空闲** 的 GPU)",
+        "--min-free", type=int, default=1,
+        help="派发前必须可用的 GPU 数量下限 (默认 1: 满足阈值即可派发)",
     )
     p_wait.add_argument("--exclude", type=int, nargs="*", default=[2],
                         help="永远不使用的 GPU id 列表 (默认 [2])")
@@ -325,7 +346,7 @@ def main() -> int:
     p_sta = sub.add_parser("status", help="打印当前 GPU 占用/预留状态")
     p_sta.add_argument("--exclude", type=int, nargs="*", default=[2])
     p_sta.add_argument("--reserve-file", type=str, default="")
-    p_sta.add_argument("--mem-free-ratio", type=float, default=0.7)
+    p_sta.add_argument("--mem-free-ratio", type=float, default=0.3)
 
     args = parser.parse_args()
     if args.cmd == "wait":

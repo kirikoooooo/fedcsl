@@ -8,7 +8,9 @@ import argparse
 import copy
 import os
 import random
+import sys
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -64,6 +66,48 @@ parser.add_argument('--client-workers', type=int, default=None,
                     help='Number of client training worker threads; default comes from config or 3')
 
 args = parser.parse_args()
+
+_ACTIVE_RESULT_LOG = None
+_DEFAULT_EXCEPTHOOK = sys.excepthook
+
+
+def _append_text_to_log(log_path, text):
+    if not log_path:
+        return
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, mode="a+", encoding="utf-8") as f:
+        f.write(text)
+
+
+def _format_exception_block(exc_type, exc_value, exc_traceback):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tb = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    return (
+        "\n"
+        "[ERROR] Unhandled exception -----------------------\n"
+        f"time: {ts}\n"
+        f"type: {getattr(exc_type, '__name__', str(exc_type))}\n"
+        f"message: {exc_value}\n"
+        f"{tb}"
+        "-------------------------------------------\n"
+    )
+
+
+def _result_log_excepthook(exc_type, exc_value, exc_traceback):
+    if _ACTIVE_RESULT_LOG and not issubclass(exc_type, KeyboardInterrupt):
+        try:
+            _append_text_to_log(
+                _ACTIVE_RESULT_LOG,
+                _format_exception_block(exc_type, exc_value, exc_traceback),
+            )
+        except Exception:
+            pass
+    _DEFAULT_EXCEPTHOOK(exc_type, exc_value, exc_traceback)
+
+
+sys.excepthook = _result_log_excepthook
+
+
 def _resolve_config_path(path):
     """支持三种写法：
     1. 绝对路径或存在的相对路径 → 直接使用；
@@ -286,8 +330,55 @@ def _precompute_client_scale_scores(X_fed, model, beta, device=None, batch_size=
     return client_scores
 
 
-def _plan_balanced_client_scales_from_scores(client_scores, model, extra_scale_count=2):
-    """每个 client 保留 2 个本地主尺度，再由 server 额外分配 2 个均衡尺度。"""
+def _normalize_positive_costs(values):
+    values = np.asarray(values, dtype=np.float32)
+    if values.size == 0:
+        return values
+    values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
+    mean = float(np.mean(values[values > 0])) if np.any(values > 0) else 1.0
+    return np.maximum(values / max(mean, 1e-8), 1e-6)
+
+
+def _scale_system_costs(model):
+    """估计每个尺度的系统代价：参数通信量 + sliding-window 计算量代理。"""
+    lengths = np.asarray(list(model.shapelets_size_and_len.keys()), dtype=np.float32)
+    widths = np.asarray(list(model.shapelets_size_and_len.values()), dtype=np.float32)
+    if lengths.size == 0:
+        return np.zeros(0, dtype=np.float32)
+
+    seq_len_proxy = max(float(np.max(lengths)) / 0.8, float(np.max(lengths)))
+    window_counts = np.maximum(seq_len_proxy - lengths + 1.0, 1.0)
+    compute_costs = lengths * np.maximum(widths, 1.0) * window_counts
+
+    comm_costs = []
+    for scale_idx, (length, width) in enumerate(zip(lengths, widths)):
+        try:
+            state = model.scale_state_dict(scale_idx, clone=False, cpu=False)
+            comm = sum(
+                int(value.numel()) for value in state.values()
+                if hasattr(value, "numel")
+            )
+        except Exception:
+            comm = int(length * max(width, 1.0))
+        comm_costs.append(max(float(comm), 1.0))
+
+    compute_norm = _normalize_positive_costs(compute_costs)
+    comm_norm = _normalize_positive_costs(comm_costs)
+    return np.maximum(0.5 * compute_norm + 0.5 * comm_norm, 1e-6)
+
+
+def _plan_efficiency_aware_client_scales_from_scores(
+    client_scores,
+    model,
+    extra_scale_count=2,
+    coverage_weight=0.35,
+):
+    """每个 client 保留 2 个本地主尺度，再按系统效率补 2 个额外尺度。
+
+    额外尺度的选择同时考虑三项：尺度覆盖均衡、该客户端的周期/能量得分、
+    以及尺度参数量和滑窗计算量导致的系统成本。这样可避免额外分发总是偏向
+    长尺度大模型，同时仍尽量维持全局尺度覆盖。
+    """
     num_clients = len(client_scores)
     num_scales = len(model.shapelets_size_and_len)
     if num_scales <= 0:
@@ -295,6 +386,11 @@ def _plan_balanced_client_scales_from_scores(client_scores, model, extra_scale_c
 
     client_selected = []
     scale_counts = np.zeros(num_scales, dtype=np.int64)
+    scale_costs = _scale_system_costs(model)
+    target_count = max(
+        1.0,
+        float(num_clients * min(num_scales, 2 + max(0, int(extra_scale_count)))) / num_scales,
+    )
 
     for scores in client_scores:
         selected = _pick_grouped_scales_from_scores(scores)
@@ -307,12 +403,25 @@ def _plan_balanced_client_scales_from_scores(client_scores, model, extra_scale_c
             available = [scale_idx for scale_idx in range(num_scales) if scale_idx not in client_selected[cid]]
             if not available:
                 continue
-            best_scale = min(
+            scores = _normalize_scale_scores(client_scores[cid], num_scales)
+            max_score = float(np.max(scores)) if scores.size else 0.0
+            if max_score > 0:
+                scores = scores / max_score
+            else:
+                scores = np.ones(num_scales, dtype=np.float32)
+
+            def _assignment_score(scale_idx):
+                coverage_penalty = float(scale_counts[scale_idx]) / target_count
+                efficiency_gain = float(scores[scale_idx]) / float(scale_costs[scale_idx])
+                return efficiency_gain - coverage_weight * coverage_penalty
+
+            best_scale = max(
                 available,
                 key=lambda scale_idx: (
-                    int(scale_counts[scale_idx]),
-                    -float(client_scores[cid][scale_idx]),
-                    int(scale_idx),
+                    _assignment_score(scale_idx),
+                    -float(scale_costs[scale_idx]),
+                    -int(scale_counts[scale_idx]),
+                    -int(scale_idx),
                 ),
             )
             client_selected[cid].append(int(best_scale))
@@ -510,6 +619,7 @@ def eval_TSTCC(transformation_train, transformation_test, transformation_val,
 def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, to_cuda=True,
            eval_per_x_epochs=10, dist_measure='mix', rank=-1, world_size=-1, resize=0,
            checkpoint=False, task='classification'):
+    global _ACTIVE_RESULT_LOG
     # ----- DDP 初始化（可选；rank / world_size 默认 -1 表示单机）-----------------
     is_ddp = rank != -1 and world_size != -1
     if is_ddp:
@@ -586,6 +696,45 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     if server_device.type == "cuda":
         torch.cuda.set_device(server_device)
 
+    if args.description is not None:
+        config['description'] = args.description
+
+    desc_safe = _sanitize_filename(config.get('description', ''))
+    formatted_date = datetime.now().strftime("%Y-%m-%d-%H") + desc_safe
+    logTxt = f"./result/{dataset}/{formatted_date}_l={l}_lr={lr}_epoch{numEpoch}_alphadir{dirichlet_alpha}_{desc_safe}.txt"
+    _ACTIVE_RESULT_LOG = logTxt
+    os.makedirs(os.path.dirname(logTxt), exist_ok=True)
+
+    header_lines = [
+        "Details of Training:-----------------------",
+        f"dataset: {dataset}",
+        f"local train epochs: {numEpoch}",
+        f"round num: {numRound}",
+        f"batch size: {batch_size}",
+        f"lr: {lr}",
+        f"use_client_selection: {use_client_selection}",
+        f"server_device: {server_device}",
+        f"client_workers: {client_workers}",
+        f"client_worker_devices: {[str(d) for d in client_devices]}",
+        f"client_groups: {client_groups}",
+    ]
+    if use_client_selection:
+        header_lines += [
+            f"client_selection_ratio: {client_selection_ratio}",
+            f"client_selection_method: {client_selection_method}",
+            f"min_selection_prob: {min_selection_prob}",
+            f"ema_alpha: {ema_alpha}",
+        ]
+    header_lines += [
+        "-------------------------------------------",
+        str(config.get('description', '')),
+        f"PID: {os.getpid()}",
+        f"PPID: {os.getppid()}",
+        f"argv: {' '.join(sys.argv)}",
+        yaml.dump(config).replace('\n', ''),
+    ]
+    _append_text_to_log(logTxt, "\n".join(header_lines) + "\n")
+
     shapelet_weight_X = np.load('./algoutils/shapelet_weight_All.npy')
 
     # ----- 加载数据集（统一入口：HAR / Epilepsy-TSTCC / SleepEDF / FD-A / 其他 UEA）
@@ -633,52 +782,43 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         int(i): 40
         for i in np.linspace(min(128, max(3, int(0.1 * len_ts))), int(0.8 * len_ts), 8, dtype=int)
     }
-
-    if args.description is not None:
-        config['description'] = args.description
-
-    # ----- 日志文件初始化 -------------------------------------------------------
     print("shapelet initialized!")
-    desc_safe = _sanitize_filename(config.get('description', ''))
-    formatted_date = datetime.now().strftime("%Y-%m-%d-%H") + desc_safe
-    logTxt = f"./result/{dataset}/{formatted_date}_l={l}_lr={lr}_epoch{numEpoch}_alphadir{dirichlet_alpha}_{desc_safe}.txt"
-    os.makedirs(os.path.dirname(logTxt), exist_ok=True)
 
-    header_lines = [
-        "Details of Training:-----------------------",
-        f"dataset: {dataset}",
-        f"local train epochs: {numEpoch}",
-        f"round num: {numRound}",
-        f"batch size: {batch_size}",
-        f"lr: {lr}",
-        f"use_client_selection: {use_client_selection}",
-        f"server_device: {server_device}",
-        f"client_workers: {client_workers}",
-        f"client_worker_devices: {[str(d) for d in client_devices]}",
-        f"client_groups: {client_groups}",
-    ]
-    if use_client_selection:
-        header_lines += [
-            f"client_selection_ratio: {client_selection_ratio}",
-            f"client_selection_method: {client_selection_method}",
-            f"min_selection_prob: {min_selection_prob}",
-            f"ema_alpha: {ema_alpha}",
-        ]
-    header_lines += [
-        "-------------------------------------------",
-        str(config.get('description', '')),
-        f"PID: {os.getpid()}",
-        f"PPID: {os.getppid()}",
-        yaml.dump(config).replace('\n', ''),
-    ]
-    with open(logTxt, mode="a+", encoding="utf-8") as f:
-        f.write("\n".join(header_lines) + "\n")
-
-    # FL-bench 风格基线分发：SCAFFOLD / FedProto 不走 CSL 多尺度对比流程，直接接入
-    # FL-bench 原实现（见 algo/scaffold/ 与 algo/fedproto/）。
+    # 有监督 FL-bench 风格基线：SCAFFOLD / FedProto 不走 CSL 多尺度对比流程，直接接入。
     if algo.lower() in ('scaffold', 'fedproto'):
         from algo.baseline_runner import run_baseline
         run_baseline(
+            algo=algo.lower(),
+            config=config,
+            seed=original_seed,
+            dataset=dataset,
+            shapelets_size_and_len=shapelets_size_and_len,
+            n_channels=n_channels,
+            num_classes=num_classes,
+            X_all=X_all, y_all=y_all,
+            X_test=X_test, y_test=y_test,
+            X_fed=X_fed, y_fed=y_fed,
+            X_val=X_val, y_val=y_val, has_val=has_val,
+            num_rounds=numRound,
+            num_epoch=numEpoch,
+            batch_size=batch_size,
+            lr=lr,
+            wd=wd,
+            dist_measure=dist_measure,
+            to_cuda=to_cuda,
+            logTxt=logTxt,
+            formatted_date=formatted_date,
+            eval_train_test_fn=eval,
+            eval_tstcc_fn=eval_TSTCC,
+            save_model_fn=save_model,
+        )
+        return
+
+    # 无监督联邦表征基线：参考 Orchestra 的 baseline 形式，采用 FedAvg 聚合 +
+    # 本地 SSL 目标（SimCLR / SimSiam / BYOL），仍复用当前 shapelet backbone 与 SVM 评估。
+    if algo.lower() in ('simclr', 'simsiam', 'byol', 'orchestra'):
+        from algo.ssl_runner import run_ssl_baseline
+        run_ssl_baseline(
             algo=algo.lower(),
             config=config,
             seed=original_seed,
@@ -832,7 +972,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             batch_size=batch_size,
         )
         if _is_teacher_scale_set_algo(algo):
-            cached_client_scale_plans, cached_scale_hist = _plan_balanced_client_scales_from_scores(
+            cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
                 cached_client_scale_scores,
                 server.model,
                 extra_scale_count=2,

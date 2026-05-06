@@ -176,6 +176,26 @@ def _fallback_augment(name: str, arr: np.ndarray, ts_l: int) -> np.ndarray:
     raise ValueError(f"unknown fallback augmentation: {name}")
 
 
+def _ensure_ts_length(arr: np.ndarray, ts_l: int) -> np.ndarray:
+    """Ensure augmented batch keeps the original temporal length ``ts_l``.
+
+    tsaug 的某些增广（尤其是 Crop）会改变时间维长度；联邦训练与当前模型实现都要求
+    输入保持固定长度，因此这里统一把结果 resize 回原始长度。
+    输入/输出形状均约定为 ``(N, T, C)``。
+    """
+    out = np.asarray(arr, dtype=np.float32)
+    if out.ndim != 3:
+        raise ValueError(f"expected 3D array (N,T,C), got shape={out.shape}")
+    if out.shape[1] == ts_l:
+        return out
+
+    resized = np.empty((out.shape[0], ts_l, out.shape[2]), dtype=np.float32)
+    for i in range(out.shape[0]):
+        for c in range(out.shape[2]):
+            resized[i, :, c] = _resize_1d(out[i, :, c], ts_l)
+    return resized
+
+
 def make_two_views(x: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     ops = ["AddNoise", "Crop", "Pool", "Quantize", "TimeWarp"]
     ts_l = int(x.size(2))
@@ -195,6 +215,9 @@ def make_two_views(x: torch.Tensor, device: torch.device) -> tuple[torch.Tensor,
         x_q = _fallback_augment(aug1, arr, ts_l)
         x_k = _fallback_augment(aug2, arr, ts_l)
 
+    x_q = _ensure_ts_length(x_q, ts_l)
+    x_k = _ensure_ts_length(x_k, ts_l)
+
     x_q = torch.from_numpy(np.asarray(x_q)).float().transpose(1, 2).to(device)
     x_k = torch.from_numpy(np.asarray(x_k)).float().transpose(1, 2).to(device)
     return x_q, x_k
@@ -212,9 +235,10 @@ def make_labeled_view(
         op_name = ops[int(op_idx)]
         aug_impl = _make_aug(op_name, ts_l)
         if aug_impl is not None:
-            out[idx:idx + 1] = np.asarray(aug_impl.augment(arr[idx:idx + 1]))
+            aug_out = np.asarray(aug_impl.augment(arr[idx:idx + 1]), dtype=np.float32)
         else:
-            out[idx:idx + 1] = _fallback_augment(op_name, arr[idx:idx + 1], ts_l)
+            aug_out = _fallback_augment(op_name, arr[idx:idx + 1], ts_l)
+        out[idx:idx + 1] = _ensure_ts_length(aug_out, ts_l)
     x_deg = torch.from_numpy(out).float().transpose(1, 2).to(device)
     y_deg = torch.as_tensor(labels, dtype=torch.long, device=device)
     return x_deg, y_deg

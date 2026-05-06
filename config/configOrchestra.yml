@@ -1,0 +1,43 @@
+model:
+  name: ""
+  params:
+    dist_measure: "mix"
+    lr: 0.05
+    batch_size: 16
+    wd: 0.0001
+    momentum: 0.9
+    ls: 1
+    l: 0.01
+    beta: 0.4
+    gamma: 0.5
+dataset: "CharacterTrajectories"
+algo: "orchestra"
+federated:
+  numClient: 3
+  numRound: 200
+  numEpoch: 3
+  dirichlet_alpha: 1
+  use_client_selection: False
+  client_selection_ratio: 0.6
+ablation:
+  UseJointKD: False
+  UseJointCL: False
+  UseScaleKD: False
+  UseScaleCL: False
+  UseProdictor: False
+  UseMTLHomo: False
+  UseACF: False
+  UseDistribution: False
+ssl:
+  temperature: 0.2
+  projector_hidden_dim: 256
+  projector_out_dim: 128
+  predictor_hidden_dim: 256
+  ema_tau: 0.99
+  num_global_clusters: 32
+  num_local_clusters: 8
+  cluster_m_size: 128
+  deg_num_classes: 5
+  server_cluster_rounds: 80
+logPath: "./result/"
+description: "orchestra"

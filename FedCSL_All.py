@@ -145,12 +145,12 @@ def _sanitize_filename(s):
 
 
 def _is_splitteacher_algo(algo_name):
-    return str(algo_name).lower() == "fedcsl-onehot-splitteacher"
+    return str(algo_name).lower() in ("fedcsl-onehot-splitteacher", "fedcsl-simclr-split")
 
 
 def _is_teacher_scale_set_algo(algo_name):
     algo = str(algo_name).lower()
-    return algo in ("fedcsl-onehot-fullteacher", "fedcsl-onehot-splitteacher")
+    return algo == "fedcsl-onehot-splitteacher"
 
 
 def _uses_fedcsl_scale_scores(algo_name):
@@ -158,7 +158,9 @@ def _uses_fedcsl_scale_scores(algo_name):
     return algo in (
         "fedcsl",
         "fedcsl-onehot",
-        "fedcsl-onehot-fullteacher",
+        "fedcsl-simclr",
+        "fedcsl-simclr-proj",
+        "fedcsl-simclr-split",
         "fedcsl-onehot-splitteacher",
     )
 
@@ -483,7 +485,9 @@ def _train_client_worker(
         torch.cuda.set_device(device)
 
     teacher = None
-    if round_idx != 0 or use_scale_split_comm:
+    algo_name = str(shared_kwargs.get("config", {}).get("algo", "fedcsl")).lower()
+    need_teacher = algo_name in ("fedcsl", "fedcsl-onehot", "fedcsl-onehot-splitteacher", "fedprox")
+    if need_teacher and (round_idx != 0 or use_scale_split_comm):
         teacher = LearningShapeletsCL(**{**shared_kwargs, "device": device})
         _load_state_to_model(teacher.model, server_state_cpu)
         teacher.model.eval()
@@ -971,7 +975,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             device=server_device,
             batch_size=batch_size,
         )
-        if _is_teacher_scale_set_algo(algo):
+        if _is_splitteacher_algo(algo):
             cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
                 cached_client_scale_scores,
                 server.model,

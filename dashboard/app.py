@@ -239,6 +239,10 @@ def list_scripts() -> List[Dict[str, Any]]:
             if p.name.startswith("_") and p.suffix == ".sh":
                 continue  # 跳过 _common.sh 等仅被 source 的脚本
             rel = p.relative_to(PROJECT_ROOT).as_posix()
+            # dashboard 里不再暴露按 alpha 拆开的 har_baselines 批量脚本；
+            # 改为展示单算法脚本，并在前端弹窗里提供固定 alpha 选项。
+            if rel.startswith("scripts/har_baselines/") and p.name != "run_all.sh":
+                continue
             result.append(
                 {
                     "path": rel,

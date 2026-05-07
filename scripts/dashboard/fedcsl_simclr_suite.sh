@@ -10,6 +10,7 @@
 #   bash scripts/dashboard/fedcsl_simclr_suite.sh
 #   GATE_ACC=0.92 LIMIT=6 bash scripts/dashboard/fedcsl_simclr_suite.sh
 #   DATASET=Epilepsy-TSTCC bash scripts/dashboard/fedcsl_simclr_suite.sh
+#   bash scripts/dashboard/fedcsl_simclr_suite.sh --dataset Epilepsy-TSTCC --limit 4
 
 set -euo pipefail
 
@@ -38,4 +39,5 @@ exec "${PY_BIN}" "${HERE}/fedcsl_simclr_suite_runner.py" \
   --plans "${PLANS}" \
   --history "${HISTORY}" \
   --log-dir "${LOG_DIR}" \
-  "${ARGS[@]}"
+  "${ARGS[@]}" \
+  "$@"

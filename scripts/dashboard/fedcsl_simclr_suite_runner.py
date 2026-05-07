@@ -131,6 +131,13 @@ def _append_history(history_path: Path, text: str) -> None:
         f.write(text)
 
 
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(PROJECT_ROOT.resolve()))
+    except Exception:
+        return str(path.resolve())
+
+
 def _parse_round_result(line: str) -> Optional[Dict[str, Any]]:
     m = ROUND_RE.search(line)
     if not m:
@@ -331,7 +338,7 @@ def _run_plan(
         "reason": reason,
         "elapsed_sec": elapsed,
         "first_round": first_round,
-        "log_path": str(log_path.relative_to(PROJECT_ROOT)),
+        "log_path": _display_path(log_path),
     }
 
     history_block = [

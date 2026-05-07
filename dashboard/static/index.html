@@ -295,6 +295,10 @@
           <option value="10.0">10.0</option>
         </select>
       </div>
+      <div id="launch-dataset-wrap" style="display:none">
+        <label>DATASET</label>
+        <input type="text" id="launch-dataset" placeholder="例: HAR / SleepEDF / Epilepsy-TSTCC" />
+      </div>
       <label>附加参数 (空格分隔)</label>
       <input type="text" id="launch-args" placeholder="例: -dataset HAR" />
       <label>环境变量 (每行一个 KEY=VALUE)</label>
@@ -424,6 +428,9 @@ const alphaScriptPrefixes = [
 function supportsAlphaChoice(scriptPath) {
   return alphaScriptPrefixes.includes(scriptPath);
 }
+function supportsDatasetChoice(scriptPath) {
+  return scriptPath === 'scripts/dashboard/fedcsl_simclr_suite.sh';
+}
 async function refreshScripts() {
   const tbody = document.getElementById('scripts-body');
   try {
@@ -456,7 +463,9 @@ function openLaunchModal(idx) {
   document.getElementById('launch-args').value = '';
   document.getElementById('launch-env').value = '';
   document.getElementById('launch-alpha').value = '__ALL__';
+  document.getElementById('launch-dataset').value = '';
   document.getElementById('launch-alpha-wrap').style.display = supportsAlphaChoice(s.path) ? 'block' : 'none';
+  document.getElementById('launch-dataset-wrap').style.display = supportsDatasetChoice(s.path) ? 'block' : 'none';
   document.getElementById('launch-modal').style.display = 'flex';
   document.getElementById('launch-modal').dataset.script = s.path;
 }
@@ -468,6 +477,7 @@ async function doLaunch() {
   const argsRaw = document.getElementById('launch-args').value.trim();
   const envRaw = document.getElementById('launch-env').value.trim();
   const alphaVal = document.getElementById('launch-alpha').value.trim();
+  const datasetVal = document.getElementById('launch-dataset').value.trim();
   const args = argsRaw ? argsRaw.split(/\s+/) : [];
   const envBase = {};
   for (const line of envRaw.split(/\n/)) {
@@ -486,6 +496,7 @@ async function doLaunch() {
     for (const alpha of launches) {
       const env = { ...envBase };
       if (alpha) env.DIR_ALPHA = alpha;
+      if (supportsDatasetChoice(script) && datasetVal) env.DATASET = datasetVal;
       const run = await api('/runs', {
         method: 'POST',
         headers: {'content-type':'application/json'},

@@ -70,7 +70,11 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
     return data
 
 
-def _load_plans(path: Path, cli_gate: Optional[float]) -> tuple[Dict[str, Any], List[Plan]]:
+def _load_plans(
+    path: Path,
+    cli_gate: Optional[float],
+    dataset_override: Optional[str],
+) -> tuple[Dict[str, Any], List[Plan]]:
     raw = _load_yaml(path)
     defaults = raw.get("defaults", {}) or {}
     raw_plans = raw.get("plans", []) or []
@@ -89,13 +93,18 @@ def _load_plans(path: Path, cli_gate: Optional[float]) -> tuple[Dict[str, Any], 
         if not name or not config:
             continue
         gate_acc = cli_gate if cli_gate is not None else item.get("gate_acc", defaults.get("gate_acc"))
+        effective_dataset = str(
+            dataset_override
+            if dataset_override is not None
+            else item.get("dataset", defaults.get("dataset", "HAR"))
+        )
         plans.append(
             Plan(
                 name=name,
                 config=config,
                 description=str(item.get("description", "")),
                 dirichlet_alpha=float(item.get("dirichlet_alpha", defaults.get("dirichlet_alpha", 0.1))),
-                dataset=str(item.get("dataset", defaults.get("dataset", "HAR"))),
+                dataset=effective_dataset,
                 seed=int(item.get("seed", defaults.get("seed", 42))),
                 num_round=int(item["num_round"]) if item.get("num_round") is not None else (
                     int(defaults["num_round"]) if defaults.get("num_round") is not None else None
@@ -357,6 +366,7 @@ def main() -> int:
     parser.add_argument("--plans", default=str(DEFAULT_PLANS), help="suite yaml path")
     parser.add_argument("--history", default=str(DEFAULT_HISTORY), help="markdown history path")
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR), help="log dir")
+    parser.add_argument("--dataset", default=None, help="override dataset for all enabled plans")
     parser.add_argument("--gate-acc", type=float, default=None, help="override first-round accuracy gate")
     parser.add_argument("--limit", type=int, default=None, help="run only first N enabled plans")
     args = parser.parse_args()
@@ -366,7 +376,8 @@ def main() -> int:
     log_dir = Path(args.log_dir).resolve()
     config_cache_dir = SUITE_DIR / ".generated_configs"
 
-    defaults, plans = _load_plans(plans_path, args.gate_acc)
+    dataset_override = args.dataset.strip() if isinstance(args.dataset, str) and args.dataset.strip() else None
+    defaults, plans = _load_plans(plans_path, args.gate_acc, dataset_override)
     if args.limit is not None:
         plans = plans[: max(0, int(args.limit))]
 
@@ -379,6 +390,7 @@ def main() -> int:
         "",
         f"- plan_file: `{plans_path}`",
         f"- total_plans: `{len(plans)}`",
+        f"- dataset_override: `{dataset_override}`",
         f"- default_gate_acc: `{defaults.get('gate_acc', args.gate_acc)}`",
         "",
     ]

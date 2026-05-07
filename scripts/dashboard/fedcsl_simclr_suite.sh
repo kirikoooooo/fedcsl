@@ -9,6 +9,7 @@
 # 用法：
 #   bash scripts/dashboard/fedcsl_simclr_suite.sh
 #   GATE_ACC=0.92 LIMIT=6 bash scripts/dashboard/fedcsl_simclr_suite.sh
+#   DATASET=Epilepsy-TSTCC bash scripts/dashboard/fedcsl_simclr_suite.sh
 
 set -euo pipefail
 
@@ -17,11 +18,15 @@ ROOT="$(cd "${HERE}/../.." && pwd)"
 cd "${ROOT}"
 
 PY_BIN="${PY_BIN:-python3}"
+DATASET="${DATASET:-}"
 PLANS="${PLANS:-${HERE}/fedcsl_simclr_suite_plans.yml}"
 HISTORY="${HISTORY:-${HERE}/RUN_HISTORY.md}"
 LOG_DIR="${LOG_DIR:-${HERE}/logs}"
 ARGS=()
 
+if [[ -n "${DATASET}" ]]; then
+  ARGS+=(--dataset "${DATASET}")
+fi
 if [[ -n "${GATE_ACC:-}" ]]; then
   ARGS+=(--gate-acc "${GATE_ACC}")
 fi

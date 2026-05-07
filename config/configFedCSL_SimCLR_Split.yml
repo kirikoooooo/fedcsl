@@ -4,13 +4,14 @@ model:
     dist_measure: "mix"
     lr: 0.05
     batch_size: 16
-    wd: 0
+    wd: 0.0001
+    momentum: 0.9
     ls: 1
     l: 0.01
     beta: 0.4
     gamma: 0.5
-dataset: "AtrialFibrillation"
-algo: "fedcsl-onehot-fullteacher"
+dataset: "CharacterTrajectories"
+algo: "fedcsl-simclr-split"
 federated:
   numClient: 3
   numRound: 200
@@ -18,18 +19,20 @@ federated:
   dirichlet_alpha: 1
   use_client_selection: False
   client_selection_ratio: 0.6
-  checkpoint_every: 30
-  auto_resume: True
-
 ablation:
-  UseJointKD: True
-  UseJointCL: True
-  UseScaleKD: True
-  UseScaleCL: True
+  UseJointKD: False
+  UseJointCL: False
+  UseScaleKD: False
+  UseScaleCL: False
   UseProdictor: False
   UseMTLHomo: False
   UseACF: True
   UseDistribution: False
-
+ssl:
+  temperature: 0.2
+  projector_hidden_dim: 256
+  projector_out_dim: 128
+  predictor_hidden_dim: 256
+  ema_tau: 0.99
 logPath: "./result/"
-description: "fedcsl-onehot-fullteacher"
+description: "fedcsl-simclr-split"

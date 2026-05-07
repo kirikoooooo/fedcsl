@@ -149,7 +149,29 @@ class LearningShapeletsCL:
         return self.config.get('algo', 'fedcsl')
 
     def _uses_teacher_scale_set_algo(self):
-        return self._algo_name() in ('fedcsl-onehot-fullteacher', 'fedcsl-onehot-splitteacher')
+        return self._algo_name() == 'fedcsl-onehot-splitteacher'
+
+    def _uses_selected_scale_algo(self):
+        return self._algo_name() in ('fedcsl-onehot-splitteacher', 'fedcsl-simclr-split')
+
+    def _is_fedcsl_simclr(self):
+        return self._algo_name() == 'fedcsl-simclr'
+
+    def _is_fedcsl_simclr_proj(self):
+        return self._algo_name() == 'fedcsl-simclr-proj'
+
+    def _is_fedcsl_simclr_split(self):
+        return self._algo_name() == 'fedcsl-simclr-split'
+
+    def _is_fedcsl_simclr_family(self):
+        return self._algo_name() in (
+            'fedcsl-simclr',
+            'fedcsl-simclr-proj',
+            'fedcsl-simclr-split',
+        )
+
+    def _uses_simclr_projector(self):
+        return self._algo_name() == 'fedcsl-simclr-proj'
 
     @staticmethod
     def _normalize_scale_indices(scale_indices, num_shapelet_lengths):
@@ -236,6 +258,32 @@ class LearningShapeletsCL:
                 )
         return None
 
+    def _selected_scale_loss_weights(self, selected_scales):
+        selected_scales = list(selected_scales or [])
+        if not selected_scales:
+            return {}
+
+        weights = np.ones(len(selected_scales), dtype=np.float32)
+        cached = self.Cached_Scale_Scores
+        if cached is not None:
+            cached = np.asarray(cached, dtype=np.float32).ravel()
+            picked = []
+            for scale_idx in selected_scales:
+                if 0 <= int(scale_idx) < cached.size:
+                    picked.append(float(cached[int(scale_idx)]))
+                else:
+                    picked.append(0.0)
+            picked = np.asarray(picked, dtype=np.float32)
+            picked = np.nan_to_num(picked, nan=0.0, posinf=0.0, neginf=0.0)
+            if np.any(picked > 0):
+                weights = picked / max(float(np.max(picked)), 1e-8)
+                weights = np.maximum(weights, 1e-3)
+
+        return {
+            int(scale_idx): float(weight) * 5.0
+            for scale_idx, weight in zip(selected_scales, weights)
+        }
+
     def _compute_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
         device = x_q.device
         selected_scales = self._normalize_scale_indices(
@@ -243,17 +291,12 @@ class LearningShapeletsCL:
         )
         if not selected_scales:
             selected_scales = [0]
+        scale_weights = self._selected_scale_loss_weights(selected_scales)
 
         loss = torch.tensor(0.0, device=device)
         loss_local_jointCLKD = torch.tensor(0.0, device=device)
         loss_global_CLKD_mutiscale = torch.tensor(0.0, device=device)
         loss_local_CLKD_mutiscale = torch.tensor(0.0, device=device)
-
-        q_g_full = None
-        k_g_full = None
-        if self.Global_Model is not None and algo_name == 'fedcsl-onehot-fullteacher':
-            q_g_full = self.Global_Model(x_q, optimize=None, masking=False)
-            k_g_full = self.Global_Model(x_k, optimize=None, masking=False)
 
         for scale_idx in selected_scales:
             q = self.model.encode_scale(x_q, scale_idx, masking=False)
@@ -262,17 +305,12 @@ class LearningShapeletsCL:
             k = nn.functional.normalize(k, dim=1)
 
             loss += local_infonce_loss(q, k, self.loss_func, self.T) * gamma
-            loss_local_CLKD_mutiscale += local_infonce_loss(q, k, self.loss_func, self.T) * 5.0
+            scale_weight = scale_weights.get(int(scale_idx), 5.0)
+            loss_local_CLKD_mutiscale += local_infonce_loss(q, k, self.loss_func, self.T) * scale_weight
 
             if self.Global_Model is not None:
-                if algo_name == 'fedcsl-onehot-fullteacher':
-                    q_g = self.Global_Model.slice_scale_features(q_g_full, scale_idx)
-                    k_g = self.Global_Model.slice_scale_features(k_g_full, scale_idx)
-                    q_g = nn.functional.layer_norm(q_g, (q_g.shape[1],))
-                    k_g = nn.functional.layer_norm(k_g, (k_g.shape[1],))
-                else:
-                    q_g = self.Global_Model.encode_scale(x_q, scale_idx, masking=False)
-                    k_g = self.Global_Model.encode_scale(x_k, scale_idx, masking=False)
+                q_g = self.Global_Model.encode_scale(x_q, scale_idx, masking=False)
+                k_g = self.Global_Model.encode_scale(x_k, scale_idx, masking=False)
 
                 q_g = nn.functional.normalize(q_g, dim=1)
                 k_g = nn.functional.normalize(k_g, dim=1)
@@ -381,7 +419,7 @@ class LearningShapeletsCL:
             onehot_scale_idx, pscore = self._pick_onehot_scale(
                 x, pscore, num_shapelet_lengths, num_shapelet_per_length
             )
-        elif self._uses_teacher_scale_set_algo():
+        elif self._uses_selected_scale_algo():
             selected_scale_indices = self._resolve_teacher_scale_indices(
                 x, pscore, num_shapelet_lengths, num_shapelet_per_length
             )
@@ -390,7 +428,7 @@ class LearningShapeletsCL:
             gamma = config['model']['params'].get('gamma', 0.5)  # local, 默认值0.5
             zeta = 1 - gamma  # global
 
-            if self._uses_teacher_scale_set_algo():
+            if self._uses_selected_scale_algo():
                 loss, loss_cca, loss_sdl = self._compute_selected_scale_losses(
                     x_q, x_k, selected_scale_indices, gamma, zeta, algo_name
                 )
@@ -404,6 +442,10 @@ class LearningShapeletsCL:
             q = self.model(x_q, optimize=None, masking=False)
             k = self.model(x_k, optimize=None, masking=False)
 
+            if self._uses_simclr_projector():
+                q = self.model.projection2(q)
+                k = self.model.projection2(k)
+
             # 归一化 (供后续 SDL / CCA 使用)
             q = nn.functional.normalize(q, dim=1)
             k = nn.functional.normalize(k, dim=1)
@@ -416,11 +458,13 @@ class LearningShapeletsCL:
             _cur_algo = algo_name
             _is_fedcsl_like = _cur_algo in (
                 'fedcsl',
+                'fedcsl-simclr',
+                'fedcsl-simclr-proj',
+                'fedcsl-simclr-split',
                 'fedcsl-onehot',
-                'fedcsl-onehot-fullteacher',
                 'fedcsl-onehot-splitteacher',
             )
-            if self.Global_Model is not None and _is_fedcsl_like:
+            if self.Global_Model is not None and _is_fedcsl_like and not self._is_fedcsl_simclr_family():
                 k_g = self.Global_Model(x_k, optimize=None, masking=False)
                 k_g = nn.functional.normalize(k_g, dim=1)
                 q_g = self.Global_Model(x_q, optimize=None, masking=False)
@@ -488,7 +532,7 @@ class LearningShapeletsCL:
                     qi, ki, self.loss_func, self.T
                 )
 
-                if self.Global_Model is not None and _is_fedcsl_like:
+                if self.Global_Model is not None and _is_fedcsl_like and not self._is_fedcsl_simclr_family():
                     qi_g = q_g[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
                     ki_g = k_g[:, length_i * num_shapelet_per_length: (length_i + 1) * num_shapelet_per_length]
 
@@ -546,15 +590,16 @@ class LearningShapeletsCL:
 
 
             loss_cca = 0.5 * torch.sum(q_square_sum - q_sum * q_sum / num_shapelet_lengths) + 0.5 * torch.sum(k_square_sum - k_sum * k_sum / num_shapelet_lengths)
-            # 原文
-            loss_csl = self.l3 * (loss_cca + self.l4 * loss_sdl)
-            loss += loss_csl
+            if not self._is_fedcsl_simclr_family():
+                # 原文
+                loss_csl = self.l3 * (loss_cca + self.l4 * loss_sdl)
+                loss += loss_csl
 
             # print("loss_cca: ",loss_cca.item())
             #print("loss_sdl: ",loss_sdl.item())
             #print("loss: ",loss.item())
 
-            if _is_fedcsl_like:
+            if _is_fedcsl_like and not self._is_fedcsl_simclr_family():
                 loss_global_CLKD_mutiscale = loss_global_CLKD_mutiscale * zeta *0.1
                 loss_local_jointCLKD =  loss_local_jointCLKD * gamma * 0.5
                 loss_local_CLKD_mutiscale   =loss_local_CLKD_mutiscale *gamma * 0.1
@@ -568,6 +613,9 @@ class LearningShapeletsCL:
                 #print("loss_sdl",loss_sdl.item())
                 #print("loss",loss)
                 #print("")
+
+            if self._is_fedcsl_simclr_family():
+                loss += loss_local_CLKD_mutiscale * gamma * 0.1
 
             if config.get('algo', 'fedcsl') == 'fedprox' and self.Global_Model != None:
 
@@ -822,5 +870,3 @@ class LearningShapeletsCL:
         preds = torch.cat(preds, 0)
 
         return preds.detach().numpy()
-
-

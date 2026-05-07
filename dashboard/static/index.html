@@ -282,6 +282,19 @@
     <div class="modal">
       <h3>启动脚本</h3>
       <div class="muted" id="launch-script-path" style="font-family: var(--mono); font-size: 12px;"></div>
+      <div id="launch-alpha-wrap" style="display:none">
+        <label>DIR_ALPHA</label>
+        <select id="launch-alpha" style="width:100%; background:#0b0f14; color:var(--text); border:1px solid var(--border); border-radius:5px; padding:8px 10px; font-size:13px; outline:none;">
+          <option value="__ALL__" selected>全部 DIR_ALPHA（0.05, 0.1, 0.3, 0.5, 1.0, 10.0）</option>
+          <option value="">使用脚本默认值</option>
+          <option value="0.05">0.05</option>
+          <option value="0.1">0.1</option>
+          <option value="0.3">0.3</option>
+          <option value="0.5">0.5</option>
+          <option value="1.0">1.0</option>
+          <option value="10.0">10.0</option>
+        </select>
+      </div>
       <label>附加参数 (空格分隔)</label>
       <input type="text" id="launch-args" placeholder="例: -dataset HAR" />
       <label>环境变量 (每行一个 KEY=VALUE)</label>
@@ -391,6 +404,26 @@ async function refreshGpus() {
 
 // ---------------- Scripts ----------------
 let scriptCache = [];
+const alphaChoices = ['0.05', '0.1', '0.3', '0.5', '1.0', '10.0'];
+const alphaScriptPrefixes = [
+  'scripts/fedavg_har.sh',
+  'scripts/fedprox_har.sh',
+  'scripts/scaffold_har.sh',
+  'scripts/fedproto_har.sh',
+  'scripts/simclr_har.sh',
+  'scripts/simsiam_har.sh',
+  'scripts/byol_har.sh',
+  'scripts/orchestra_har.sh',
+  'scripts/fedcsl_har.sh',
+  'scripts/fedcsl_simclr_har.sh',
+  'scripts/fedcsl_simclr_proj_har.sh',
+  'scripts/fedcsl_simclr_split_har.sh',
+  'scripts/fedcsl_onehot_har.sh',
+  'scripts/fedcsl_onehot_splitteacher_har.sh',
+];
+function supportsAlphaChoice(scriptPath) {
+  return alphaScriptPrefixes.includes(scriptPath);
+}
 async function refreshScripts() {
   const tbody = document.getElementById('scripts-body');
   try {
@@ -422,6 +455,8 @@ function openLaunchModal(idx) {
   document.getElementById('launch-desc').textContent = s.description || '(无说明)';
   document.getElementById('launch-args').value = '';
   document.getElementById('launch-env').value = '';
+  document.getElementById('launch-alpha').value = '__ALL__';
+  document.getElementById('launch-alpha-wrap').style.display = supportsAlphaChoice(s.path) ? 'block' : 'none';
   document.getElementById('launch-modal').style.display = 'flex';
   document.getElementById('launch-modal').dataset.script = s.path;
 }
@@ -432,19 +467,38 @@ async function doLaunch() {
   const script = document.getElementById('launch-modal').dataset.script;
   const argsRaw = document.getElementById('launch-args').value.trim();
   const envRaw = document.getElementById('launch-env').value.trim();
+  const alphaVal = document.getElementById('launch-alpha').value.trim();
   const args = argsRaw ? argsRaw.split(/\s+/) : [];
-  const env = {};
+  const envBase = {};
   for (const line of envRaw.split(/\n/)) {
     const t = line.trim();
     if (!t) continue;
     const eq = t.indexOf('=');
     if (eq <= 0) { toast(`环境变量格式错误: ${t}`, 'err'); return; }
-    env[t.slice(0, eq).trim()] = t.slice(eq + 1);
+    envBase[t.slice(0, eq).trim()] = t.slice(eq + 1);
   }
   try {
-    const run = await api('/runs', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({script, args, env}) });
+    const selectedAlphas = (supportsAlphaChoice(script) && alphaVal === '__ALL__')
+      ? alphaChoices
+      : (supportsAlphaChoice(script) && alphaVal ? [alphaVal] : []);
+    const launches = selectedAlphas.length ? selectedAlphas : [null];
+    const runs = [];
+    for (const alpha of launches) {
+      const env = { ...envBase };
+      if (alpha) env.DIR_ALPHA = alpha;
+      const run = await api('/runs', {
+        method: 'POST',
+        headers: {'content-type':'application/json'},
+        body: JSON.stringify({script, args, env})
+      });
+      runs.push(run);
+    }
     closeLaunchModal();
-    toast(`已启动 ${run.id} (pid ${run.pid})`);
+    if (runs.length === 1) {
+      toast(`已启动 ${runs[0].id} (pid ${runs[0].pid})`);
+    } else {
+      toast(`已启动 ${runs.length} 个任务：DIR_ALPHA=${selectedAlphas.join(', ')}`);
+    }
     switchTab('runs');
   } catch (e) {
     toast('启动失败: ' + e.message, 'err');

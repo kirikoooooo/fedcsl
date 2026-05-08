@@ -10,5 +10,5 @@ Suggested workflow:
    - period scoring / `UseACF: true`
 3. Only tune auxiliary choices such as `gamma`, `lr`, `wd`, `batch_size`,
    `beta`, alignment switches, local epoch count, and heterogeneity settings.
-4. Use `GATE_ACC` to tighten or relax the first-round screening threshold.
+4. Use `GATE_ACC` to tighten or relax the fifth-evaluation screening threshold.
 5. Review the latest section in this file after each batch run, then revise the YAML.

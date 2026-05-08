@@ -4,14 +4,15 @@
 Features
 --------
 - Runs dozens of candidate plans sequentially.
-- Stops a plan early if the first round/first global evaluation accuracy is below a threshold.
+- Stops a plan early if the fifth global evaluation accuracy is below a threshold.
 - Persists a markdown run history next to this script for later tuning.
 
 Notes
 -----
 Current project logs stable round-level global evaluations rather than per-local-epoch
-accuracies. Therefore the "first epoch" gate is implemented as "first global evaluation
-after round 0". This works uniformly for FedCSL / baseline_runner / ssl_runner paths.
+accuracies. Therefore the "fifth epoch" gate is implemented as "fifth global evaluation
+(typically round 4 if counting from 0)". This works uniformly for FedCSL /
+baseline_runner / ssl_runner paths.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ SUITE_DIR = Path(__file__).resolve().parent
 DEFAULT_PLANS = SUITE_DIR / "fedcsl_simclr_suite_plans.yml"
 DEFAULT_HISTORY = SUITE_DIR / "RUN_HISTORY.md"
 DEFAULT_LOG_DIR = SUITE_DIR / "logs"
+DEFAULT_GATE_EVAL_INDEX = 5
 
 ROUND_RE = re.compile(r"dataset:\s*(?P<dataset>.*?)round:(?P<round>\d+).*?testACC:(?P<test>[-+0-9.eE]+)")
 
@@ -275,7 +277,7 @@ def _run_plan(
     env.update(plan.env)
 
     started = time.time()
-    first_round: Optional[Dict[str, Any]] = None
+    round_results: List[Dict[str, Any]] = []
     status = "completed"
     reason = ""
 
@@ -305,17 +307,19 @@ def _run_plan(
             log_file.flush()
 
             parsed = _parse_round_result(line)
-            if parsed is not None and first_round is None:
-                first_round = parsed
-                if gate_acc is not None and parsed["test_acc"] < gate_acc:
-                    status = "early_stopped"
-                    reason = (
-                        f"first-round testACC={parsed['test_acc']:.4f} < gate={gate_acc:.4f}"
-                    )
-                    log_file.write(f"\n# early stop: {reason}\n")
-                    log_file.flush()
-                    _terminate_process_tree(proc)
-                    break
+            if parsed is not None:
+                round_results.append(parsed)
+                if len(round_results) == DEFAULT_GATE_EVAL_INDEX and gate_acc is not None:
+                    if parsed["test_acc"] < gate_acc:
+                        status = "early_stopped"
+                        reason = (
+                            f"eval#{DEFAULT_GATE_EVAL_INDEX} testACC={parsed['test_acc']:.4f} "
+                            f"< gate={gate_acc:.4f}"
+                        )
+                        log_file.write(f"\n# early stop: {reason}\n")
+                        log_file.flush()
+                        _terminate_process_tree(proc)
+                        break
 
         rc = proc.wait()
 
@@ -337,7 +341,8 @@ def _run_plan(
         "status": status,
         "reason": reason,
         "elapsed_sec": elapsed,
-        "first_round": first_round,
+        "gate_eval_index": DEFAULT_GATE_EVAL_INDEX,
+        "round_results_head": round_results[:DEFAULT_GATE_EVAL_INDEX],
         "log_path": _display_path(log_path),
     }
 
@@ -352,9 +357,13 @@ def _run_plan(
         f"- log: `{result['log_path']}`",
         f"- elapsed_sec: `{elapsed:.1f}`",
     ]
-    if first_round is not None:
+    if round_results:
+        head_text = ", ".join(
+            f"r{item['round']}={item['test_acc']:.4f}"
+            for item in round_results[:DEFAULT_GATE_EVAL_INDEX]
+        )
         history_block.append(
-            f"- first_round: round={first_round['round']} testACC={first_round['test_acc']:.4f}"
+            f"- first_{min(len(round_results), DEFAULT_GATE_EVAL_INDEX)}_evals: {head_text}"
         )
     if plan.notes:
         history_block.append(f"- notes: {plan.notes}")

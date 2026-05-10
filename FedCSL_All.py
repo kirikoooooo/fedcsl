@@ -69,6 +69,18 @@ args = parser.parse_args()
 
 _ACTIVE_RESULT_LOG = None
 _DEFAULT_EXCEPTHOOK = sys.excepthook
+_LOSS_KEYS = (
+    "total",
+    "base",
+    "structure",
+    "joint",
+    "scale",
+    "scale_local",
+    "scale_global",
+    "cca",
+    "sdl",
+    "proximal",
+)
 
 
 def _append_text_to_log(log_path, text):
@@ -77,6 +89,40 @@ def _append_text_to_log(log_path, text):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, mode="a+", encoding="utf-8") as f:
         f.write(text)
+
+
+def _normalize_loss_breakdown(loss_entry):
+    if isinstance(loss_entry, dict):
+        normalized = {key: float(loss_entry.get(key, 0.0) or 0.0) for key in _LOSS_KEYS}
+        normalized["primary_scale"] = int(loss_entry.get("primary_scale", -1))
+        return normalized
+
+    if isinstance(loss_entry, (list, tuple)):
+        normalized = {key: 0.0 for key in _LOSS_KEYS}
+        normalized["total"] = float(loss_entry[0]) if len(loss_entry) > 0 else 0.0
+        normalized["cca"] = float(loss_entry[2]) if len(loss_entry) > 2 else 0.0
+        normalized["sdl"] = float(loss_entry[3]) if len(loss_entry) > 3 else 0.0
+        normalized["primary_scale"] = int(loss_entry[4]) if len(loss_entry) > 4 else -1
+        return normalized
+
+    normalized = {key: 0.0 for key in _LOSS_KEYS}
+    normalized["total"] = float(loss_entry or 0.0)
+    normalized["primary_scale"] = -1
+    return normalized
+
+
+def _mean_loss_breakdown(losses):
+    if not losses:
+        return {**{key: 0.0 for key in _LOSS_KEYS}, "primary_scale": -1}
+
+    breakdowns = [_normalize_loss_breakdown(loss) for loss in losses]
+    means = {}
+    for key in _LOSS_KEYS:
+        value = float(np.mean([loss[key] for loss in breakdowns]))
+        means[key] = value if np.isfinite(value) else 0.0
+    primary_scales = [loss["primary_scale"] for loss in breakdowns if loss.get("primary_scale", -1) >= 0]
+    means["primary_scale"] = int(primary_scales[0]) if primary_scales else -1
+    return means
 
 
 def _format_exception_block(exc_type, exc_value, exc_traceback):
@@ -518,6 +564,7 @@ def _train_client_worker(
         result = {
             "idx": idx,
             "loss": 0.0,
+            "loss_breakdown": {key: 0.0 for key in _LOSS_KEYS},
             "state": None,
             "scale_indices": list(selected_scales),
             "scale_states": None,
@@ -560,13 +607,17 @@ def _train_client_worker(
                          epoch_idx=-1, lr=lr)
         if not losses:
             loss_all = 0.0
+            loss_breakdown = {key: 0.0 for key in _LOSS_KEYS}
         else:
-            loss_all = float(np.mean([loss[0] for loss in losses]))
+            loss_breakdown = _mean_loss_breakdown(losses)
+            loss_all = loss_breakdown["total"]
             if not np.isfinite(loss_all):
                 print(f"[warn] client {idx} loss NaN/Inf，置 0")
                 loss_all = 0.0
+                loss_breakdown["total"] = 0.0
 
         result["loss"] = loss_all
+        result["loss_breakdown"] = loss_breakdown
         result["state"] = _state_dict_to_cpu(c.model.state_dict())
         if use_scale_split_comm and result["scale_indices"]:
             result["scale_states"] = {
@@ -992,6 +1043,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     for round in range(start_round, numRound):
         round_t0 = time.perf_counter()
         avg_loss = 0.0
+        avg_loss_terms = {key: 0.0 for key in _LOSS_KEYS}
         client_losses = [0.0] * numClient  # 供 Oort 更新 reward
         client_scale_states = [None] * numClient
         client_scale_indices = [[] for _ in range(numClient)]
@@ -1033,8 +1085,12 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             for future in as_completed(futures):
                 for result in future.result():
                     idx = result["idx"]
+                    sample_weight = len(y_fed[idx]) / total_samples
                     client_losses[idx] = result["loss"]
-                    avg_loss += result["loss"] * len(y_fed[idx]) / total_samples
+                    avg_loss += result["loss"] * sample_weight
+                    breakdown = result.get("loss_breakdown") or {key: 0.0 for key in _LOSS_KEYS}
+                    for key in _LOSS_KEYS:
+                        avg_loss_terms[key] += float(breakdown.get(key, 0.0) or 0.0) * sample_weight
                     w_locals[idx] = result["state"]
                     if result.get("scale_indices"):
                         client_scale_indices[idx] = list(result["scale_indices"])
@@ -1140,10 +1196,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         )
 
         avg_loss_str = str(avg_loss) if np.isfinite(avg_loss) else "nan"
+        avg_loss_terms_str = " ".join(
+            f"{key}:{avg_loss_terms[key]:.6f}" if np.isfinite(avg_loss_terms[key]) else f"{key}:nan"
+            for key in _LOSS_KEYS
+        )
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(
                 f"dataset: {dataset}round:{round} server aggregation "
-                f" testACC:{test_acc} trainACC:{train_acc} avg_loss:{avg_loss_str}\n"
+                f" testACC:{test_acc} trainACC:{train_acc} avg_loss:{avg_loss_str} {avg_loss_terms_str}\n"
             )
             f.write(
                 f"[round {round}] timing train={train_stage_sec:.3f}s "

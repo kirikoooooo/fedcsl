@@ -284,6 +284,42 @@ class LearningShapeletsCL:
             for scale_idx, weight in zip(selected_scales, weights)
         }
 
+    @staticmethod
+    def _loss_record(
+        total,
+        *,
+        base=None,
+        structure=None,
+        joint=None,
+        scale=None,
+        scale_local=None,
+        scale_global=None,
+        cca=None,
+        sdl=None,
+        proximal=None,
+        primary_scale=-1,
+    ):
+        def _to_float(value):
+            if value is None:
+                return 0.0
+            if isinstance(value, torch.Tensor):
+                value = value.item()
+            return float(value)
+
+        return {
+            "total": _to_float(total),
+            "base": _to_float(base),
+            "structure": _to_float(structure),
+            "joint": _to_float(joint),
+            "scale": _to_float(scale),
+            "scale_local": _to_float(scale_local),
+            "scale_global": _to_float(scale_global),
+            "cca": _to_float(cca),
+            "sdl": _to_float(sdl),
+            "proximal": _to_float(proximal),
+            "primary_scale": int(primary_scale) if primary_scale is not None else -1,
+        }
+
     def _compute_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
         device = x_q.device
         selected_scales = self._normalize_scale_indices(
@@ -334,12 +370,28 @@ class LearningShapeletsCL:
         loss_global_CLKD_mutiscale = loss_global_CLKD_mutiscale / num_selected
         loss_local_CLKD_mutiscale = loss_local_CLKD_mutiscale / num_selected
 
-        loss += loss_global_CLKD_mutiscale * zeta * 0.1
-        loss += loss_local_jointCLKD * gamma * 0.5
-        loss += loss_local_CLKD_mutiscale * gamma * 0.1
+        scaled_global = loss_global_CLKD_mutiscale * zeta * 0.1
+        scaled_joint = loss_local_jointCLKD * gamma * 0.5
+        scaled_local = loss_local_CLKD_mutiscale * gamma * 0.1
+        loss += scaled_global
+        loss += scaled_joint
+        loss += scaled_local
 
         zero = torch.tensor(0.0, device=device)
-        return loss, zero, zero
+        breakdown = self._loss_record(
+            loss,
+            base=loss - scaled_global - scaled_joint - scaled_local,
+            structure=zero,
+            joint=scaled_joint,
+            scale=scaled_global + scaled_local,
+            scale_local=scaled_local,
+            scale_global=scaled_global,
+            cca=zero,
+            sdl=zero,
+            proximal=zero,
+            primary_scale=int(selected_scales[0]) if selected_scales else -1,
+        )
+        return loss, zero, zero, breakdown
 
 
 
@@ -429,14 +481,15 @@ class LearningShapeletsCL:
             zeta = 1 - gamma  # global
 
             if self._uses_selected_scale_algo():
-                loss, loss_cca, loss_sdl = self._compute_selected_scale_losses(
+                loss, loss_cca, loss_sdl, loss_breakdown = self._compute_selected_scale_losses(
                     x_q, x_k, selected_scale_indices, gamma, zeta, algo_name
                 )
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
                 primary_scale = int(selected_scale_indices[0]) if selected_scale_indices else -1
-                return [loss.item(), 0, loss_cca.item(), loss_sdl.item(), primary_scale], C_accu_q, c_normalising_factor_q, C_accu_k, c_normalising_factor_k
+                loss_breakdown["primary_scale"] = primary_scale
+                return loss_breakdown, C_accu_q, c_normalising_factor_q, C_accu_k, c_normalising_factor_k
 
             # q,k  =(8x320)
             q = self.model(x_q, optimize=None, masking=False)
@@ -452,6 +505,7 @@ class LearningShapeletsCL:
 
             # [基础项] 局部 InfoNCE (algo/contrastive/local_infonce.py)
             loss = local_infonce_loss(q, k, self.loss_func, self.T) * gamma
+            loss_base = loss.clone()
             loss_local_jointCLKD = torch.tensor(0.0, device=self.device)
 
             # 全局模型与本地模型的 Joint CL/KD
@@ -590,24 +644,28 @@ class LearningShapeletsCL:
 
 
             loss_cca = 0.5 * torch.sum(q_square_sum - q_sum * q_sum / num_shapelet_lengths) + 0.5 * torch.sum(k_square_sum - k_sum * k_sum / num_shapelet_lengths)
+            loss_structure = torch.tensor(0.0, device=self.device)
             if not self._is_fedcsl_simclr_family():
                 # 原文
-                loss_csl = self.l3 * (loss_cca + self.l4 * loss_sdl)
-                loss += loss_csl
+                loss_structure = self.l3 * (loss_cca + self.l4 * loss_sdl)
+                loss += loss_structure
 
             # print("loss_cca: ",loss_cca.item())
             #print("loss_sdl: ",loss_sdl.item())
             #print("loss: ",loss.item())
 
+            scaled_global_clkd = torch.tensor(0.0, device=self.device)
+            scaled_joint_clkd = torch.tensor(0.0, device=self.device)
+            scaled_local_clkd = torch.tensor(0.0, device=self.device)
             if _is_fedcsl_like and not self._is_fedcsl_simclr_family():
-                loss_global_CLKD_mutiscale = loss_global_CLKD_mutiscale * zeta *0.1
-                loss_local_jointCLKD =  loss_local_jointCLKD * gamma * 0.5
-                loss_local_CLKD_mutiscale   =loss_local_CLKD_mutiscale *gamma * 0.1
-                loss += loss_global_CLKD_mutiscale
+                scaled_global_clkd = loss_global_CLKD_mutiscale * zeta * 0.1
+                scaled_joint_clkd = loss_local_jointCLKD * gamma * 0.5
+                scaled_local_clkd = loss_local_CLKD_mutiscale * gamma * 0.1
+                loss += scaled_global_clkd
                 #print("loss_global_CLKD_mutiscale",loss_global_CLKD_mutiscale.item())
-                loss += loss_local_jointCLKD
+                loss += scaled_joint_clkd
                 #print("loss_local_jointCLKD:",loss_local_jointCLKD.item())
-                loss += loss_local_CLKD_mutiscale
+                loss += scaled_local_clkd
                 #print("loss_local_CLKD_mutiscale",loss_local_CLKD_mutiscale.item())
                 #print("loss_cca",loss_cca.item())
                 #print("loss_sdl",loss_sdl.item())
@@ -615,7 +673,10 @@ class LearningShapeletsCL:
                 #print("")
 
             if self._is_fedcsl_simclr_family():
-                loss += loss_local_CLKD_mutiscale * gamma * 0.1
+                scaled_local_clkd = loss_local_CLKD_mutiscale * gamma * 0.1
+                loss += scaled_local_clkd
+
+            loss_proximal = torch.tensor(0.0, device=self.device)
 
             if config.get('algo', 'fedcsl') == 'fedprox' and self.Global_Model != None:
 
@@ -623,7 +684,8 @@ class LearningShapeletsCL:
                 mu = 1e-5
                 for w, w_global in zip(self.model.parameters(), self.Global_Model.parameters()):
                     proximal_term += torch.norm(w - w_global, p=2) ** 2  # L2 范数平方
-                loss += (mu / 2) * proximal_term
+                loss_proximal = (mu / 2) * proximal_term
+                loss += loss_proximal
                 # print("loss_csl: ",loss_csl.item())
                 # print("proximal_term: ",(mu / 2) * proximal_term.item())
 
@@ -637,7 +699,20 @@ class LearningShapeletsCL:
             self.optimizer.step()
 
 
-        return [loss.item(), 0, loss_cca.item(), loss_sdl.item(), 0], C_accu_q, c_normalising_factor_q, C_accu_k, c_normalising_factor_k
+        loss_breakdown = self._loss_record(
+            loss,
+            base=loss_base,
+            structure=loss_structure,
+            joint=scaled_joint_clkd,
+            scale=scaled_global_clkd + scaled_local_clkd,
+            scale_local=scaled_local_clkd,
+            scale_global=scaled_global_clkd,
+            cca=loss_cca,
+            sdl=loss_sdl,
+            proximal=loss_proximal,
+            primary_scale=0,
+        )
+        return loss_breakdown, C_accu_q, c_normalising_factor_q, C_accu_k, c_normalising_factor_k
 
 
 
@@ -774,7 +849,8 @@ class LearningShapeletsCL:
 
 
             if not self.use_regularizer:
-                progress_bar.set_description(f"Loss: {current_loss_ce}")
+                loss_value = current_loss_ce["total"] if isinstance(current_loss_ce, dict) else current_loss_ce
+                progress_bar.set_description(f"Loss: {loss_value}")
             else:
                 if self.l1 > 0.0 and self.l2 > 0.0:
                     progress_bar.set_description(f"Loss CE: {current_loss_ce}, Loss dist: {current_loss_dist}, "

@@ -22,6 +22,7 @@ from algo.contrastive import (
     local_infonce_loss,
     joint_contrastive_loss,
     joint_distill_loss,
+    moon_contrastive_loss,
     scale_contrastive_loss,
     scale_distill_loss,
 )
@@ -120,6 +121,7 @@ class LearningShapeletsCL:
         self.C_accu_Server = None
         self.Q = None
         self.Global_Model = None
+        self.Previous_Model = None
         self.Selected_Scales = None
         self.Cached_Scale_Scores = None
 
@@ -138,6 +140,8 @@ class LearningShapeletsCL:
                         state[key] = value.to(self.device)
         if self.Global_Model is not None:
             self.Global_Model.to(self.device)
+        if self.Previous_Model is not None:
+            self.Previous_Model.to(self.device)
 
     def set_optimizer(self, optimizer):
         self.optimizer = optimizer
@@ -297,6 +301,7 @@ class LearningShapeletsCL:
         cca=None,
         sdl=None,
         proximal=None,
+        moon=None,
         primary_scale=-1,
     ):
         def _to_float(value):
@@ -317,6 +322,7 @@ class LearningShapeletsCL:
             "cca": _to_float(cca),
             "sdl": _to_float(sdl),
             "proximal": _to_float(proximal),
+            "moon": _to_float(moon),
             "primary_scale": int(primary_scale) if primary_scale is not None else -1,
         }
 
@@ -689,9 +695,23 @@ class LearningShapeletsCL:
                 # print("loss_csl: ",loss_csl.item())
                 # print("proximal_term: ",(mu / 2) * proximal_term.item())
 
-
-
-
+            loss_moon = torch.tensor(0.0, device=self.device)
+            if config.get('algo', 'fedcsl') == 'moon' and self.Global_Model is not None and self.Previous_Model is not None:
+                moon_cfg = config.get("moon", {}) or {}
+                moon_mu = float(moon_cfg.get("mu", 1.0))
+                moon_temperature = float(moon_cfg.get("temperature", self.T))
+                with torch.no_grad():
+                    q_g = self.Global_Model(x_q, optimize=None, masking=False)
+                    q_prev = self.Previous_Model(x_q, optimize=None, masking=False)
+                    q_g = nn.functional.normalize(q_g, dim=1)
+                    q_prev = nn.functional.normalize(q_prev, dim=1)
+                loss_moon = moon_contrastive_loss(
+                    q,
+                    q_g,
+                    q_prev,
+                    temperature=moon_temperature,
+                ) * moon_mu
+                loss += loss_moon
 
 
             self.optimizer.zero_grad()
@@ -710,6 +730,7 @@ class LearningShapeletsCL:
             cca=loss_cca,
             sdl=loss_sdl,
             proximal=loss_proximal,
+            moon=loss_moon,
             primary_scale=0,
         )
         return loss_breakdown, C_accu_q, c_normalising_factor_q, C_accu_k, c_normalising_factor_k

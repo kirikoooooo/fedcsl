@@ -9,8 +9,8 @@ model:
     l: 0.01
     beta: 0.4
     gamma: 0.5
-dataset: "AtrialFibrillation"
-algo: "fedcsl-onehot-splitteacher"
+dataset: "HAR"
+algo: "moon"
 federated:
   numClient: 3
   numRound: 200
@@ -20,20 +20,17 @@ federated:
   client_selection_ratio: 0.6
   checkpoint_every: 30
   auto_resume: True
-
-spilter:
-  # 每个客户端在 2 个基础尺度之外，由系统效率感知策略额外补发的尺度数量。
-  system_extra_scale_count: 2
-
 ablation:
-  UseJointKD: True
-  UseJointCL: True
-  UseScaleKD: True
-  UseScaleCL: True
+  UseJointKD: False
+  UseJointCL: False
+  UseScaleKD: False
+  UseScaleCL: False
   UseProdictor: False
   UseMTLHomo: False
-  UseACF: True
+  UseACF: False
   UseDistribution: False
-
+moon:
+  mu: 1.0
+  temperature: 0.5
 logPath: "./result/"
-description: "fedcsl-onehot-splitteacher"
+description: "moon"

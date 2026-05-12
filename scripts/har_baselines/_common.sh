@@ -56,6 +56,7 @@ HAR_PIDS=()
 BASELINES=(
   "fedavg:configAVG.yml"
   "fedprox:configFedProx.yml"
+  "moon:configMOON.yml"
   "scaffold:configSCAFFOLD.yml"
   "fedproto:configFedProto.yml"
   "simclr:configSimCLR.yml"

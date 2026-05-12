@@ -80,6 +80,7 @@ _LOSS_KEYS = (
     "cca",
     "sdl",
     "proximal",
+    "moon",
 )
 
 
@@ -421,7 +422,7 @@ def _plan_efficiency_aware_client_scales_from_scores(
     extra_scale_count=2,
     coverage_weight=0.35,
 ):
-    """每个 client 保留 2 个本地主尺度，再按系统效率补 2 个额外尺度。
+    """每个 client 保留 2 个本地主尺度，再按系统效率补若干个额外尺度。
 
     额外尺度的选择同时考虑三项：尺度覆盖均衡、该客户端的周期/能量得分、
     以及尺度参数量和滑窗计算量导致的系统成本。这样可避免额外分发总是偏向
@@ -478,6 +479,17 @@ def _plan_efficiency_aware_client_scales_from_scores(
     return client_selected, scale_counts
 
 
+def _spilter_system_extra_scale_count(config, default=2):
+    """读取 splitteacher 系统效率补发尺度数，兼容新旧配置写法。"""
+    spilter_cfg = config.get("spilter", {}) or {}
+    if "system_extra_scale_count" in spilter_cfg:
+        return max(0, int(spilter_cfg["system_extra_scale_count"]))
+    splitteacher_cfg = config.get("splitteacher", {}) or {}
+    if "extra_scale_count" in splitteacher_cfg:
+        return max(0, int(splitteacher_cfg["extra_scale_count"]))
+    return max(0, int(default))
+
+
 def _aggregate_scale_updates(server_state, client_scale_states, y_fed):
     """仅聚合每个尺度被上传的参数，其它参数保持 server 原值。"""
     out = {k: v.detach().cpu().clone() for k, v in server_state.items()}
@@ -522,6 +534,7 @@ def _train_client_worker(
     wd,
     use_scale_split_comm,
     server_state_cpu,
+    previous_client_states,
     beta,
     shared_kwargs,
     client_scale_plans,
@@ -532,7 +545,7 @@ def _train_client_worker(
 
     teacher = None
     algo_name = str(shared_kwargs.get("config", {}).get("algo", "fedcsl")).lower()
-    need_teacher = algo_name in ("fedcsl", "fedcsl-onehot", "fedcsl-onehot-splitteacher", "fedprox")
+    need_teacher = algo_name in ("fedcsl", "fedcsl-onehot", "fedcsl-onehot-splitteacher", "fedprox", "moon")
     if need_teacher and (round_idx != 0 or use_scale_split_comm):
         teacher = LearningShapeletsCL(**{**shared_kwargs, "device": device})
         _load_state_to_model(teacher.model, server_state_cpu)
@@ -552,6 +565,18 @@ def _train_client_worker(
 
         c.Q = len(y_fed[idx]) / total_samples if total_samples > 0 else 0.0
         c.Global_Model = teacher.model if round_idx != 0 and teacher is not None else None
+        previous_model = None
+        if algo_name == "moon" and round_idx != 0 and previous_client_states is not None:
+            previous_state = previous_client_states[idx] if idx < len(previous_client_states) else None
+            if previous_state is not None:
+                previous_model = LearningShapeletsCL(**{**shared_kwargs, "device": device})
+                _load_state_to_model(previous_model.model, previous_state)
+                previous_model.model.eval()
+                for p in previous_model.model.parameters():
+                    p.requires_grad_(False)
+        c.Previous_Model = previous_model.model if previous_model is not None else None
+        if algo_name == "moon":
+            _load_state_to_model(c.model, server_state_cpu)
         selected_scales = []
         if client_scale_plans is not None and idx < len(client_scale_plans):
             selected_scales = [int(scale_idx) for scale_idx in client_scale_plans[idx]]
@@ -578,6 +603,7 @@ def _train_client_worker(
             result["state"] = _state_dict_to_cpu(c.model.state_dict())
             result["skipped"] = True
             c.Global_Model = None
+            c.Previous_Model = None
             c.Selected_Scales = None
             c.Cached_Scale_Scores = None
             results.append(result)
@@ -625,6 +651,7 @@ def _train_client_worker(
                 for scale_idx in result["scale_indices"]
             }
         c.Global_Model = None
+        c.Previous_Model = None
         c.Selected_Scales = None
         c.Cached_Scale_Scores = None
         results.append(result)
@@ -753,6 +780,19 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     if args.description is not None:
         config['description'] = args.description
+    config['dataset'] = dataset
+    config.setdefault('federated', {})
+    config.setdefault('model', {}).setdefault('params', {})
+    config['federated']['dirichlet_alpha'] = dirichlet_alpha
+    config['federated']['use_client_selection'] = use_client_selection
+    config['federated']['client_selection_ratio'] = client_selection_ratio
+    config['federated']['min_selection_prob'] = min_selection_prob
+    config['federated']['ema_alpha'] = ema_alpha
+    config['federated']['client_selection_method'] = client_selection_method
+    config['federated']['client_workers'] = client_workers
+    config['federated']['client_gpus'] = client_gpu_ids
+    config['federated']['server_gpu'] = server_gpu
+    config['model']['params']['batch_size'] = batch_size
 
     desc_safe = _sanitize_filename(config.get('description', ''))
     formatted_date = datetime.now().strftime("%Y-%m-%d-%H") + desc_safe
@@ -786,6 +826,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         f"PID: {os.getpid()}",
         f"PPID: {os.getppid()}",
         f"argv: {' '.join(sys.argv)}",
+        f"effective_dataset: {dataset}",
+        f"effective_dirichlet_alpha: {dirichlet_alpha}",
         yaml.dump(config).replace('\n', ''),
     ]
     _append_text_to_log(logTxt, "\n".join(header_lines) + "\n")
@@ -1027,15 +1069,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             batch_size=batch_size,
         )
         if _is_splitteacher_algo(algo):
+            system_extra_scale_count = _spilter_system_extra_scale_count(config, default=2)
             cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
                 cached_client_scale_scores,
                 server.model,
-                extra_scale_count=2,
+                extra_scale_count=system_extra_scale_count,
             )
         scale_score_prep_sec = time.perf_counter() - scale_prep_t0
         prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
         if cached_scale_hist is not None:
-            prep_msg += f"; planned scale coverage: {cached_scale_hist.tolist()}"
+            prep_msg += f"; system_extra_scale_count={system_extra_scale_count}; planned scale coverage: {cached_scale_hist.tolist()}"
         print(prep_msg, flush=True)
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(prep_msg + "\n")
@@ -1077,6 +1120,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     wd,
                     use_scale_split_comm,
                     server_state_cpu,
+                    w_locals,
                     beta,
                     shared_kwargs,
                     client_scale_plans,

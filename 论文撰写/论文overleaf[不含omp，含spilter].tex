@@ -441,9 +441,72 @@ Spilter 不上传完整客户端模型，而是按尺度分片通信。第 $t$ �
 
 \section{理论分析}
 
-本节结合本文实现，给出若干关键模块的理论解释。我们强调，这里的目标并非在当前工程实现基础上给出过强的闭式最优性证明，而是从优化与表示学习角度说明所提设计的合理性。
+本节从表示信息、联邦漂移和系统效率三个角度解释 FedCSL-Spilter 的设计。本文不试图证明当前启发式尺度计划达到闭式全局最优，而是在温和假设下说明：全尺度 shapelet 训练存在信息冗余和系统拖尾；基础尺度保证每个客户端的最低信息完整性；效率感知补发是在有限通信与计算预算下对有效多尺度信息进行近似选择。
 
-\subsection{非 IID 下纯参数平均的局限}
+\subsection{多尺度 shapelet 表示的信息分解}
+
+设原始时间序列为随机变量 $X$，两种随机增强视图为 $X^{(1)}$ 和 $X^{(2)}$。二者共享潜在语义因子 $C$，例如类别相关局部形态、主导周期、跨通道耦合或长期依赖；增强过程主要引入不改变语义的扰动因子。多尺度 shapelet 编码器输出
+\begin{equation}
+Z=\left[Z^{(1)},Z^{(2)},\ldots,Z^{(R)}\right],
+\end{equation}
+其中 $Z^{(r)}$ 表示第 $r$ 个尺度上的 shapelet 响应。InfoNCE 型局部对比目标可以视为最大化跨增强共享信息的可优化下界，因此多尺度局部目标可写为
+\begin{equation}
+\max_{\theta}\sum_{r=1}^{R}\alpha_r\,
+I\!\left(Z^{(r)}(X^{(1)});Z^{(r)}(X^{(2)})\right).
+\label{eq:mi-multiscale}
+\end{equation}
+式~\eqref{eq:mi-multiscale} 表明，多尺度 shapelet 并非简单堆叠特征，而是在不同时间跨度上分别保留增强不变语义：短尺度偏向局部瞬时模式，中尺度刻画过渡动态，长尺度保留周期与长期依赖。FedCSL-Spilter 的尺度选择问题也因此可以理解为：在不能训练全部 $R$ 个尺度时，如何保留对 $C$ 最有价值的尺度子集。
+
+\subsection{尺度冗余、基础尺度与信息完整性}
+
+全尺度训练的直觉优势是覆盖面广，但相邻尺度往往提取高度相似的局部片段。若第 $i$ 个尺度已经给出表征 $Z^{(i)}$，新增相邻尺度 $j$ 的边际判别信息可以写为条件互信息
+\begin{equation}
+\Delta_{j\mid i}=I\!\left(Z^{(j)};Y\mid Z^{(i)}\right).
+\end{equation}
+由于时间序列在相近窗口长度上通常具有连续性，邻近尺度之间的响应相关性较高，因而常出现 $\Delta_{j\mid i}\approx 0$ 的边际收益递减。直接下发全尺度模型会提升 $I(X;Z)$ 和本地模型容量，却不一定显著提升 $I(Z;Y)$；在每个客户端样本有限且分布非 IID 的联邦场景中，过大的本地容量还可能放大局部过拟合和客户端漂移。由此，Spilter 的尺度子集可视为一种结构化正则化：它限制单个客户端每轮可拟合的尺度空间，同时通过跨客户端不同补充尺度形成多视图集成。
+
+为了避免子集训练导致弱客户端只学习局部片段或强客户端只学习长周期片段，FedCSL-Spilter 设置基础尺度集合 $\mathcal{B}_k$。记短尺度基础表征为 $Z_{\mathrm{short}}$，长周期基础表征为 $Z_{\mathrm{long}}$。短尺度主要覆盖高频局部形态，长尺度或 ACF 驱动尺度主要覆盖低频周期结构，二者在频域和时间跨度上具有互补性。根据互信息链式法则，
+\begin{equation}
+I(Z_{\mathrm{short}},Z_{\mathrm{long}};Y)
+=I(Z_{\mathrm{short}};Y)
+ + I(Z_{\mathrm{long}};Y\mid Z_{\mathrm{short}}).
+\end{equation}
+当两类尺度给定标签后的冗余较低，即 $I(Z_{\mathrm{short}};Z_{\mathrm{long}}\mid Y)$ 较小时，第二项不会被短尺度完全解释。于是基础尺度为每个客户端提供了一个表征能力下界：即使客户端只激活少量尺度，其梯度也同时包含局部形态和长周期语义，降低随机子集分发中表示坍塌和跨客户端特征不对齐的风险。
+
+\subsection{周期评分与受限预算下的信息选择}
+
+第~\ref{sec:period-score} 节中的 STFT--ACF 周期评分可以被看作尺度相关信息密度的代理。令 $P_k$ 表示客户端 $k$ 的周期/频谱结构因子，则尺度权重可解释为
+\begin{equation}
+\pi_{k,r}\propto I(P_k;Z_k^{(r)}).
+\end{equation}
+因此，加权多尺度损失
+\begin{equation}
+\sum_{r=1}^{R}\pi_{k,r}\mathcal{L}_{k,r}
+\end{equation}
+相当于把优化资源更多分配给与当前客户端主导周期更相关的尺度。
+
+在 Spilter 中，客户端 $k$ 只训练尺度子集 $\mathcal{R}_k$。若尺度 $r$ 的有效收益为 $u_{k,r}$，系统成本为 $c_r$，则理想尺度计划可抽象为预算约束信息选择问题：
+\begin{equation}
+\max_{\mathcal{R}_k\subseteq \{1,\ldots,R\}}
+\sum_{r\in\mathcal{R}_k}u_{k,r}
+\quad
+\mathrm{s.t.}\quad
+\sum_{r\in\mathcal{R}_k}c_r\leq B_k .
+\label{eq:budget-scale}
+\end{equation}
+式~\eqref{eq:spilter-score} 用 $\widehat{s}_{k,r}$ 近似 $u_{k,r}$，用 $\kappa_r$ 近似 $c_r$，从而按单位成本收益 $\widehat{s}_{k,r}/(\kappa_r+\varepsilon)$ 贪心补发额外尺度。若集合效用
+\begin{equation}
+F_k(\mathcal{R})=I(C_k;Z_{\mathcal{R}})
+\end{equation}
+近似满足单调性和边际收益递减，即对 $\mathcal{A}\subseteq\mathcal{B}$ 且 $r\notin\mathcal{B}$ 有
+\begin{equation}
+F_k(\mathcal{A}\cup\{r\})-F_k(\mathcal{A})
+\geq
+F_k(\mathcal{B}\cup\{r\})-F_k(\mathcal{B}),
+\end{equation}
+则按收益--成本比选择尺度可视为预算约束子模优化的贪心近似。该假设与多尺度 shapelet 的冗余现象相符：少量跨度互补的尺度通常能带来主要收益，继续加入相邻尺度的边际收益逐渐下降。
+
+\subsection{非 IID 表示漂移与局部--全局对齐}
 
 记客户端 $k$ 的局部目标为 $F_k(w)$，全局目标为
 \begin{equation}
@@ -453,68 +516,71 @@ F(w)=\sum_{k=1}^{K}p_k F_k(w),\qquad p_k=\frac{n_k}{N}.
 \begin{equation}
 \|\nabla F_k(w)-\nabla F(w)\|\leq \delta_k,
 \end{equation}
-则局部训练 $E$ 步后，客户端相对全局模型的漂移近似满足
+局部训练 $E$ 步后，客户端相对全局模型的漂移近似满足
 \begin{equation}
 \|w_k^{(t+1)}-w_g^{(t)}\|
 \leq \eta E\left(\|\nabla F(w_g^{(t)})\|+\delta_k\right)
  + O(\eta^2E^2).
 \end{equation}
-这说明当 $\delta_k$ 较大时，仅依赖局部训练和参数平均会导致显著客户端漂移\cite{fedprox,moon}。对表示学习任务而言，这种漂移不仅体现在分类精度下降上，更体现在嵌入空间结构失稳上\cite{fedu2,fedca}。
+这说明当 $\delta_k$ 较大时，仅依赖局部训练和参数平均会导致显著客户端漂移\cite{fedprox,moon}。对表示学习任务而言，这种漂移还会表现为各客户端嵌入空间的坐标系不一致\cite{fedu2,fedca}。
 
-\subsection{局部--全局蒸馏对客户端漂移的抑制}
-
-若在客户端目标中加入蒸馏约束
+FedCSL-Spilter 中的 joint CL/KD 与 scale CL/KD 可解释为对表示分布散度的约束。设客户端表示分布为 $P_k(Z)$，全局教师表示分布为 $P_g(Z)$，蒸馏项近似减小 $D_{\mathrm{KL}}(P_k(Z)\|P_g(Z))$。若下游损失 $\ell(Z)$ 关于表示为 $L$-Lipschitz，则
 \begin{equation}
-\mathcal{L}_{\text{KD}} = \mathbb{E}_{x\sim D_k} D\!\left(f(x;w_k), f(x;w_g)\right),
+\left|
+\mathbb{E}_{P_k}\ell(Z)-\mathbb{E}_{P_g}\ell(Z)
+\right|
+\leq
+L\cdot \mathrm{TV}\!\left(P_k(Z),P_g(Z)\right)
+\leq
+L\sqrt{\frac{1}{2}D_{\mathrm{KL}}\!\left(P_k(Z)\|P_g(Z)\right)} .
 \end{equation}
-其中 $D(\cdot,\cdot)$ 为非负散度，则客户端新的优化目标变为
+因此，局部--全局蒸馏通过降低表示分布散度收缩客户端风险与全局风险之间的偏差上界。逐尺度蒸馏进一步避免某些尺度偏差被整体表示平均掩盖；结构约束则惩罚 shapelet 通道协方差非对角项，降低尺度内冗余，提升表示空间的可用性。
+
+\subsection{系统效率、min--max 时延与误差界}
+
+全尺度联邦 shapelet 学习的系统瓶颈来自同步训练中的最慢客户端。设客户端 $k$ 的计算速度为 $p_k$，其被分配尺度集合的计算负载为
 \begin{equation}
-F_k^{\text{distill}}(w)=F_k(w)+\lambda D_k(w,w_g).
+C_k=\sum_{r\in\mathcal{R}_k}F_r,\qquad
+T_k^{\mathrm{comp}}=\frac{C_k}{p_k}.
 \end{equation}
-由于附加项在本地优化过程中显式惩罚偏离全局表示语义的解，因此新的局部解会更倾向于落在全局模型诱导的函数邻域内\cite{moon,fedx}。相比每轮直接用全局模型硬覆盖本地模型，这种做法保留了本地模型对客户端特有模式的适应能力，因此更适合时序数据的异构环境\cite{fedu2,flesd}。
-
-\subsection{多尺度蒸馏与结构约束的作用}
-
-设整体表示由 $R$ 个尺度组成，即
+一轮同步训练的实际等待时间近似为
 \begin{equation}
-z=[z^{(1)},z^{(2)},\dots,z^{(R)}].
+T_{\mathrm{round}}=
+\max_{k\in\{1,\ldots,K\}}
+\left(T_k^{\mathrm{comp}}+T_k^{\mathrm{comm}}\right).
+\label{eq:round-makespan}
 \end{equation}
-若只对整体表示施加约束，仅能保证 $D(z_k,z_g)$ 较小，却无法排除某些尺度偏差很大、另一些尺度偏差较小而在整体上被平均掩盖的情形。因此，逐尺度约束
+若所有客户端都训练完整 $R$ 个尺度，则慢设备的 $C_k$ 与强设备相同；当 $p_k$ 很小时，式~\eqref{eq:round-makespan} 会由该客户端主导。Spilter 将完整负载替换为尺度子集负载，并通过 $\kappa_r$ 惩罚高成本尺度，本质上是在近似求解
 \begin{equation}
-\sum_{r=1}^{R}\alpha_r D\!\left(z_k^{(r)}, z_g^{(r)}\right)
+\min_{\{\mathcal{R}_k\}_{k=1}^{K}}
+\max_k
+\left(
+\frac{\sum_{r\in\mathcal{R}_k}F_r}{p_k}
+T_k^{\mathrm{comm}}
+\right),
+\quad
+\mathrm{s.t.}\quad
+\mathcal{B}_k\subseteq\mathcal{R}_k,\ |\mathcal{R}_k|=m.
 \end{equation}
-能够提供更细粒度的误差控制。
+它不改变客户端选择问题，而是在给定参与客户端上降低被分发子模型的负载方差，从而改善 time-to-accuracy。
 
-另一方面，对尺度表示的协方差非对角项施加惩罚，本质上是在抑制不同 shapelet 通道之间的冗余，促使模型学习更加分散、更具有区分度的子模式。这有助于提高后续线性或核分类器对表示空间的利用效率。
-
-\subsection{周期感知加权的理论动机}
-
-设第 $r$ 个尺度的判别价值可由某种信息量指标 $I_r$ 衡量，则在固定总训练预算下，更合理的权重应满足“高价值尺度分配更大优化资源”的原则。若将总目标写为
-\begin{equation}
-\mathcal{L}=\sum_{r=1}^{R}\alpha_r \mathcal{L}_r,\qquad \sum_{r=1}^{R}\alpha_r=1,
-\end{equation}
-则当某些尺度包含更显著的周期模式时，提高其对应的 $\alpha_r$ 往往能更有效降低总体风险。第~\ref{sec:period-score} 节给出的 $\bm{\pi}$ 即此类代理的一种显式构造：STFT 分支捕获主频附近的短—中尺度能量，ACF 分支捕获长滞后峰值所暗示的长周期结构，二者经 $\beta$ 融合后得到与 shapelet 尺度对齐的权重。
-
-\subsection{Spilter 尺度分发的效率与误差分析}
-
-Spilter 可以视为对全尺度目标的结构化子采样。设第 $r$ 个尺度在客户端 $k$ 上诱导的局部损失为 $\mathcal{L}_{k,r}$，则全尺度训练对应
+另一方面，Spilter 可以视为对全尺度目标的结构化子采样。设
 \begin{equation}
 \mathcal{L}_{k}^{\mathrm{full}}=\sum_{r=1}^{R}\alpha_{k,r}\mathcal{L}_{k,r},
-\end{equation}
-而 Spilter 仅在 $\mathcal{R}_k$ 上优化
-\begin{equation}
+\qquad
 \mathcal{L}_{k}^{\mathrm{split}}=\sum_{r\in\mathcal{R}_k}\tilde{\alpha}_{k,r}\mathcal{L}_{k,r}.
 \end{equation}
-若 $\mathcal{R}_k$ 覆盖了客户端主要周期结构对应的高权重尺度，则两者差异可由未覆盖尺度的权重和控制。假设每个尺度损失有界 $0\leq\mathcal{L}_{k,r}\leq L_{\max}$，则有
+若每个尺度损失有界 $0\leq\mathcal{L}_{k,r}\leq L_{\max}$，则有
 \begin{equation}
 \left|\mathcal{L}_{k}^{\mathrm{full}}-\mathcal{L}_{k}^{\mathrm{split}}\right|
 \leq
 L_{\max}\sum_{r\notin\mathcal{R}_k}\alpha_{k,r}
  + \Delta_{\mathrm{renorm}},
+\label{eq:split-error-bound}
 \end{equation}
-其中 $\Delta_{\mathrm{renorm}}$ 表示对已选尺度重新归一化带来的误差。周期感知基础尺度用于减小高权重尺度遗漏概率，而式~\eqref{eq:spilter-score} 中的覆盖惩罚用于避免全局模型长期缺少某些尺度的更新。
+其中 $\Delta_{\mathrm{renorm}}$ 为已选尺度重新归一化引入的误差。基础尺度和周期评分的作用正是减小高权重尺度被遗漏的概率。
 
-从通信角度看，Spilter 的优势直接来自尺度分片。定义通信加速倍率
+从通信角度看，定义通信加速倍率
 \begin{equation}
 G_{\mathcal{C}}(t)=
 \frac{\mathcal{C}_{\mathrm{full}}(t)}
@@ -529,22 +595,27 @@ G_{\mathcal{C}}(t)\approx \frac{R}{m},
 \qquad
 1-\frac{1}{G_{\mathcal{C}}(t)}\approx 1-\frac{m}{R}.
 \end{equation}
-因此，在默认半量激活设置下，理论通信加速约为 $R/m$ 倍，等价于每轮双向通信量约下降一半。若长尺度参数量更大，效率感知补发通过 $\kappa_r$ 惩罚高成本尺度，可使实际通信倍率进一步高于均匀成本下的 $R/m$。FlexFL 的经验也表明，在异构联邦中，按资源生成或裁剪子模型可以显著降低通信与训练时间，而关键在于避免粗粒度、固定比例裁剪带来的性能损失\cite{flexfl,scalefl}。本文的尺度分发是在 shapelet 结构上的对应版本：不是裁剪通道或层，而是在多尺度词典中选择更适合当前客户端和系统预算的尺度子模型。
-
-从计算角度看，尺度 $r$ 的前向代价近似正比于 $M_rC\ell_r(T-\ell_r+1)$。同样定义计算加速倍率
+计算加速同理为
 \begin{equation}
 G_{\mathcal{F}}(t)=
 \frac{\mathcal{F}_{\mathrm{full}}(t)}
 {\mathcal{F}_{\mathrm{split}}(t)}
 =
 \frac{\sum_{k=1}^{K}n_k\sum_{r=1}^{R}F_r}
-{\sum_{k=1}^{K}n_k\sum_{r\in\mathcal{R}_k}F_r},
+{\sum_{k=1}^{K}n_k\sum_{r\in\mathcal{R}_k}F_r}.
 \end{equation}
-其中本地 epoch 因子在比值中抵消。若各尺度计算成本均匀，则 $G_{\mathcal{F}}(t)\approx R/m$；若长尺度更重，而 Spilter 倾向于补发单位收益--成本比更高的尺度，则 $\sum_{r\in\mathcal{R}_k}F_r$ 会低于随机补发的期望成本
+当长尺度更重，而 Spilter 倾向于补发单位收益--成本比更高的尺度时，$\sum_{r\in\mathcal{R}_k}F_r$ 会低于随机补发的期望成本，从而得到更大的 $G_{\mathcal{F}}(t)$。综上，FedCSL-Spilter 的统一目标可概括为
 \begin{equation}
-\mathbb{E}\left[\sum_{r\in\mathcal{R}_k^{\mathrm{rand}}}F_r\right],
+\max_{\{\mathcal{R}_k\},\theta}
+\sum_{k=1}^{K}
+\sum_{r\in\mathcal{R}_k}
+\pi_{k,r}
+I\!\left(Z_k^{(r,1)};Z_k^{(r,2)}\right)
+-\lambda D\!\left(P_k(Z)\|P_g(Z)\right)
+-\lambda_c\mathcal{C}_{\mathrm{split}}
+-\lambda_f\mathcal{F}_{\mathrm{split}},
 \end{equation}
-从而得到更大的 $G_{\mathcal{F}}(t)$。因此，效率感知补发等价于在有限本地计算预算下优先保留单位成本收益更高的尺度；它并不保证全局最优，但提供了一个与系统目标一致的贪心近似。当尺度效用估计较可靠、且各尺度收益满足边际递减趋势时，该策略比随机补发更容易获得较高的收益--成本比。
+其中 $\mathcal{B}_k\subseteq\mathcal{R}_k$ 且 $|\mathcal{R}_k|=m$。该形式体现了本文方法的核心折中：在非 IID 联邦环境中，优先保留和传递最稳定、最有价值、且最符合系统预算的多尺度语义信息。
 
 \section{实验设计}
 
@@ -653,6 +724,58 @@ G_{\mathcal{F}}(t)=
 
 消融实验用于回答“性能提升来自哪里”这一关键问题。具体而言，可依次关闭以下模块：joint CL、joint KD、scale CL、scale KD、ACF 周期感知加权和分布感知聚合。若关闭联合蒸馏后精度明显下降，则说明在非 IID 条件下特征层面对齐确实能够有效抑制客户端漂移；若关闭周期感知加权后多数据集平均精度下降，则说明不同尺度的区分性并不相同，统一等权并不是最优选择。
 
+\subsection{尺度冗余性与基础尺度有效性}
+
+为验证式~\eqref{eq:mi-multiscale} 所述的尺度冗余和基础尺度互补性，可在集中式或服务器侧评估环境下分别训练单尺度 shapelet 编码器，提取测试集表示后计算尺度间余弦相似度、互信息估计或 CKA 相似度。若相邻尺度相似度显著高于短尺度与长周期尺度之间的相似度，则说明全尺度模型存在边际信息冗余，而基础尺度选择能够以较少尺度覆盖更互补的频段。
+
+\begin{table*}[htbp]
+  \centering
+  \caption{预留实验：尺度冗余性与基础尺度互补性分析。CosSim/MI/CKA 可任选一种或多种相似度指标；Base Pair 对应 Spilter 默认基础尺度组合，Adjacent Avg. 表示相邻尺度平均相似度，Non-adjacent Avg. 表示非相邻尺度平均相似度。}
+  \label{tab:scale_redundancy_placeholder}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lcccccc}
+    \toprule
+    Dataset & Metric & Adjacent Avg. $\uparrow$ & Non-adjacent Avg. $\downarrow$ & Base Pair Similarity $\downarrow$ & Redundancy Gap $\uparrow$ & Observation \\
+    \midrule
+    HAR & CosSim / MI / CKA & TBD & TBD & TBD & TBD & TBD \\
+    Epilepsy & CosSim / MI / CKA & TBD & TBD & TBD & TBD & TBD \\
+    LSST & CosSim / MI / CKA & TBD & TBD & TBD & TBD & TBD \\
+    SleepEDF & CosSim / MI / CKA & TBD & TBD & TBD & TBD & TBD \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table*}
+
+\subsection{边际效用与结构化正则分析}
+
+为进一步验证“少量互补尺度即可逼近全尺度性能”的结论，可固定联邦划分和训练预算，逐步增加每客户端激活尺度数，并记录下游精度、参数量、FLOPs、通信量和相对全尺度精度。若精度在 $m=4$ 或 $m=5$ 附近进入平台期，而计算和通信继续显著上升，则支持尺度收益的边际递减假设；若子尺度设置在强 non-IID 下超过全尺度训练，则可进一步说明 Spilter 具有结构化正则化效果。
+
+\begin{table*}[htbp]
+  \centering
+  \caption{预留实验：尺度数量的边际效用分析。Rel.\ Acc. 表示相对全尺度训练的精度比例；FLOPs Ratio、Comm.\ Ratio 和 Param.\ Ratio 均以全尺度训练为 $1.00$。}
+  \label{tab:marginal_utility_placeholder}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{llcccccc}
+    \toprule
+    Dataset & Setting & \#Scales & Acc. / F1 & Rel.\ Acc. & FLOPs Ratio & Comm.\ Ratio & Param.\ Ratio \\
+    \midrule
+    HAR & Efficiency-aware & 1 & TBD & TBD & TBD & TBD & TBD \\
+    HAR & Efficiency-aware & 2 & TBD & TBD & TBD & TBD & TBD \\
+    HAR & Efficiency-aware & 4 & TBD & TBD & TBD & TBD & TBD \\
+    HAR & Full-scale & 6 / 8 & TBD & 1.00 & 1.00 & 1.00 & 1.00 \\
+    Epilepsy & Efficiency-aware & 1 & TBD & TBD & TBD & TBD & TBD \\
+    Epilepsy & Efficiency-aware & 2 & TBD & TBD & TBD & TBD & TBD \\
+    Epilepsy & Efficiency-aware & 4 & TBD & TBD & TBD & TBD & TBD \\
+    Epilepsy & Full-scale & 6 / 8 & TBD & 1.00 & 1.00 & 1.00 & 1.00 \\
+    LSST & Efficiency-aware & 1 & TBD & TBD & TBD & TBD & TBD \\
+    LSST & Efficiency-aware & 2 & TBD & TBD & TBD & TBD & TBD \\
+    LSST & Efficiency-aware & 4 & TBD & TBD & TBD & TBD & TBD \\
+    LSST & Full-scale & 6 / 8 & TBD & 1.00 & 1.00 & 1.00 & 1.00 \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table*}
+
 \subsection{非 IID 强度与收敛趋势分析}
 \begin{figure}[htbp]
     \centering
@@ -661,6 +784,36 @@ G_{\mathcal{F}}(t)=
     \label{fig:dirichlet}
 \end{figure}
 通过改变 Dirichlet 参数 $\alpha$（对应图~\ref{fig:dirichlet}），可以分析各方法在不同异构程度下的表现。当 $\alpha$ 较小时，客户端数据分布差异更大，此时若 Spilter 和局部--全局蒸馏机制依然能保持较好性能，则说明本文方法对联邦异构性具有较强鲁棒性。此外，还应给出 round 维度上的测试准确率曲线、平均损失曲线、每轮通信量和估计计算量，以展示尺度分发与多尺度蒸馏对收敛速度和训练稳定性的影响。
+
+\subsection{异构系统下的真实时间效率}
+
+除以通信轮数为横轴的收敛曲线外，还应在异构设备或模拟异构速度下报告真实挂钟时间。具体可比较 Full-scale FedCSL、Random-extra Spilter、Fixed-core Spilter 与 Efficiency-aware Spilter 在相同目标精度下的 time-to-accuracy，以及固定训练时长内可达到的最终精度。该实验直接对应式~\eqref{eq:round-makespan} 的 min--max 时延分析：全尺度训练通常受慢客户端拖累，而效率感知分发应通过降低慢客户端负载缩短每轮等待时间。
+
+\begin{table*}[htbp]
+  \centering
+  \caption{预留实验：异构系统下的 time-to-accuracy 与帕累托效率。Speed Profile 可设为真实设备、带宽日志或模拟速度分布；TTA 表示达到目标精度所需挂钟时间；Speedup 以 Full-scale FedCSL 为基准。}
+  \label{tab:wall_clock_placeholder}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{llcccccc}
+    \toprule
+    Dataset & Method & Speed Profile & Target Acc. & TTA (min) $\downarrow$ & Final Acc. / F1 $\uparrow$ & Avg.\ Round Time (s) $\downarrow$ & Speedup $\uparrow$ \\
+    \midrule
+    HAR & Full-scale FedCSL & TBD & TBD & TBD & TBD & TBD & 1.00$\times$ \\
+    HAR & Random-extra Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    HAR & Fixed-core Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    HAR & Efficiency-aware Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    Epilepsy & Full-scale FedCSL & TBD & TBD & TBD & TBD & TBD & 1.00$\times$ \\
+    Epilepsy & Random-extra Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    Epilepsy & Fixed-core Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    Epilepsy & Efficiency-aware Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    LSST & Full-scale FedCSL & TBD & TBD & TBD & TBD & TBD & 1.00$\times$ \\
+    LSST & Random-extra Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    LSST & Fixed-core Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    LSST & Efficiency-aware Spilter & TBD & TBD & TBD & TBD & TBD & TBD \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table*}
 
 \subsection{尺度分发参数 $m$ 的精度--效率平衡分析}
 

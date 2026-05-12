@@ -7,6 +7,7 @@ FedCSL 的 ``update_CL`` 由 4 个可独立开关的 loss 项组合而成，本�
 - ``local_infonce``：局部数据增强 InfoNCE (基础项，不受消融开关控制)
 - ``joint_cl``    : 全局↔本地 Joint InfoNCE (``ablation.UseJointCL``)
 - ``joint_kd``    : 全局↔本地 Joint KL 蒸馏 (``ablation.UseJointKD``)
+- ``moon``        : MOON model-level contrastive loss
 - ``scale_cl``    : 多尺度全局↔本地 InfoNCE (``ablation.UseScaleCL``)
 - ``scale_kd``    : 多尺度全局↔本地 KL 蒸馏 (``ablation.UseScaleKD``)
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 from .joint_cl import joint_contrastive_loss
 from .joint_kd import joint_distill_loss
 from .local_infonce import local_infonce_loss
+from .moon import moon_contrastive_loss
 from .primitives import direct_kl_loss, infonce_labels, infonce_logits
 from .scale_cl import scale_contrastive_loss
 from .scale_kd import scale_distill_loss
@@ -25,6 +27,7 @@ __all__ = [
     "local_infonce_loss",
     "joint_contrastive_loss",
     "joint_distill_loss",
+    "moon_contrastive_loss",
     "scale_contrastive_loss",
     "scale_distill_loss",
     "infonce_logits",

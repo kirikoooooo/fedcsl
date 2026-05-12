@@ -494,6 +494,34 @@ def _plan_uniform_single_client_scales(num_clients, model):
     return client_selected, scale_counts
 
 
+def _plan_global_score_random_single_client_scales(client_scores, y_fed, seed=None):
+    """按全局周期评分分布随机给每个 client 分配 1 个尺度。"""
+    num_clients = len(client_scores)
+    num_scales = len(client_scores[0]) if num_clients > 0 else 0
+    if num_scales <= 0:
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float32)
+
+    weights = np.asarray([len(y) for y in y_fed], dtype=np.float32)
+    if weights.size != num_clients or float(weights.sum()) <= 0:
+        weights = np.ones(num_clients, dtype=np.float32)
+    weights = weights / max(float(weights.sum()), 1e-8)
+
+    global_scores = np.zeros(num_scales, dtype=np.float32)
+    for cid, scores in enumerate(client_scores):
+        global_scores += weights[cid] * _normalize_scale_scores(scores, num_scales)
+    global_scores = np.nan_to_num(global_scores, nan=0.0, posinf=0.0, neginf=0.0)
+    if float(global_scores.sum()) <= 0:
+        probs = np.ones(num_scales, dtype=np.float32) / float(num_scales)
+    else:
+        probs = global_scores / float(global_scores.sum())
+
+    rng = np.random.default_rng(seed)
+    sampled = rng.choice(np.arange(num_scales), size=num_clients, replace=True, p=probs)
+    scale_counts = np.bincount(sampled, minlength=num_scales).astype(np.int64)
+    client_selected = [[int(scale_idx)] for scale_idx in sampled]
+    return client_selected, scale_counts, probs
+
+
 def _spilter_allocation_mode(config):
     spilter_cfg = config.get("spilter", {}) or {}
     mode = str(spilter_cfg.get("allocation_mode", "efficiency_aware")).strip().lower()
@@ -502,6 +530,11 @@ def _spilter_allocation_mode(config):
         "single": "uniform_single",
         "uniform-single": "uniform_single",
         "uniform_single_scale": "uniform_single",
+        "global": "global_score_random_single",
+        "global-score": "global_score_random_single",
+        "global_score": "global_score_random_single",
+        "score_random": "global_score_random_single",
+        "period_random": "global_score_random_single",
         "efficiency": "efficiency_aware",
         "efficiency-aware": "efficiency_aware",
     }
@@ -1087,6 +1120,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     cached_client_scale_scores = None
     cached_client_scale_plans = None
     cached_scale_hist = None
+    cached_global_scale_probs = None
     scale_score_prep_sec = 0.0
     spilter_allocation_mode = _spilter_allocation_mode(config) if _is_splitteacher_algo(algo) else None
     if _uses_fedcsl_scale_scores(algo):
@@ -1104,7 +1138,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 device=server_device,
                 batch_size=batch_size,
             )
-        if _is_splitteacher_algo(algo) and spilter_allocation_mode != "uniform_single":
+            if _is_splitteacher_algo(algo) and spilter_allocation_mode == "global_score_random_single":
+                cached_client_scale_plans, cached_scale_hist, cached_global_scale_probs = (
+                    _plan_global_score_random_single_client_scales(
+                        cached_client_scale_scores,
+                        y_fed,
+                        seed=original_seed or 42,
+                    )
+                )
+        if _is_splitteacher_algo(algo) and spilter_allocation_mode not in ("uniform_single", "global_score_random_single"):
             system_extra_scale_count = _spilter_system_extra_scale_count(config, default=2)
             cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
                 cached_client_scale_scores,
@@ -1114,12 +1156,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         scale_score_prep_sec = time.perf_counter() - scale_prep_t0
         if _is_splitteacher_algo(algo) and spilter_allocation_mode == "uniform_single":
             prep_msg = f"[fedcsl] planned uniform single-scale clients in {scale_score_prep_sec:.3f}s"
+        elif _is_splitteacher_algo(algo) and spilter_allocation_mode == "global_score_random_single":
+            prep_msg = f"[fedcsl] planned global-score random single-scale clients in {scale_score_prep_sec:.3f}s"
         else:
             prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
         if cached_scale_hist is not None:
             prep_msg += f"; spilter_allocation_mode={spilter_allocation_mode}"
-            if spilter_allocation_mode != "uniform_single":
+            if spilter_allocation_mode not in ("uniform_single", "global_score_random_single"):
                 prep_msg += f"; system_extra_scale_count={system_extra_scale_count}"
+            if cached_global_scale_probs is not None:
+                prep_msg += f"; global_scale_probs={np.round(cached_global_scale_probs, 4).tolist()}"
             prep_msg += f"; planned scale coverage: {cached_scale_hist.tolist()}"
         print(prep_msg, flush=True)
         with open(logTxt, mode="a+", encoding="utf-8") as f:

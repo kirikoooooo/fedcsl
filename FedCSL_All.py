@@ -479,6 +479,35 @@ def _plan_efficiency_aware_client_scales_from_scores(
     return client_selected, scale_counts
 
 
+def _plan_uniform_single_client_scales(num_clients, model):
+    """每个 client 只训练一个尺度，并按 client id 轮转均匀覆盖全部尺度。"""
+    num_scales = len(model.shapelets_size_and_len)
+    if num_scales <= 0:
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64)
+
+    client_selected = []
+    scale_counts = np.zeros(num_scales, dtype=np.int64)
+    for cid in range(num_clients):
+        scale_idx = int(cid % num_scales)
+        client_selected.append([scale_idx])
+        scale_counts[scale_idx] += 1
+    return client_selected, scale_counts
+
+
+def _spilter_allocation_mode(config):
+    spilter_cfg = config.get("spilter", {}) or {}
+    mode = str(spilter_cfg.get("allocation_mode", "efficiency_aware")).strip().lower()
+    aliases = {
+        "uniform": "uniform_single",
+        "single": "uniform_single",
+        "uniform-single": "uniform_single",
+        "uniform_single_scale": "uniform_single",
+        "efficiency": "efficiency_aware",
+        "efficiency-aware": "efficiency_aware",
+    }
+    return aliases.get(mode, mode)
+
+
 def _spilter_system_extra_scale_count(config, default=2):
     """读取 splitteacher 系统效率补发尺度数，兼容新旧配置写法。"""
     spilter_cfg = config.get("spilter", {}) or {}
@@ -1059,16 +1088,23 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     cached_client_scale_plans = None
     cached_scale_hist = None
     scale_score_prep_sec = 0.0
+    spilter_allocation_mode = _spilter_allocation_mode(config) if _is_splitteacher_algo(algo) else None
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
-        cached_client_scale_scores = _precompute_client_scale_scores(
-            X_fed,
-            server.model,
-            beta=beta,
-            device=server_device,
-            batch_size=batch_size,
-        )
-        if _is_splitteacher_algo(algo):
+        if _is_splitteacher_algo(algo) and spilter_allocation_mode == "uniform_single":
+            cached_client_scale_plans, cached_scale_hist = _plan_uniform_single_client_scales(
+                len(X_fed),
+                server.model,
+            )
+        else:
+            cached_client_scale_scores = _precompute_client_scale_scores(
+                X_fed,
+                server.model,
+                beta=beta,
+                device=server_device,
+                batch_size=batch_size,
+            )
+        if _is_splitteacher_algo(algo) and spilter_allocation_mode != "uniform_single":
             system_extra_scale_count = _spilter_system_extra_scale_count(config, default=2)
             cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
                 cached_client_scale_scores,
@@ -1076,9 +1112,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 extra_scale_count=system_extra_scale_count,
             )
         scale_score_prep_sec = time.perf_counter() - scale_prep_t0
-        prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
+        if _is_splitteacher_algo(algo) and spilter_allocation_mode == "uniform_single":
+            prep_msg = f"[fedcsl] planned uniform single-scale clients in {scale_score_prep_sec:.3f}s"
+        else:
+            prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
         if cached_scale_hist is not None:
-            prep_msg += f"; system_extra_scale_count={system_extra_scale_count}; planned scale coverage: {cached_scale_hist.tolist()}"
+            prep_msg += f"; spilter_allocation_mode={spilter_allocation_mode}"
+            if spilter_allocation_mode != "uniform_single":
+                prep_msg += f"; system_extra_scale_count={system_extra_scale_count}"
+            prep_msg += f"; planned scale coverage: {cached_scale_hist.tolist()}"
         print(prep_msg, flush=True)
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(prep_msg + "\n")

@@ -1,0 +1,33 @@
+model:
+  name: ''
+  params:
+    dist_measure: mix
+    lr: 0.05
+    batch_size: 8
+    wd: 0
+    ls: 1
+    l: 0.01
+    beta: 0.4
+    gamma: 0.5
+dataset: AtrialFibrillation
+algo: fedcsl
+federated:
+  numClient: 3
+  numRound: 5
+  numEpoch: 3
+  dirichlet_alpha: 1
+  use_client_selection: false
+  client_selection_ratio: 0.6
+  checkpoint_every: 30
+  auto_resume: true
+ablation:
+  UseJointKD: false
+  UseJointCL: false
+  UseScaleKD: true
+  UseScaleCL: true
+  UseProdictor: false
+  UseMTLHomo: false
+  UseACF: true
+  UseDistribution: false
+logPath: ./result/
+description: acf with select

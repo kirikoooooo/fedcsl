@@ -888,6 +888,14 @@ class LearningShapeletsCL:
         return losses_ce if not self.use_regularizer else (losses_ce, losses_dist, losses_sim) if self.l2 > 0.0 else (
         losses_ce, losses_dist)
 
+    @staticmethod
+    def _to_float_tensor(X):
+        if isinstance(X, torch.Tensor):
+            return X.float()
+        if isinstance(X, np.ndarray):
+            return torch.from_numpy(X.astype(np.float32, copy=False))
+        return torch.from_numpy(np.asarray(X, dtype=np.float32))
+
     def transform(self, X, *, batch_size=512, result_type='tensor', normalize=False):
         # 先检查输入数据是否为空（在转换为tensor之前）
         if isinstance(X, (list, tuple)):
@@ -901,7 +909,7 @@ class LearningShapeletsCL:
                 return np.array([]) if result_type == 'numpy' else torch.tensor([])
 
         if not isinstance(X, torch.Tensor):
-            X = torch.tensor(X, dtype=torch.float)
+            X = self._to_float_tensor(X)
 
         # 再次检查转换后的tensor是否为空
         if X.numel() == 0 or (len(X.shape) > 0 and X.shape[0] == 0):
@@ -943,7 +951,7 @@ class LearningShapeletsCL:
                 return np.array([])
 
         if not isinstance(X, torch.Tensor):
-            X = torch.tensor(X, dtype=torch.float)
+            X = self._to_float_tensor(X)
 
         # 再次检查转换后的tensor是否为空
         if X.numel() == 0 or (len(X.shape) > 0 and X.shape[0] == 0):

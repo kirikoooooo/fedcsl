@@ -61,6 +61,7 @@ BASELINES=(
   "fedproto:configFedProto.yml"
   "byol:configBYOL.yml"
   "orchestra:configOrchestra.yml"
+  "fedu2:configFedU2.yml"
   "fedcsl:configACF.yml"
   "spilter:configSpilter.yml"
 )

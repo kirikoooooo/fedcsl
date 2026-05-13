@@ -2,26 +2,23 @@ model:
   name: ""
   params:
     dist_measure: "mix"
-    lr: 0.05
-    batch_size: 8 # HAR baseline 统一：16
-    wd: 0
-    momentum: 0.0   # SCAFFOLD 原实现默认无 momentum
+    lr: 0.1
+    batch_size: 8
+    wd: 0.0001
+    momentum: 0.9
     ls: 1
     l: 0.01
     beta: 0.4
     gamma: 0.5
 dataset: "CharacterTrajectories"
-algo: "scaffold"
+algo: "fedu2"
 federated:
-  numClient: 3
+  numClient: 50
   numRound: 200
-  numEpoch: 3
+  numEpoch: 1
   dirichlet_alpha: 1
   use_client_selection: False
   client_selection_ratio: 0.6
-
-  checkpoint_every: 30  # 每 N 轮覆盖保存 resume checkpoint（0=关闭）
-  auto_resume: True     # 启动时若存在 resume ckpt 则自动续训
 ablation:
   UseJointKD: False
   UseJointCL: False
@@ -31,13 +28,20 @@ ablation:
   UseMTLHomo: False
   UseACF: False
   UseDistribution: False
-
-# SCAFFOLD 方法专属超参，移植自 FL-bench src/server/scaffold.py:get_hyperparams
-scaffold:
-  global_lr: 1.0   # 服务端步长 eta_g
-
+ssl:
+  temperature: 0.2
+  projector_hidden_dim: 256
+  projector_out_dim: 128
+  predictor_hidden_dim: 256
+  ema_tau: 0.99
+  fur_weight: 0.1
+  fur_tau_a: 0.8
+  fur_tau_b: 0.8
+  fur_num_steps: 5
+  server_lr: 0.1
+  sharpen_ratio: 0.1
 logPath: "./result/"
-description: "scaffold"
+description: "fedu2"
 
 evaluation:
   protocol: "svm"  # options: svm | linear_probe

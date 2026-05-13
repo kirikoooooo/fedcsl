@@ -761,42 +761,281 @@ def _train_client_worker(
 
 
 # ---------------------------------------------------------------------------
-# 下游 SVC 评估：在 [10^-4, 10^4] 的 9 个 C 里挑最优，再在测试集上评估
+# 下游评估：SVM / Linear Probe（二选一，可由 config.evaluation.protocol 控制）
 # ---------------------------------------------------------------------------
 _SVC_C_GRID = [10 ** i for i in range(-4, 5)]
 
 
-def eval(transformation, transformation_test, y_train, y_test):
-    """训练集自评估选 C（不做 CV，更快），然后在测试集评估。"""
-    best_acc, C_best = -1.0, _SVC_C_GRID[0]
-    for C in _SVC_C_GRID:
-        clf = SVC(C=C, random_state=42)
+def _to_numpy_labels(y):
+    if hasattr(y, "cpu"):
+        y = y.cpu().numpy()
+    return np.asarray(y)
+
+
+def _evaluation_config(config):
+    cfg = (config or {}).get("evaluation", {}) or {}
+    protocol = str(cfg.get("protocol", cfg.get("method", "svm"))).strip().lower()
+    aliases = {
+        "svc": "svm",
+        "linear": "linear_probe",
+        "linear-probe": "linear_probe",
+        "probe": "linear_probe",
+        "lp": "linear_probe",
+    }
+    protocol = aliases.get(protocol, protocol)
+    if protocol not in {"svm", "linear_probe"}:
+        protocol = "svm"
+
+    c_grid = cfg.get("svm_c_grid", _SVC_C_GRID)
+    if not isinstance(c_grid, (list, tuple)) or not c_grid:
+        c_grid = _SVC_C_GRID
+    c_grid = [float(v) for v in c_grid]
+
+    lp = cfg.get("linear_probe", {}) or {}
+    return {
+        "protocol": protocol,
+        "svm_c_grid": c_grid,
+        "linear_probe": {
+            "lr": float(lp.get("lr", 1e-3)),
+            "wd": float(lp.get("wd", 1e-4)),
+            "batch_size": int(lp.get("batch_size", 256)),
+            "max_epoch": int(lp.get("max_epoch", 200)),
+            "eval_interval": int(lp.get("eval_interval", 1)),
+            "seed": int(lp.get("seed", 42)),
+        },
+    }
+
+
+def _eval_svm_train_test(transformation, transformation_test, y_train, y_test, *, c_grid=None):
+    y_train = _to_numpy_labels(y_train)
+    y_test = _to_numpy_labels(y_test)
+    grid = c_grid or _SVC_C_GRID
+    best_acc, c_best = -1.0, grid[0]
+    for c in grid:
+        clf = SVC(C=float(c), random_state=42)
         clf.fit(transformation, y_train)
         acc = accuracy_score(clf.predict(transformation), y_train)
         if acc > best_acc:
-            best_acc, C_best = acc, C
-    clf = SVC(C=C_best, random_state=42)
+            best_acc, c_best = acc, float(c)
+    clf = SVC(C=c_best, random_state=42)
     clf.fit(transformation, y_train)
     train_acc = accuracy_score(clf.predict(transformation), y_train)
     test_acc = accuracy_score(clf.predict(transformation_test), y_test)
     return train_acc, test_acc
 
 
-def eval_TSTCC(transformation_train, transformation_test, transformation_val,
-               y_train, y_test, y_val):
-    """使用验证集选 C，再在测试集上评估（Epilepsy/SleepEDF/FD-A 等有 val.pt 的数据集）。"""
-    best_val_acc, C_best = -1.0, _SVC_C_GRID[0]
-    for C in _SVC_C_GRID:
-        clf = SVC(C=C, random_state=42)
+def _eval_svm_with_val(transformation_train, transformation_test, transformation_val, y_train, y_test, y_val, *, c_grid=None):
+    y_train = _to_numpy_labels(y_train)
+    y_test = _to_numpy_labels(y_test)
+    y_val = _to_numpy_labels(y_val)
+    grid = c_grid or _SVC_C_GRID
+    best_val_acc, c_best = -1.0, grid[0]
+    for c in grid:
+        clf = SVC(C=float(c), random_state=42)
         clf.fit(transformation_train, y_train)
         acc_i = accuracy_score(clf.predict(transformation_val), y_val)
         if acc_i > best_val_acc:
-            best_val_acc, C_best = acc_i, C
-    clf = SVC(C=C_best, random_state=42)
+            best_val_acc, c_best = acc_i, float(c)
+    clf = SVC(C=c_best, random_state=42)
     clf.fit(transformation_train, y_train)
     train_acc = accuracy_score(clf.predict(transformation_train), y_train)
     test_acc = accuracy_score(clf.predict(transformation_test), y_test)
     return train_acc, test_acc
+
+
+def _linear_probe_eval(
+    transformation_train,
+    transformation_test,
+    y_train,
+    y_test,
+    *,
+    transformation_val=None,
+    y_val=None,
+    params=None,
+):
+    params = params or {}
+    lr = float(params.get("lr", 1e-3))
+    wd = float(params.get("wd", 1e-4))
+    batch_size = max(4, int(params.get("batch_size", 256)))
+    max_epoch = max(1, int(params.get("max_epoch", 200)))
+    eval_interval = max(1, int(params.get("eval_interval", 1)))
+    seed = int(params.get("seed", 42))
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    x_train = torch.as_tensor(np.asarray(transformation_train), dtype=torch.float32)
+    x_test = torch.as_tensor(np.asarray(transformation_test), dtype=torch.float32)
+    y_train_np = _to_numpy_labels(y_train)
+    y_test_np = _to_numpy_labels(y_test)
+
+    classes = np.unique(y_train_np)
+    class_to_idx = {c: i for i, c in enumerate(classes.tolist())}
+    y_train_enc = torch.as_tensor([class_to_idx[c] for c in y_train_np.tolist()], dtype=torch.long)
+    y_test_enc = torch.as_tensor([class_to_idx[c] for c in y_test_np.tolist()], dtype=torch.long)
+
+    has_val = transformation_val is not None and y_val is not None
+    if has_val:
+        x_val = torch.as_tensor(np.asarray(transformation_val), dtype=torch.float32)
+        y_val_np = _to_numpy_labels(y_val)
+        y_val_enc = torch.as_tensor([class_to_idx[c] for c in y_val_np.tolist()], dtype=torch.long)
+    else:
+        x_val = None
+        y_val_enc = None
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    probe = nn.Linear(x_train.shape[1], len(classes)).to(device)
+    optimizer = optim.Adam(probe.parameters(), lr=lr, weight_decay=wd)
+    criterion = nn.CrossEntropyLoss()
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=max(10, max_epoch // 10), min_lr=1e-4
+    )
+
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(x_train, y_train_enc),
+        batch_size=max(4, min(batch_size, int(x_train.shape[0]))),
+        shuffle=True,
+        drop_last=False,
+    )
+
+    best_metric = -1.0
+    best_state = copy.deepcopy(probe.state_dict())
+
+    def _accuracy(x_tensor, y_tensor):
+        probe.eval()
+        preds = []
+        labels = []
+        eval_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(x_tensor, y_tensor),
+            batch_size=max(4, min(batch_size, int(x_tensor.shape[0]))),
+            shuffle=False,
+            drop_last=False,
+        )
+        with torch.no_grad():
+            for xb, yb in eval_loader:
+                xb = xb.to(device)
+                logits = probe(xb)
+                preds.append(torch.argmax(logits, dim=1).cpu())
+                labels.append(yb.cpu())
+        pred = torch.cat(preds).numpy()
+        label = torch.cat(labels).numpy()
+        return accuracy_score(label, pred)
+
+    for epoch in range(max_epoch):
+        probe.train()
+        epoch_losses = []
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            logits = probe(xb)
+            loss = criterion(logits, yb)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            epoch_losses.append(float(loss.detach().cpu()))
+        scheduler.step(float(np.mean(epoch_losses)) if epoch_losses else 0.0)
+
+        if (epoch + 1) % eval_interval != 0 and epoch + 1 != max_epoch:
+            continue
+        metric = _accuracy(x_val, y_val_enc) if has_val else _accuracy(x_train, y_train_enc)
+        if metric >= best_metric:
+            best_metric = float(metric)
+            best_state = copy.deepcopy(probe.state_dict())
+
+    probe.load_state_dict(best_state)
+    train_acc = _accuracy(x_train, y_train_enc)
+    test_acc = _accuracy(x_test, y_test_enc)
+    return train_acc, test_acc
+
+
+def _make_downstream_eval_fns(config):
+    eval_cfg = _evaluation_config(config)
+    protocol = eval_cfg["protocol"]
+
+    if protocol == "linear_probe":
+        lp_params = eval_cfg["linear_probe"]
+
+        def eval_train_test_fn(transformation, transformation_test, y_train, y_test):
+            return _linear_probe_eval(
+                transformation,
+                transformation_test,
+                y_train,
+                y_test,
+                params=lp_params,
+            )
+
+        def eval_tstcc_fn(transformation_train, transformation_test, transformation_val, y_train, y_test, y_val):
+            return _linear_probe_eval(
+                transformation_train,
+                transformation_test,
+                y_train,
+                y_test,
+                transformation_val=transformation_val,
+                y_val=y_val,
+                params=lp_params,
+            )
+
+        desc = (
+            f"linear_probe(lr={lp_params['lr']}, wd={lp_params['wd']}, "
+            f"batch={lp_params['batch_size']}, epoch={lp_params['max_epoch']})"
+        )
+        return eval_train_test_fn, eval_tstcc_fn, desc
+
+    svm_grid = eval_cfg["svm_c_grid"]
+
+    def eval_train_test_fn(transformation, transformation_test, y_train, y_test):
+        return _eval_svm_train_test(
+            transformation,
+            transformation_test,
+            y_train,
+            y_test,
+            c_grid=svm_grid,
+        )
+
+    def eval_tstcc_fn(transformation_train, transformation_test, transformation_val, y_train, y_test, y_val):
+        return _eval_svm_with_val(
+            transformation_train,
+            transformation_test,
+            transformation_val,
+            y_train,
+            y_test,
+            y_val,
+            c_grid=svm_grid,
+        )
+
+    return eval_train_test_fn, eval_tstcc_fn, f"svm(C_grid={svm_grid})"
+
+
+def eval(transformation, transformation_test, y_train, y_test, evaluation_cfg=None):
+    cfg = evaluation_cfg or {"protocol": "svm", "svm_c_grid": _SVC_C_GRID, "linear_probe": {}}
+    if cfg.get("protocol") == "linear_probe":
+        return _linear_probe_eval(transformation, transformation_test, y_train, y_test, params=cfg.get("linear_probe"))
+    return _eval_svm_train_test(transformation, transformation_test, y_train, y_test, c_grid=cfg.get("svm_c_grid"))
+
+
+def eval_TSTCC(transformation_train, transformation_test, transformation_val,
+               y_train, y_test, y_val, evaluation_cfg=None):
+    cfg = evaluation_cfg or {"protocol": "svm", "svm_c_grid": _SVC_C_GRID, "linear_probe": {}}
+    if cfg.get("protocol") == "linear_probe":
+        return _linear_probe_eval(
+            transformation_train,
+            transformation_test,
+            y_train,
+            y_test,
+            transformation_val=transformation_val,
+            y_val=y_val,
+            params=cfg.get("linear_probe"),
+        )
+    return _eval_svm_with_val(
+        transformation_train,
+        transformation_test,
+        transformation_val,
+        y_train,
+        y_test,
+        y_val,
+        c_grid=cfg.get("svm_c_grid"),
+    )
 
 
 def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, to_cuda=True,
@@ -839,6 +1078,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     dataset = args.dataset if args.dataset is not None else config.get('dataset', dataset)
     dist_measure = model_cfg['dist_measure']
+    eval_train_test_fn, eval_tstcc_fn, eval_protocol_desc = _make_downstream_eval_fns(config)
+    print(f"downstream evaluation: {eval_protocol_desc}")
     lr = model_cfg['lr']
     batch_size = args.batch_size if args.batch_size is not None else model_cfg['batch_size']
     wd = model_cfg['wd']
@@ -1008,14 +1249,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             to_cuda=to_cuda,
             logTxt=logTxt,
             formatted_date=formatted_date,
-            eval_train_test_fn=eval,
-            eval_tstcc_fn=eval_TSTCC,
+            eval_train_test_fn=eval_train_test_fn,
+            eval_tstcc_fn=eval_tstcc_fn,
             save_model_fn=save_model,
         )
         return
 
-    # 无监督联邦表征基线：BYOL / Orchestra 复用当前 shapelet backbone 与 SVM 评估。
-    if algo.lower() in ('byol', 'orchestra'):
+    # 无监督联邦表征基线：BYOL / Orchestra / FedU2 复用当前 shapelet backbone 与 SVM 评估。
+    if algo.lower() in ('byol', 'orchestra', 'fedu2', 'fedu2-byol'):
         from algo.ssl_runner import run_ssl_baseline
         run_ssl_baseline(
             algo=algo.lower(),
@@ -1038,8 +1279,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             to_cuda=to_cuda,
             logTxt=logTxt,
             formatted_date=formatted_date,
-            eval_train_test_fn=eval,
-            eval_tstcc_fn=eval_TSTCC,
+            eval_train_test_fn=eval_train_test_fn,
+            eval_tstcc_fn=eval_tstcc_fn,
             save_model_fn=save_model,
         )
         return
@@ -1360,14 +1601,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             transformation_val = server.transform(X_val, result_type='numpy', normalize=True, batch_size=batch_size)
             transformation_val = scaler.transform(transformation_val)
             y_val_np = y_val.cpu().numpy() if hasattr(y_val, 'cpu') else np.asarray(y_val)
-            train_acc, test_acc = eval_TSTCC(
+            train_acc, test_acc = eval_tstcc_fn(
                 transformation_train=transformation,
                 transformation_test=transformation_test,
                 transformation_val=transformation_val,
                 y_train=y_all, y_test=y_test, y_val=y_val_np,
             )
         else:
-            train_acc, test_acc = eval(transformation, transformation_test, y_train=y_all, y_test=y_test)
+            train_acc, test_acc = eval_train_test_fn(transformation, transformation_test, y_train=y_all, y_test=y_test)
         eval_stage_sec = time.perf_counter() - eval_stage_t0
         round_total_sec = time.perf_counter() - round_t0
 

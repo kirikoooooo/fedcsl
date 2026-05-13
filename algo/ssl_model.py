@@ -2,7 +2,7 @@
 
 目标：
 - 复用 FedCSL 现有的 shapelet encoder，保证 backbone 一致；
-- 在 encoder 之后接 projector / predictor，支持 BYOL；
+- 在 encoder 之后接 projector / predictor，支持 BYOL / FedU2；
 - 暴露 ``transform()`` / ``get_last_features()``，复用现有下游 SVM 评估协议。
 """
 
@@ -47,7 +47,7 @@ class ShapeletSSLModel(nn.Module):
     ) -> None:
         super().__init__()
         method = str(method).lower()
-        if method != "byol":
+        if method not in {"byol", "fedu2"}:
             raise ValueError(f"unsupported ssl method: {method}")
         self.method = method
 
@@ -75,7 +75,7 @@ class ShapeletSSLModel(nn.Module):
         )
         self.predictor = _make_mlp(projector_out_dim, predictor_hidden_dim, projector_out_dim, final_bn=False)
 
-        # BYOL 的 momentum target，不参与联邦聚合。
+        # BYOL / FedU2 的 momentum target，不参与联邦聚合。
         self.target_encoder = copy.deepcopy(self.encoder)
         self.target_projector = copy.deepcopy(self.projector)
         for p in self.target_encoder.parameters():

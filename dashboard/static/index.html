@@ -29,6 +29,9 @@
     header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.5px; }
     header .project { font-family: var(--mono); color: var(--muted); font-size: 12px; }
     header .spacer { flex: 1; }
+    #stop-all-btn { padding: 8px 18px; font-weight: 600; font-size: 13px; border-radius: 6px; cursor: pointer; transition: opacity 0.2s; }
+    #stop-all-btn.show { display: inline-flex !important; align-items: center; gap: 6px; }
+    #stop-all-btn .count { background: rgba(255,255,255,0.25); padding: 2px 8px; border-radius: 10px; font-size: 12px; min-width: 24px; text-align: center; }
     nav button {
       background: transparent; color: var(--muted); border: 1px solid transparent; padding: 6px 12px;
       border-radius: 6px; cursor: pointer; font-size: 13px;
@@ -149,6 +152,9 @@
     <h1>FedCSL Dashboard</h1>
     <span class="project" id="project-root">loading…</span>
     <span class="spacer"></span>
+    <button id="stop-all-btn" class="btn danger" onclick="stopAllRuns()" style="display:none">
+      ⏹ 一键停止 <span class="count" id="running-count">0</span>
+    </button>
     <nav>
       <button data-tab="gpus" class="active">GPU 监控</button>
       <button data-tab="scripts">脚本</button>
@@ -859,6 +865,36 @@ async function stopSelected() {
   } catch (e) { toast('终止失败: ' + e.message, 'err'); }
 }
 
+async function stopAllRuns() {
+  const count = parseInt(document.getElementById('running-count').textContent || '0');
+  if (count === 0) { toast('没有正在运行的任务'); return; }
+  if (!confirm(`确定终止全部 ${count} 个正在运行的任务？`)) return;
+  try {
+    const res = await api('/runs/stop-all', { method: 'POST' });
+    toast(`已终止 ${res.stopped.length} 个任务` + (res.failed.length ? `，${res.failed.length} 个失败` : ''));
+    updateRunningCount();
+    refreshRuns();
+  } catch (e) { toast('终止失败: ' + e.message, 'err'); }
+}
+
+async function updateRunningCount() {
+  try {
+    const runs = await api('/runs');
+    const running = runs.filter(r => r.status === 'running');
+    const count = running.length;
+    const btn = document.getElementById('stop-all-btn');
+    const cnt = document.getElementById('running-count');
+    cnt.textContent = count;
+    if (count > 0) {
+      btn.style.display = '';
+      btn.classList.add('show');
+    } else {
+      btn.style.display = 'none';
+      btn.classList.remove('show');
+    }
+  } catch {}
+}
+
 async function resumeSelected() {
   if (!selectedRun) return;
   const r = runsCache.find(x => x.id === selectedRun);
@@ -988,6 +1024,8 @@ async function deleteSelectedWeight() {
 }
 
 // ---------------- 自动刷新 ----------------
+setInterval(() => { updateRunningCount(); }, 3000);
+updateRunningCount();
 setInterval(() => {
   if (document.getElementById('tab-gpus').style.display !== 'none'
       && document.getElementById('gpu-auto').checked) refreshGpus();

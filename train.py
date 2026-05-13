@@ -327,6 +327,11 @@ class LearningShapeletsCL:
         }
 
     def _compute_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
+        if self._spilter_selected_scale_training_mode() == "stitched":
+            return self._compute_stitched_selected_scale_losses(
+                x_q, x_k, scale_indices, gamma, zeta, algo_name
+            )
+
         device = x_q.device
         selected_scales = self._normalize_scale_indices(
             scale_indices, len(self.shapelets_size_and_len)
@@ -395,6 +400,106 @@ class LearningShapeletsCL:
             cca=zero,
             sdl=zero,
             proximal=zero,
+            primary_scale=int(selected_scales[0]) if selected_scales else -1,
+        )
+        return loss, zero, zero, breakdown
+
+    def _spilter_selected_scale_training_mode(self):
+        spilter_cfg = self.config.get("spilter", {}) or {}
+        mode = str(spilter_cfg.get("selected_scale_training", "per_scale")).strip().lower()
+        aliases = {
+            "concat": "stitched",
+            "cat": "stitched",
+            "stitched_local": "stitched",
+            "local_submodel": "stitched",
+            "per-scale": "per_scale",
+            "scale": "per_scale",
+        }
+        return aliases.get(mode, mode)
+
+    def _encode_stitched_scales(self, model, x, selected_scales):
+        parts = [model.encode_scale(x, scale_idx, masking=False) for scale_idx in selected_scales]
+        return torch.cat(parts, dim=1)
+
+    def _compute_stitched_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
+        device = x_q.device
+        selected_scales = self._normalize_scale_indices(
+            scale_indices, len(self.shapelets_size_and_len)
+        )
+        if not selected_scales:
+            selected_scales = [0]
+        scale_weights = self._selected_scale_loss_weights(selected_scales)
+
+        q = self._encode_stitched_scales(self.model, x_q, selected_scales)
+        k = self._encode_stitched_scales(self.model, x_k, selected_scales)
+        q = nn.functional.normalize(q, dim=1)
+        k = nn.functional.normalize(k, dim=1)
+
+        loss_base = local_infonce_loss(q, k, self.loss_func, self.T) * gamma
+        loss = loss_base.clone()
+        loss_local_jointCLKD = torch.tensor(0.0, device=device)
+        loss_global_CLKD_mutiscale = torch.tensor(0.0, device=device)
+        loss_local_CLKD_mutiscale = torch.tensor(0.0, device=device)
+
+        if self.Global_Model is not None:
+            q_g = self._encode_stitched_scales(self.Global_Model, x_q, selected_scales)
+            k_g = self._encode_stitched_scales(self.Global_Model, x_k, selected_scales)
+            q_g = nn.functional.normalize(q_g, dim=1)
+            k_g = nn.functional.normalize(k_g, dim=1)
+
+            if self.config["ablation"]["UseJointCL"]:
+                loss_local_jointCLKD += joint_contrastive_loss(q_g, k, self.loss_func, self.T)
+            if self.config["ablation"]["UseJointKD"]:
+                loss_local_jointCLKD += joint_distill_loss(q, q_g, k, k_g, zeta)
+
+        # Optional scale-wise auxiliary terms keep each selected slice aligned while
+        # the primary local/teacher model is the stitched submodel representation.
+        for scale_idx in selected_scales:
+            qi = self.model.encode_scale(x_q, scale_idx, masking=False)
+            ki = self.model.encode_scale(x_k, scale_idx, masking=False)
+            qi = nn.functional.normalize(qi, dim=1)
+            ki = nn.functional.normalize(ki, dim=1)
+            scale_weight = scale_weights.get(int(scale_idx), 5.0)
+            loss_local_CLKD_mutiscale += local_infonce_loss(qi, ki, self.loss_func, self.T) * scale_weight
+
+            if self.Global_Model is not None:
+                qi_g = self.Global_Model.encode_scale(x_q, scale_idx, masking=False)
+                ki_g = self.Global_Model.encode_scale(x_k, scale_idx, masking=False)
+                qi_g = nn.functional.normalize(qi_g, dim=1)
+                ki_g = nn.functional.normalize(ki_g, dim=1)
+                if self.config["ablation"]["UseScaleCL"]:
+                    loss_global_CLKD_mutiscale += scale_contrastive_loss(
+                        qi_g, ki, self.loss_func, self.T, weight=5.0
+                    )
+                if self.config["ablation"]["UseScaleKD"]:
+                    loss_global_CLKD_mutiscale += scale_distill_loss(
+                        qi_g, qi, ki_g, ki, weight=5.0, zeta=zeta
+                    )
+
+        num_selected = float(len(selected_scales))
+        loss_local_CLKD_mutiscale = loss_local_CLKD_mutiscale / num_selected
+        loss_global_CLKD_mutiscale = loss_global_CLKD_mutiscale / num_selected
+
+        scaled_global = loss_global_CLKD_mutiscale * zeta * 0.1
+        scaled_joint = loss_local_jointCLKD * gamma * 0.5
+        scaled_local = loss_local_CLKD_mutiscale * gamma * 0.1
+        loss += scaled_global
+        loss += scaled_joint
+        loss += scaled_local
+
+        zero = torch.tensor(0.0, device=device)
+        breakdown = self._loss_record(
+            loss,
+            base=loss_base,
+            structure=zero,
+            joint=scaled_joint,
+            scale=scaled_global + scaled_local,
+            scale_local=scaled_local,
+            scale_global=scaled_global,
+            cca=zero,
+            sdl=zero,
+            proximal=zero,
+            moon=zero,
             primary_scale=int(selected_scales[0]) if selected_scales else -1,
         )
         return loss, zero, zero, breakdown

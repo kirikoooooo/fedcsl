@@ -74,7 +74,7 @@ def check_dataset(dataset_name="SleepEDF"):
         print(f"   文件大小: {format_size(file_size)}")
         
         try:
-            data = torch.load(path, map_location='cpu')
+            data = torch.load(path, map_location='cpu', weights_only=True)
             
             if isinstance(data, dict):
                 if 'samples' in data and 'labels' in data:

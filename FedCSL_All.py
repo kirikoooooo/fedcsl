@@ -944,25 +944,25 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     if dataset == "HAR":
         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_HAR(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
         if os.path.isfile("./HAR/val.pt"):
-            val_data = torch.load("./HAR/val.pt")
+            val_data = torch.load("./HAR/val.pt", weights_only=True)
             X_val = val_data["samples"].float()
             y_val = val_data["labels"].int()
             has_val = True
     elif dataset == "Epilepsy-TSTCC":
         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_Epilepsy(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
-        val_data = torch.load("./Epilepsy/val.pt")
+        val_data = torch.load("./Epilepsy/val.pt", weights_only=True)
         X_val = val_data["samples"].float()
         y_val = val_data["labels"].int()
         has_val = True
     elif dataset == "SleepEDF":
         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_SleepEDF(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
-        val_data = torch.load("./sleepEDF/val.pt")
+        val_data = torch.load("./sleepEDF/val.pt", weights_only=True)
         X_val = val_data["samples"].float()
         y_val = val_data["labels"].int()
         has_val = True
     elif dataset == "FD-A":
         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_FDA(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
-        val_data = torch.load("./FD-A/val.pt")
+        val_data = torch.load("./FD-A/val.pt", weights_only=True)
         X_val = val_data["samples"].float()
         y_val = val_data["labels"].int()
         X_val = X_val.unsqueeze(1)
@@ -1468,7 +1468,7 @@ def _try_load_resume_ckpt(path, server, clientList):
     if not os.path.isfile(path):
         return None
     try:
-        payload = torch.load(path, map_location="cpu")
+        payload = torch.load(path, map_location="cpu", weights_only=True)
     except Exception as e:
         print(f"[fedcsl] 读取 checkpoint 失败（{path}）：{e}，从零开始", flush=True)
         return None

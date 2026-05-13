@@ -212,9 +212,10 @@
               <input id="baseline-num-client" class="control" type="number" min="1" step="1" value="50" oninput="updateBaselineSummary()" />
             </div>
             <div class="form-row">
-              <label>配置文件</label>
-              <select id="baseline-config" class="control" onchange="updateBaselineSummary()">
-                <option value="">脚本默认配置</option>
+              <label>下游评估</label>
+              <select id="baseline-eval-protocol" class="control" onchange="updateBaselineSummary()">
+                <option value="svm" selected>SVM</option>
+                <option value="linear_probe">Linear Probe</option>
               </select>
             </div>
           </div>
@@ -380,9 +381,10 @@
         <label>DATASET</label>
         <input type="text" id="launch-dataset" placeholder="例: HAR / SleepEDF / Epilepsy-TSTCC" />
       </div>
-      <label>配置文件</label>
-      <select id="launch-config">
-        <option value="">脚本默认配置</option>
+      <label>下游评估</label>
+      <select id="launch-eval-protocol">
+        <option value="svm" selected>SVM</option>
+        <option value="linear_probe">Linear Probe</option>
       </select>
       <label>GPU</label>
       <select id="launch-gpu"></select>
@@ -503,16 +505,16 @@ let scriptCache = [];
 let configCache = [];
 const alphaChoices = ['0.05', '0.1', '0.3', '0.5', '1.0', '10.0'];
 const harBaselines = [
-  {tag: 'FedAvg', script: 'scripts/fedavg_har.sh', config: 'configAVG.yml'},
-  {tag: 'FedProx', script: 'scripts/fedprox_har.sh', config: 'configFedProx.yml'},
-  {tag: 'MOON', script: 'scripts/moon_har.sh', config: 'configMOON.yml'},
-  {tag: 'SCAFFOLD', script: 'scripts/scaffold_har.sh', config: 'configSCAFFOLD.yml'},
-  {tag: 'FedProto', script: 'scripts/fedproto_har.sh', config: 'configFedProto.yml'},
-  {tag: 'BYOL', script: 'scripts/byol_har.sh', config: 'configBYOL.yml'},
-  {tag: 'Orchestra', script: 'scripts/orchestra_har.sh', config: 'configOrchestra.yml'},
-  {tag: 'FedU2', script: 'scripts/fedu2_har.sh', config: 'configFedU2.yml'},
-  {tag: 'FedCSL', script: 'scripts/fedcsl_har.sh', config: 'configACF.yml'},
-  {tag: 'Spilter', script: 'scripts/spilter_har.sh', config: 'configSpilter.yml'},
+  {tag: 'FedAvg', script: 'scripts/fedavg_har.sh'},
+  {tag: 'FedProx', script: 'scripts/fedprox_har.sh'},
+  {tag: 'MOON', script: 'scripts/moon_har.sh'},
+  {tag: 'SCAFFOLD', script: 'scripts/scaffold_har.sh'},
+  {tag: 'FedProto', script: 'scripts/fedproto_har.sh'},
+  {tag: 'BYOL', script: 'scripts/byol_har.sh'},
+  {tag: 'Orchestra', script: 'scripts/orchestra_har.sh'},
+  {tag: 'FedU2', script: 'scripts/fedu2_har.sh'},
+  {tag: 'FedCSL', script: 'scripts/fedcsl_har.sh'},
+  {tag: 'Spilter', script: 'scripts/spilter_har.sh'},
 ];
 const alphaScriptPrefixes = [
   'scripts/fedavg_har.sh',
@@ -535,27 +537,6 @@ function supportsDatasetChoice(scriptPath) {
 function scriptTag(scriptPath) {
   const item = harBaselines.find(x => x.script === scriptPath);
   return item ? item.tag : scriptPath.replace(/^scripts\//, '').replace(/_har\.sh$/, '');
-}
-function defaultConfigForScript(scriptPath) {
-  const item = harBaselines.find(x => x.script === scriptPath);
-  return item ? (item.config || '') : '';
-}
-async function ensureConfigCache(force=false) {
-  if (!force && configCache.length) return configCache;
-  configCache = await api('/configs');
-  return configCache;
-}
-async function loadConfigOptions(selectId, preferred='') {
-  const select = document.getElementById(selectId);
-  if (!select) return;
-  const list = await ensureConfigCache();
-  const opts = ['<option value="">脚本默认配置</option>'];
-  for (const cfg of list) {
-    const selected = preferred && preferred === cfg.name ? ' selected' : '';
-    opts.push(`<option value="${cfg.name}"${selected}>${cfg.name}</option>`);
-  }
-  select.innerHTML = opts.join('');
-  if (!preferred) select.value = '';
 }
 function shellWords(raw) {
   raw = (raw || '').trim();
@@ -616,11 +597,11 @@ function updateBaselineSummary() {
   const numClient = document.getElementById('baseline-num-client')?.value || '配置默认';
   const gpu = document.getElementById('baseline-gpu')?.value;
   const gpuText = gpu === '' ? '自动选择' : `GPU ${gpu}`;
-  const cfg = document.getElementById('baseline-config')?.value || '';
-  const cfgText = cfg ? escapeHtml(cfg) : '脚本默认';
+  const evalProtocol = document.getElementById('baseline-eval-protocol')?.value || 'svm';
+  const evalText = evalProtocol === 'linear_probe' ? 'Linear Probe' : 'SVM';
   const el = document.getElementById('baseline-summary');
   if (el) {
-    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>配置：${cfgText}<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}`;
+    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}`;
   }
 }
 function selectAllBaselines(checked) {
@@ -629,10 +610,9 @@ function selectAllBaselines(checked) {
 }
 async function refreshBaselineGpuOptions() {
   await loadGpuOptions('baseline-gpu');
-  await loadConfigOptions('baseline-config');
   updateBaselineSummary();
 }
-function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', dataset='HAR', config='', extraArgs=[], envBase={}}={}) {
+function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', dataset='HAR', evalProtocol='svm', extraArgs=[], envBase={}}={}) {
   const args = [...extraArgs];
   if (numClient) args.push('--num-client', String(numClient));
   if (gpu !== '') {
@@ -641,7 +621,7 @@ function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', dataset='
   const env = {...envBase};
   if (dataset) env.DATASET = dataset;
   if (alpha) env.DIR_ALPHA = alpha;
-  if (config) env.CONFIG = `config/${config}`;
+  if (evalProtocol) args.push('--eval-protocol', String(evalProtocol));
   if (gpu !== '') env.CUDA_VISIBLE_DEVICES = String(gpu);
   return {script, args, env};
 }
@@ -667,8 +647,9 @@ function runBadges(r) {
   if (String(dataset).toUpperCase() !== 'HAR') {
     badges.push(`<span class="tag dataset-other">DATASET=${escapeHtml(String(dataset))}</span>`);
   }
-  if (env.CONFIG) {
-    badges.push(`<span class="tag">CONFIG=${escapeHtml(String(env.CONFIG).replace(/^config\//, ''))}</span>`);
+  const evalProtocol = argValue(r.args, '--eval-protocol') || env.EVAL_PROTOCOL || '';
+  if (evalProtocol) {
+    badges.push(`<span class="tag">EVAL=${escapeHtml(String(evalProtocol))}</span>`);
   }
   return badges.join(' ');
 }
@@ -679,13 +660,13 @@ async function launchSelectedBaselines() {
   const gpu = document.getElementById('baseline-gpu').value;
   const dataset = document.getElementById('baseline-dataset').value.trim() || 'HAR';
   const numClient = document.getElementById('baseline-num-client').value.trim();
-  const config = document.getElementById('baseline-config').value.trim();
+  const evalProtocol = document.getElementById('baseline-eval-protocol').value.trim() || 'svm';
   const extraArgs = shellWords(document.getElementById('baseline-extra-args').value);
   const started = [];
   try {
     for (const script of scripts) {
       for (const alpha of alphas) {
-        const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, config, extraArgs});
+        const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, extraArgs});
         const run = await api('/runs', {
           method: 'POST',
           headers: {'content-type':'application/json'},
@@ -737,7 +718,7 @@ function openLaunchModal(idx) {
   document.getElementById('launch-dataset').value = '';
   document.getElementById('launch-num-client').value = '';
   loadGpuOptions('launch-gpu');
-  loadConfigOptions('launch-config', defaultConfigForScript(s.path));
+  document.getElementById('launch-eval-protocol').value = 'svm';
   document.getElementById('launch-alpha-wrap').style.display = supportsAlphaChoice(s.path) ? 'block' : 'none';
   document.getElementById('launch-dataset-wrap').style.display = supportsDatasetChoice(s.path) ? 'block' : 'none';
   document.getElementById('launch-modal').style.display = 'flex';
@@ -752,7 +733,7 @@ async function doLaunch() {
   const envRaw = document.getElementById('launch-env').value.trim();
   const alphaVal = document.getElementById('launch-alpha').value.trim();
   const datasetVal = document.getElementById('launch-dataset').value.trim();
-  const configVal = document.getElementById('launch-config').value.trim();
+  const evalProtocolVal = document.getElementById('launch-eval-protocol').value.trim() || 'svm';
   const gpuVal = document.getElementById('launch-gpu').value;
   const numClientVal = document.getElementById('launch-num-client').value.trim();
   const args = shellWords(argsRaw);
@@ -774,9 +755,8 @@ async function doLaunch() {
       const env = { ...envBase };
       if (alpha) env.DIR_ALPHA = alpha;
       if (supportsDatasetChoice(script) && datasetVal) env.DATASET = datasetVal;
-      if (configVal) env.CONFIG = `config/${configVal}`;
       if (gpuVal !== '') env.CUDA_VISIBLE_DEVICES = gpuVal;
-      const launchArgs = [...args];
+      const launchArgs = [...args, '--eval-protocol', evalProtocolVal];
       if (numClientVal) launchArgs.push('--num-client', numClientVal);
       if (gpuVal !== '') launchArgs.push('--server-gpu', '0', '--client-gpus', '0');
       const run = await api('/runs', {

@@ -65,6 +65,8 @@ parser.add_argument('--client-gpus', type=str, default=None,
                     help='Comma-separated GPU ids for client worker threads, e.g. "0,1,2"')
 parser.add_argument('--client-workers', type=int, default=None,
                     help='Number of client training worker threads; default comes from config or 3')
+parser.add_argument('--eval-protocol', type=str, default=None, choices=['svm', 'linear_probe'],
+                    help='Override downstream evaluation protocol: svm or linear_probe')
 
 args = parser.parse_args()
 
@@ -772,9 +774,10 @@ def _to_numpy_labels(y):
     return np.asarray(y)
 
 
-def _evaluation_config(config):
+def _evaluation_config(config, protocol_override=None):
     cfg = (config or {}).get("evaluation", {}) or {}
-    protocol = str(cfg.get("protocol", cfg.get("method", "svm"))).strip().lower()
+    protocol = protocol_override or os.environ.get("EVAL_PROTOCOL") or cfg.get("protocol", cfg.get("method", "svm"))
+    protocol = str(protocol).strip().lower()
     aliases = {
         "svc": "svm",
         "linear": "linear_probe",
@@ -949,8 +952,8 @@ def _linear_probe_eval(
     return train_acc, test_acc
 
 
-def _make_downstream_eval_fns(config):
-    eval_cfg = _evaluation_config(config)
+def _make_downstream_eval_fns(config, protocol_override=None):
+    eval_cfg = _evaluation_config(config, protocol_override=protocol_override)
     protocol = eval_cfg["protocol"]
 
     if protocol == "linear_probe":
@@ -1078,7 +1081,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     dataset = args.dataset if args.dataset is not None else config.get('dataset', dataset)
     dist_measure = model_cfg['dist_measure']
-    eval_train_test_fn, eval_tstcc_fn, eval_protocol_desc = _make_downstream_eval_fns(config)
+    eval_protocol_override = args.eval_protocol if args.eval_protocol is not None else None
+    eval_train_test_fn, eval_tstcc_fn, eval_protocol_desc = _make_downstream_eval_fns(
+        config, protocol_override=eval_protocol_override
+    )
     print(f"downstream evaluation: {eval_protocol_desc}")
     lr = model_cfg['lr']
     batch_size = args.batch_size if args.batch_size is not None else model_cfg['batch_size']

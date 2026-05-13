@@ -2,7 +2,7 @@
 
 目标：
 - 复用 FedCSL 现有的 shapelet encoder，保证 backbone 一致；
-- 在 encoder 之后接 projector / predictor，支持 SimCLR / SimSiam / BYOL；
+- 在 encoder 之后接 projector / predictor，支持 BYOL；
 - 暴露 ``transform()`` / ``get_last_features()``，复用现有下游 SVM 评估协议。
 """
 
@@ -47,7 +47,7 @@ class ShapeletSSLModel(nn.Module):
     ) -> None:
         super().__init__()
         method = str(method).lower()
-        if method not in {"simclr", "simsiam", "byol"}:
+        if method != "byol":
             raise ValueError(f"unsupported ssl method: {method}")
         self.method = method
 
@@ -71,28 +71,22 @@ class ShapeletSSLModel(nn.Module):
         self.encoder = encoder
         self.feature_dim = int(encoder.num_shapelets)
         self.projector = _make_mlp(
-            self.feature_dim, projector_hidden_dim, projector_out_dim, final_bn=(method != "simclr")
+            self.feature_dim, projector_hidden_dim, projector_out_dim, final_bn=True
         )
-        self.predictor = None
-        if method in {"simsiam", "byol"}:
-            self.predictor = _make_mlp(projector_out_dim, predictor_hidden_dim, projector_out_dim, final_bn=False)
+        self.predictor = _make_mlp(projector_out_dim, predictor_hidden_dim, projector_out_dim, final_bn=False)
 
         # BYOL 的 momentum target，不参与联邦聚合。
-        self.target_encoder = None
-        self.target_projector = None
-        self.non_aggregated_param_names: List[str] = []
-        if method == "byol":
-            self.target_encoder = copy.deepcopy(self.encoder)
-            self.target_projector = copy.deepcopy(self.projector)
-            for p in self.target_encoder.parameters():
-                p.requires_grad_(False)
-            for p in self.target_projector.parameters():
-                p.requires_grad_(False)
-            self.non_aggregated_param_names = [
-                name
-                for name, _ in self.named_parameters()
-                if name.startswith("target_encoder.") or name.startswith("target_projector.")
-            ]
+        self.target_encoder = copy.deepcopy(self.encoder)
+        self.target_projector = copy.deepcopy(self.projector)
+        for p in self.target_encoder.parameters():
+            p.requires_grad_(False)
+        for p in self.target_projector.parameters():
+            p.requires_grad_(False)
+        self.non_aggregated_param_names: List[str] = [
+            name
+            for name, _ in self.named_parameters()
+            if name.startswith("target_encoder.") or name.startswith("target_projector.")
+        ]
 
         self._to_cuda = bool(to_cuda) and torch.cuda.is_available()
         if self._to_cuda:

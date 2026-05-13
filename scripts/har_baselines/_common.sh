@@ -59,16 +59,10 @@ BASELINES=(
   "moon:configMOON.yml"
   "scaffold:configSCAFFOLD.yml"
   "fedproto:configFedProto.yml"
-  "simclr:configSimCLR.yml"
-  "simsiam:configSimSiam.yml"
   "byol:configBYOL.yml"
   "orchestra:configOrchestra.yml"
   "fedcsl:configACF.yml"
-  "fedcsl-simclr:configFedCSL_SimCLR.yml"
-  "fedcsl-simclr-proj:configFedCSL_SimCLR_Proj.yml"
-  "fedcsl-simclr-split:configFedCSL_SimCLR_Split.yml"
-  "fedcsl-onehot:configFedCSL_OneHot.yml"
-  "fedcsl-onehot-splitteacher:configFedCSL_OneHot_SplitTeacher.yml"
+  "spilter:configSpilter.yml"
 )
 
 # ---------------------------------------------------------------------------

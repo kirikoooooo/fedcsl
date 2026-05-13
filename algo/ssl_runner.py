@@ -1,9 +1,8 @@
 """Federated self-supervised baselines inspired by Orchestra.
 
 当前先落地最小可跑版本：
-- SimCLR
-- SimSiam
 - BYOL
+- Orchestra
 
 共同特点：
 - 复用当前项目的 shapelet encoder；
@@ -298,27 +297,6 @@ class SSLClient(FedAvgClient):
         self.eval_results = {"after": {"train": AttrDict({"loss": avg_loss})}}
 
 
-class SimCLRClient(SSLClient):
-    def _compute_loss(self, x: torch.Tensor) -> torch.Tensor:
-        x_q, x_k = make_two_views(x, self.device)
-        _, z1 = self.model.online_project(x_q)
-        _, z2 = self.model.online_project(x_k)
-        return nt_xent_loss(z1, z2, float(self.args.ssl.temperature))
-
-
-class SimSiamClient(SSLClient):
-    def _compute_loss(self, x: torch.Tensor) -> torch.Tensor:
-        x_q, x_k = make_two_views(x, self.device)
-        _, z1 = self.model.online_project(x_q)
-        _, z2 = self.model.online_project(x_k)
-        p1 = self.model.predictor(z1)
-        p2 = self.model.predictor(z2)
-        return 0.5 * (
-            negative_cosine_similarity(p1, z2.detach()) +
-            negative_cosine_similarity(p2, z1.detach())
-        )
-
-
 class BYOLClient(SSLClient):
     def set_parameters(self, package: dict[str, Any]) -> None:
         super().set_parameters(package)
@@ -443,7 +421,7 @@ def run_ssl_baseline(
     save_model_fn: Callable,
 ) -> None:
     algo = str(algo).lower()
-    if algo not in {"simclr", "simsiam", "byol", "orchestra"}:
+    if algo not in {"byol", "orchestra"}:
         raise ValueError(f"unsupported ssl algo: {algo}")
 
     device = torch.device("cuda") if (to_cuda and torch.cuda.is_available()) else torch.device("cpu")
@@ -520,8 +498,6 @@ def run_ssl_baseline(
         return _cls
 
     client_cls = {
-        "simclr": SimCLRClient,
-        "simsiam": SimSiamClient,
         "byol": BYOLClient,
         "orchestra": OrchestraClient,
     }[algo]

@@ -54,7 +54,7 @@ Example for an 8-GPU server:
 
 ```bash
 python3 -u FedCSL_All.py -dataset AtrialFibrillation \
-  --config configFedCSL_OneHot_SplitTeacher.yml \
+  --config configSpilter.yml \
   --server-gpu 0 \
   --client-workers 3 \
   --client-gpus 1-3

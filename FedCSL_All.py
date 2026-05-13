@@ -59,6 +59,7 @@ parser.add_argument('--min-selection-prob', type=float, default=None, help='Mini
 parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
 parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
 parser.add_argument('--dirichlet-alpha', type=float, default=None, help='Dirichlet alpha for data heterogeneity (overrides config file)')
+parser.add_argument('--num-client', type=int, default=None, help='Number of federated clients (overrides config file)')
 parser.add_argument('--server-gpu', type=int, default=None, help='GPU id used by the server/model evaluation thread')
 parser.add_argument('--client-gpus', type=str, default=None,
                     help='Comma-separated GPU ids for client worker threads, e.g. "0,1,2"')
@@ -191,24 +192,24 @@ def _sanitize_filename(s):
     return s.strip() or "run"
 
 
-def _is_splitteacher_algo(algo_name):
-    return str(algo_name).lower() in ("fedcsl-onehot-splitteacher", "fedcsl-simclr-split")
+def _is_spilter_algo(algo_name):
+    """Spilter keeps only selected scale slices on each client."""
+    return str(algo_name).lower() in (
+        "spilter",
+        "fedcsl-spilter",
+    )
 
 
-def _is_teacher_scale_set_algo(algo_name):
-    algo = str(algo_name).lower()
-    return algo == "fedcsl-onehot-splitteacher"
+def _uses_scale_split_algo(algo_name):
+    return _is_spilter_algo(algo_name)
 
 
 def _uses_fedcsl_scale_scores(algo_name):
     algo = str(algo_name).lower()
     return algo in (
         "fedcsl",
-        "fedcsl-onehot",
-        "fedcsl-simclr",
-        "fedcsl-simclr-proj",
-        "fedcsl-simclr-split",
-        "fedcsl-onehot-splitteacher",
+        "spilter",
+        "fedcsl-spilter",
     )
 
 
@@ -522,6 +523,32 @@ def _plan_global_score_random_single_client_scales(client_scores, y_fed, seed=No
     return client_selected, scale_counts, probs
 
 
+def _plan_local_score_topm_client_scales(client_scores, top_m=4):
+    """每个 client 按自己的周期评分选择 top-m 尺度，作为拼接子模型训练。"""
+    num_clients = len(client_scores)
+    num_scales = len(client_scores[0]) if num_clients > 0 else 0
+    if num_scales <= 0:
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64)
+
+    top_m = max(1, min(int(top_m), num_scales))
+    client_selected = []
+    scale_counts = np.zeros(num_scales, dtype=np.int64)
+
+    for scores in client_scores:
+        scores = _normalize_scale_scores(scores, num_scales)
+        if np.any(scores > 0):
+            # Stable tie-breaker: higher score first, then lower scale index.
+            order = np.lexsort((np.arange(num_scales), -scores))
+        else:
+            order = np.arange(num_scales)
+        selected = [int(scale_idx) for scale_idx in order[:top_m]]
+        client_selected.append(selected)
+        for scale_idx in selected:
+            scale_counts[scale_idx] += 1
+
+    return client_selected, scale_counts
+
+
 def _spilter_allocation_mode(config):
     spilter_cfg = config.get("spilter", {}) or {}
     mode = str(spilter_cfg.get("allocation_mode", "efficiency_aware")).strip().lower()
@@ -535,20 +562,32 @@ def _spilter_allocation_mode(config):
         "global_score": "global_score_random_single",
         "score_random": "global_score_random_single",
         "period_random": "global_score_random_single",
+        "local": "local_score_topm",
+        "local_topm": "local_score_topm",
+        "local-topm": "local_score_topm",
+        "local-score-topm": "local_score_topm",
+        "local_period_topm": "local_score_topm",
+        "period_topm": "local_score_topm",
+        "period-aware-topm": "local_score_topm",
         "efficiency": "efficiency_aware",
         "efficiency-aware": "efficiency_aware",
     }
     return aliases.get(mode, mode)
 
 
+def _spilter_local_top_m(config, default=4):
+    spilter_cfg = config.get("spilter", {}) or {}
+    for key in ("local_top_m", "top_m", "num_selected_scales"):
+        if key in spilter_cfg:
+            return max(1, int(spilter_cfg[key]))
+    return max(1, int(default))
+
+
 def _spilter_system_extra_scale_count(config, default=2):
-    """读取 splitteacher 系统效率补发尺度数，兼容新旧配置写法。"""
+    """读取 Spilter 系统效率补发尺度数。"""
     spilter_cfg = config.get("spilter", {}) or {}
     if "system_extra_scale_count" in spilter_cfg:
         return max(0, int(spilter_cfg["system_extra_scale_count"]))
-    splitteacher_cfg = config.get("splitteacher", {}) or {}
-    if "extra_scale_count" in splitteacher_cfg:
-        return max(0, int(splitteacher_cfg["extra_scale_count"]))
     return max(0, int(default))
 
 
@@ -607,7 +646,7 @@ def _train_client_worker(
 
     teacher = None
     algo_name = str(shared_kwargs.get("config", {}).get("algo", "fedcsl")).lower()
-    need_teacher = algo_name in ("fedcsl", "fedcsl-onehot", "fedcsl-onehot-splitteacher", "fedprox", "moon")
+    need_teacher = algo_name in ("fedcsl", "spilter", "fedcsl-spilter", "fedprox", "moon")
     if need_teacher and (round_idx != 0 or use_scale_split_comm):
         teacher = LearningShapeletsCL(**{**shared_kwargs, "device": device})
         _load_state_to_model(teacher.model, server_state_cpu)
@@ -783,7 +822,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     fed_cfg = config['federated']
     model_cfg = config['model']['params']
 
-    numClient = fed_cfg['numClient']
+    numClient = args.num_client if args.num_client is not None else fed_cfg['numClient']
+    numClient = max(1, int(numClient))
     numRound = fed_cfg['numRound']
     numEpoch = fed_cfg['numEpoch']
     dirichlet_alpha = args.dirichlet_alpha if args.dirichlet_alpha is not None else fed_cfg['dirichlet_alpha']
@@ -846,6 +886,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     config.setdefault('federated', {})
     config.setdefault('model', {}).setdefault('params', {})
     config['federated']['dirichlet_alpha'] = dirichlet_alpha
+    config['federated']['numClient'] = numClient
     config['federated']['use_client_selection'] = use_client_selection
     config['federated']['client_selection_ratio'] = client_selection_ratio
     config['federated']['min_selection_prob'] = min_selection_prob
@@ -973,9 +1014,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         )
         return
 
-    # 无监督联邦表征基线：参考 Orchestra 的 baseline 形式，采用 FedAvg 聚合 +
-    # 本地 SSL 目标（SimCLR / SimSiam / BYOL），仍复用当前 shapelet backbone 与 SVM 评估。
-    if algo.lower() in ('simclr', 'simsiam', 'byol', 'orchestra'):
+    # 无监督联邦表征基线：BYOL / Orchestra 复用当前 shapelet backbone 与 SVM 评估。
+    if algo.lower() in ('byol', 'orchestra'):
         from algo.ssl_runner import run_ssl_baseline
         run_ssl_baseline(
             algo=algo.lower(),
@@ -1113,7 +1153,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     use_distribution = config['ablation'].get('UseDistribution', True)
     total_samples = len(X_all)
-    use_scale_split_comm = _is_splitteacher_algo(algo)
+    use_scale_split_comm = _uses_scale_split_algo(algo)
     if not w_locals:
         w_locals = [_state_dict_to_cpu(c.model.state_dict()) for c in clientList]
 
@@ -1122,10 +1162,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     cached_scale_hist = None
     cached_global_scale_probs = None
     scale_score_prep_sec = 0.0
-    spilter_allocation_mode = _spilter_allocation_mode(config) if _is_splitteacher_algo(algo) else None
+    spilter_allocation_mode = _spilter_allocation_mode(config) if _uses_scale_split_algo(algo) else None
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
-        if _is_splitteacher_algo(algo) and spilter_allocation_mode == "uniform_single":
+        if _uses_scale_split_algo(algo) and spilter_allocation_mode == "uniform_single":
             cached_client_scale_plans, cached_scale_hist = _plan_uniform_single_client_scales(
                 len(X_fed),
                 server.model,
@@ -1138,7 +1178,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 device=server_device,
                 batch_size=batch_size,
             )
-            if _is_splitteacher_algo(algo) and spilter_allocation_mode == "global_score_random_single":
+            if _uses_scale_split_algo(algo) and spilter_allocation_mode == "global_score_random_single":
                 cached_client_scale_plans, cached_scale_hist, cached_global_scale_probs = (
                     _plan_global_score_random_single_client_scales(
                         cached_client_scale_scores,
@@ -1146,7 +1186,17 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         seed=original_seed or 42,
                     )
                 )
-        if _is_splitteacher_algo(algo) and spilter_allocation_mode not in ("uniform_single", "global_score_random_single"):
+            elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_topm":
+                local_top_m = _spilter_local_top_m(config, default=4)
+                cached_client_scale_plans, cached_scale_hist = _plan_local_score_topm_client_scales(
+                    cached_client_scale_scores,
+                    top_m=local_top_m,
+                )
+        if _uses_scale_split_algo(algo) and spilter_allocation_mode not in (
+            "uniform_single",
+            "global_score_random_single",
+            "local_score_topm",
+        ):
             system_extra_scale_count = _spilter_system_extra_scale_count(config, default=2)
             cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
                 cached_client_scale_scores,
@@ -1154,16 +1204,24 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 extra_scale_count=system_extra_scale_count,
             )
         scale_score_prep_sec = time.perf_counter() - scale_prep_t0
-        if _is_splitteacher_algo(algo) and spilter_allocation_mode == "uniform_single":
-            prep_msg = f"[fedcsl] planned uniform single-scale clients in {scale_score_prep_sec:.3f}s"
-        elif _is_splitteacher_algo(algo) and spilter_allocation_mode == "global_score_random_single":
-            prep_msg = f"[fedcsl] planned global-score random single-scale clients in {scale_score_prep_sec:.3f}s"
+        if _uses_scale_split_algo(algo) and spilter_allocation_mode == "uniform_single":
+            prep_msg = f"[spilter] planned uniform single-scale clients in {scale_score_prep_sec:.3f}s"
+        elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "global_score_random_single":
+            prep_msg = f"[spilter] planned global-score random single-scale clients in {scale_score_prep_sec:.3f}s"
+        elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_topm":
+            prep_msg = f"[spilter] planned local-score top-m stitched clients in {scale_score_prep_sec:.3f}s"
         else:
             prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
         if cached_scale_hist is not None:
             prep_msg += f"; spilter_allocation_mode={spilter_allocation_mode}"
-            if spilter_allocation_mode not in ("uniform_single", "global_score_random_single"):
+            if spilter_allocation_mode not in (
+                "uniform_single",
+                "global_score_random_single",
+                "local_score_topm",
+            ):
                 prep_msg += f"; system_extra_scale_count={system_extra_scale_count}"
+            if spilter_allocation_mode == "local_score_topm":
+                prep_msg += f"; local_top_m={local_top_m}"
             if cached_global_scale_probs is not None:
                 prep_msg += f"; global_scale_probs={np.round(cached_global_scale_probs, 4).tolist()}"
             prep_msg += f"; planned scale coverage: {cached_scale_hist.tolist()}"

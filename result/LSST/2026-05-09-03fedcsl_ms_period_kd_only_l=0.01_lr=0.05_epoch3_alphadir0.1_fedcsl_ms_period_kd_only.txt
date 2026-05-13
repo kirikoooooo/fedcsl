@@ -1,0 +1,28 @@
+Details of Training:-----------------------
+dataset: LSST
+local train epochs: 3
+round num: 5
+batch size: 8
+lr: 0.05
+use_client_selection: False
+server_device: cuda:0
+client_workers: 3
+client_worker_devices: ['cuda:0', 'cuda:0', 'cuda:0']
+client_groups: [[0], [1], [2]]
+-------------------------------------------
+fedcsl_ms_period_kd_only
+PID: 1963117
+PPID: 1461147
+argv: FedCSL_All.py -dataset LSST --config scripts/dashboard/.generated_configs/fedcsl_ms_period_kd_only.yml --dirichlet-alpha 0.1 --seed 42 --description fedcsl_ms_period_kd_only
+ablation:  UseACF: true  UseDistribution: false  UseJointCL: false  UseJointKD: true  UseMTLHomo: false  UseProdictor: false  UseScaleCL: false  UseScaleKD: truealgo: fedcsldataset: AtrialFibrillationdescription: fedcsl_ms_period_kd_onlyfederated:  auto_resume: true  checkpoint_every: 30  client_selection_ratio: 0.6  dirichlet_alpha: 1  numClient: 3  numEpoch: 3  numRound: 5  use_client_selection: falselogPath: ./result/model:  name: ''  params:    batch_size: 8    beta: 0.4    dist_measure: mix    gamma: 0.5    l: 0.01    lr: 0.05    ls: 1    wd: 0
+[fedcsl] precomputed client scale scores once in 0.275s
+dataset: LSSTround:0 server aggregation  testACC:0.5823195458231955 trainACC:1.0 avg_loss:1.7822868309646167
+[round 0] timing train=164.836s distribution=1.229s agg=0.159s eval=114.251s total=280.516s
+dataset: LSSTround:1 server aggregation  testACC:0.5916463909164639 trainACC:1.0 avg_loss:1.4307703369147822
+[round 1] timing train=256.010s distribution=1.037s agg=0.125s eval=130.927s total=388.103s
+dataset: LSSTround:2 server aggregation  testACC:0.5904298459042985 trainACC:1.0 avg_loss:1.1796004782502743
+[round 2] timing train=254.721s distribution=0.925s agg=0.261s eval=124.598s total=380.536s
+dataset: LSSTround:3 server aggregation  testACC:0.5904298459042985 trainACC:1.0 avg_loss:1.0445590893346606
+[round 3] timing train=252.930s distribution=0.842s agg=0.329s eval=108.306s total=362.419s
+dataset: LSSTround:4 server aggregation  testACC:0.5940794809407948 trainACC:1.0 avg_loss:0.9393135598936049
+[round 4] timing train=244.591s distribution=1.161s agg=0.292s eval=119.457s total=365.535s

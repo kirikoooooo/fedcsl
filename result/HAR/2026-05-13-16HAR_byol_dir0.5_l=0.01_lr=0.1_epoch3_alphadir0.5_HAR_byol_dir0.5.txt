@@ -1,0 +1,22 @@
+Details of Training:-----------------------
+dataset: HAR
+local train epochs: 3
+round num: 200
+batch size: 8
+lr: 0.1
+use_client_selection: False
+server_device: cuda:0
+client_workers: 3
+client_worker_devices: ['cuda:0', 'cuda:0', 'cuda:0']
+client_groups: [[0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48], [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49], [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41, 44, 47]]
+-------------------------------------------
+HAR_byol_dir0.5
+PID: 213207
+PPID: 2353986
+argv: FedCSL_All.py -dataset HAR --config config/configBYOL.yml --dirichlet-alpha 0.5 --seed 42 --description HAR_byol_dir0.5 -dataset HAR
+effective_dataset: HAR
+effective_dirichlet_alpha: 0.5
+ablation:  UseACF: false  UseDistribution: false  UseJointCL: false  UseJointKD: false  UseMTLHomo: false  UseProdictor: false  UseScaleCL: false  UseScaleKD: falsealgo: byoldataset: HARdescription: HAR_byol_dir0.5federated:  client_gpus:  - 0  client_selection_method: omp  client_selection_ratio: 0.6  client_workers: 3  dirichlet_alpha: 0.5  ema_alpha: 0.3  min_selection_prob: 0.01  numClient: 50  numEpoch: 3  numRound: 200  server_gpu: 0  use_client_selection: falselogPath: ./result/model:  name: ''  params:    batch_size: 8    beta: 0.4    dist_measure: mix    gamma: 0.5    l: 0.01    lr: 0.1    ls: 1    momentum: 0.9    wd: 0.0001ssl:  ema_tau: 0.99  predictor_hidden_dim: 256  projector_hidden_dim: 256  projector_out_dim: 128  temperature: 0.2
+dataset: HARround:0 server aggregation  testACC:0.9222938581608415 trainACC:1.0 avg_loss:0.8613929073735488
+dataset: HARround:1 server aggregation  testACC:0.9219545300305395 trainACC:1.0 avg_loss:0.3386611840937019
+dataset: HARround:2 server aggregation  testACC:0.9229725144214456 trainACC:1.0 avg_loss:0.20513625594735135

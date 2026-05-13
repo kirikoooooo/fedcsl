@@ -635,6 +635,7 @@ def _train_client_worker(
     batch_size,
     lr,
     wd,
+    momentum,
     use_scale_split_comm,
     server_state_cpu,
     previous_client_states,
@@ -661,7 +662,7 @@ def _train_client_worker(
         c = clientList[idx]
         c.set_device(device)
         if c.optimizer is None:
-            c.set_optimizer(optim.SGD(c.model.parameters(), lr=lr, weight_decay=wd))
+            c.set_optimizer(optim.SGD(c.model.parameters(), lr=lr, weight_decay=wd, momentum=momentum))
         else:
             for group in c.optimizer.param_groups:
                 group["params"] = list(c.model.parameters())
@@ -1088,7 +1089,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     print(f"downstream evaluation: {eval_protocol_desc}")
     lr = model_cfg['lr']
     batch_size = args.batch_size if args.batch_size is not None else model_cfg['batch_size']
-    wd = model_cfg['wd']
+    wd = model_cfg.get('wd', 0.0001)
+    momentum = model_cfg.get('momentum', 0.9)
     ls = model_cfg['ls']
     l = model_cfg['l']
     beta = model_cfg.get('beta', 0.4)
@@ -1325,7 +1327,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     for idx in range(numClient):
         client = LearningShapeletsCL(**{**shared_kwargs, "device": client_device_by_idx[idx]})
-        optimizer = optim.SGD(client.model.parameters(), lr=lr, weight_decay=wd)
+        optimizer = optim.SGD(client.model.parameters(), lr=lr, weight_decay=wd, momentum=momentum)
         client.set_optimizer(optimizer)
         clientList.append(client)
 
@@ -1511,6 +1513,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     batch_size,
                     lr,
                     wd,
+                    momentum,
                     use_scale_split_comm,
                     server_state_cpu,
                     w_locals,

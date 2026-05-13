@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HAR 数据集上，全部 dirichlet 值 × 全部 baseline 的汇总入口。
+# HAR 数据集上，全部 dirichlet 值 × 全部 baseline（含 FedU2 / Spilter）的汇总入口。
 # 依次串行调用 scripts/har_baselines/har_dir*.sh（按 α 数值从小到大）。
 #
 # 用法:

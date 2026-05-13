@@ -2,7 +2,7 @@ model:
   name: ""
   params:
     dist_measure: "mix"
-    lr: 0.1
+    lr: 0.05
     batch_size: 8
     wd: 0
     ls: 1
@@ -22,15 +22,10 @@ federated:
   auto_resume: True
 
 spilter:
-<<<<<<< HEAD
-  # efficiency_aware: 2个基础尺度 + 系统效率感知补发；uniform_single: client_id 轮转，每个客户端只训练1个尺度。
-  allocation_mode: "uniform_single"
-=======
   # efficiency_aware: 2个基础尺度 + 系统效率感知补发；
   # uniform_single: client_id 轮转，每个客户端只训练1个尺度；
   # global_score_random_single: 按全局周期评分分布随机分配，每个客户端只训练1个尺度。
-  allocation_mode: "efficiency_aware"
->>>>>>> de7e5ee87a473ff9184a60ae36311bf1c525bb97
+  allocation_mode: "global_score_random_single"
   # 每个客户端在 2 个基础尺度之外，由系统效率感知策略额外补发的尺度数量。
   system_extra_scale_count: 2
 

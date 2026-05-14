@@ -406,7 +406,8 @@ class LearningShapeletsCL:
 
     def _encode_stitched_scales(self, model, x, selected_scales):
         parts = [model.encode_scale(x, scale_idx, masking=False) for scale_idx in selected_scales]
-        return torch.cat(parts, dim=1)
+        out = torch.cat(parts, dim=1)
+        return nn.functional.layer_norm(out, (out.shape[1],))
 
     def _compute_stitched_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
         device = x_q.device

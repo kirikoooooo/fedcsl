@@ -30,6 +30,30 @@ from fedutil import cal_score, normalize_to_near_one
 from train import LearningShapeletsCL
 from utils import period_score
 
+# ---------------------------------------------------------------------------
+# 诊断日志开关：export SPILTER_DEBUG=1 启用，默认关闭
+# 输出以 [spilter_dbg] 为前缀，便于 grep 筛选
+# ---------------------------------------------------------------------------
+_SPILTER_DEBUG: bool = os.environ.get("SPILTER_DEBUG", "0").strip() == "1"
+
+
+def _dbg_param_norm(model, prefixes) -> float:
+    """计算 model 中所有匹配 prefixes 前缀的参数的总 L2 范数。"""
+    total = 0.0
+    for pname, p in model.named_parameters():
+        if any(pname.startswith(pf) for pf in prefixes):
+            total += float(p.detach().norm().item() ** 2)
+    return total ** 0.5
+
+
+def _dbg_grad_norm(model, prefixes) -> float:
+    """计算 model 中匹配 prefixes 前缀的参数的梯度 L2 范数（无梯度时返回 0）。"""
+    total = 0.0
+    for pname, p in model.named_parameters():
+        if any(pname.startswith(pf) for pf in prefixes) and p.grad is not None:
+            total += float(p.grad.detach().norm().item() ** 2)
+    return total ** 0.5
+
 
 
 parser = argparse.ArgumentParser()
@@ -730,10 +754,9 @@ def _train_client_worker(
             continue
 
         if use_scale_split_comm:
-            # Client keeps its own persistent local model (consistent with FedCSL design).
-            # The server model is delivered as teacher (c.Global_Model) for distillation only —
-            # it is NOT written into c.model.  This avoids parameter overwrite, eliminates
-            # stale-momentum corruption, and allows a continuous local training trajectory.
+            # Spilter 架构：客户端本地模型持续训练，不被服务端参数覆盖。
+            # 服务端聚合模型（Global_Model / teacher）仅作为对比蒸馏参考，
+            # 梯度不回传给 teacher，全局聚合使用客户端自身训练后的尺度参数。
             selected_scale_indices = selected_scales or [
                 _client_scale_score_batch(
                     X_fed[idx],
@@ -742,7 +765,24 @@ def _train_client_worker(
                     device=device,
                 )
             ]
+            if _SPILTER_DEBUG:
+                _pre_norms = {
+                    si: _dbg_param_norm(c.model, c.model._scale_state_prefixes(si))
+                    for si in selected_scale_indices
+                }
+                print(
+                    f"[spilter_dbg] round={round_idx} client={idx} "
+                    f"selected_scales={selected_scale_indices} "
+                    f"pre_train_norms={ {si: f'{_pre_norms[si]:.3f}' for si in selected_scale_indices} }",
+                    flush=True,
+                )
             result["scale_indices"] = [int(scale_idx) for scale_idx in selected_scale_indices]
+
+        if _SPILTER_DEBUG and use_scale_split_comm:
+            _pre_train_norms = {
+                si: _dbg_param_norm(c.model, c.model._scale_state_prefixes(si))
+                for si in (result.get("scale_indices") or [])
+            }
 
         losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size,
                          epoch_idx=-1, lr=lr)
@@ -756,6 +796,49 @@ def _train_client_worker(
                 print(f"[warn] client {idx} loss NaN/Inf，置 0")
                 loss_all = 0.0
                 loss_breakdown["total"] = 0.0
+
+        if _SPILTER_DEBUG and use_scale_split_comm:
+            scale_ids = result.get("scale_indices") or []
+            all_prefixes = []
+            for si in scale_ids:
+                all_prefixes.extend(c.model._scale_state_prefixes(si))
+
+            # ① param norm change after local training
+            post_norms = {
+                si: _dbg_param_norm(c.model, c.model._scale_state_prefixes(si))
+                for si in scale_ids
+            }
+            norm_delta = " ".join(
+                f"s{si}:{_pre_train_norms.get(si, 0.):.3f}->{post_norms.get(si, 0.):.3f}"
+                for si in scale_ids
+            )
+
+            # ② gradient norm from the last batch (grad still in param.grad after step)
+            grad_norm = _dbg_grad_norm(c.model, all_prefixes)
+
+            # ③ within-epoch loss trend: first 3 vs last 3 batches
+            if losses:
+                n = len(losses)
+                K = min(3, n)
+                def _fmt(bd):
+                    return f"{bd['total']:.4f}(b:{bd['base']:.4f})"
+                first_k = [_fmt(bd) for bd in losses[:K]]
+                last_k  = [_fmt(bd) for bd in losses[-K:]]
+                avg_base = float(np.mean([bd['base'] for bd in losses]))
+                trend_str = (
+                    f"batches={n} first{K}={first_k} last{K}={last_k} "
+                    f"avg_base={avg_base:.4f}"
+                )
+            else:
+                trend_str = "batches=0"
+
+            print(
+                f"[spilter_dbg] round={round_idx} client={idx} "
+                f"{trend_str} "
+                f"grad_norm(last_batch)={grad_norm:.4f} "
+                f"param_norm_delta({norm_delta})",
+                flush=True,
+            )
 
         result["loss"] = loss_all
         result["loss_breakdown"] = loss_breakdown
@@ -1592,6 +1675,27 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 filtered_payloads = [payload if payload is not None else {} for payload in client_scale_states]
                 w_global = _aggregate_scale_updates(server_state_cpu, filtered_payloads, y_fed)
                 _load_state_to_model(server.model, w_global)
+
+            if _SPILTER_DEBUG:
+                # 计算本轮聚合后服务端各尺度参数相对上轮的平均变化幅度
+                delta_norms = []
+                for key in w_global:
+                    if key in server_state_cpu:
+                        d = float((w_global[key].float() - server_state_cpu[key].float()).norm().item())
+                        delta_norms.append(d)
+                avg_delta = float(np.mean(delta_norms)) if delta_norms else 0.0
+                max_delta = float(np.max(delta_norms)) if delta_norms else 0.0
+                n_uploaded = sum(
+                    1 for p in filtered_payloads
+                    if p and p.get("states")
+                )
+                print(
+                    f"[spilter_dbg] round={round} AGG "
+                    f"clients_uploaded={n_uploaded} "
+                    f"server_param_delta avg={avg_delta:.5f} max={max_delta:.5f}",
+                    flush=True,
+                )
+
         elif use_client_selection and selector is not None:
             select_mask = selector.on_round_start(round, client_losses=client_losses, y_fed=y_fed)
             print(f"[{selector.name}] 选择掩码: {select_mask}")

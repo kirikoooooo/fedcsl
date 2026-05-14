@@ -405,9 +405,42 @@ class LearningShapeletsCL:
         return aliases.get(mode, mode)
 
     def _encode_stitched_scales(self, model, x, selected_scales):
-        parts = [model.encode_scale(x, scale_idx, masking=False) for scale_idx in selected_scales]
-        out = torch.cat(parts, dim=1)
-        return nn.functional.layer_norm(out, (out.shape[1],))
+        # 分距离类型归一化，与 FedCSL forward() 中 ln1/ln2/ln3 的处理一致。
+        # 欧氏距离值域远大于余弦/互相关，若全部拼接后用单一 layer_norm，
+        # 欧氏特征会主导统计量，导致余弦/互相关特征被压制为近零，梯度失效。
+        eu_parts, co_parts, cc_parts = [], [], []
+        for scale_idx in selected_scales:
+            eu = torch.squeeze(
+                model.shapelets_euclidean.forward_scale(x, scale_idx, False), 1
+            )
+            co = torch.squeeze(
+                model.shapelets_cosine.forward_scale(x, scale_idx, False), 1
+            )
+            cc = torch.squeeze(
+                model.shapelets_cross_correlation.forward_scale(x, scale_idx, False), 1
+            )
+            eu_parts.append(eu)
+            co_parts.append(co)
+            cc_parts.append(cc)
+
+        eu_cat = nn.functional.layer_norm(
+            torch.cat(eu_parts, dim=1), (eu_parts[0].shape[1] * len(selected_scales),)
+        )
+        co_cat = nn.functional.layer_norm(
+            torch.cat(co_parts, dim=1), (co_parts[0].shape[1] * len(selected_scales),)
+        )
+        cc_cat = nn.functional.layer_norm(
+            torch.cat(cc_parts, dim=1), (cc_parts[0].shape[1] * len(selected_scales),)
+        )
+
+        eu_list = eu_cat.split(eu_parts[0].shape[1], dim=1)
+        co_list = co_cat.split(co_parts[0].shape[1], dim=1)
+        cc_list = cc_cat.split(cc_parts[0].shape[1], dim=1)
+        parts = [
+            torch.cat([eu_s, co_s, cc_s], dim=1)
+            for eu_s, co_s, cc_s in zip(eu_list, co_list, cc_list)
+        ]
+        return torch.cat(parts, dim=1)
 
     def _compute_stitched_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
         device = x_q.device

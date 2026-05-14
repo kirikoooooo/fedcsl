@@ -1,0 +1,334 @@
+FedCSL 论文引用说明（论文overleaf.tex ↔ refs.bib）
+=============================================================
+每条记录包含：
+  [bib key]  文献标题 / 来源  —— 文章主要内容简述
+  引用位置 & 引用原因：为什么在相应位置引入该文献，以及这条引用如何与上下文逻辑串联。
+
+所有被引文献均来自四个整理好的文件夹：
+  联邦对比学习 / 联邦蒸馏 / 时序对比学习 / 联邦客户端选择
+
+=============================================================
+一、时间序列自监督 / 对比 / 可解释表征学习（支撑引言段 2 与相关工作 2.1）
+=============================================================
+
+[ts2vec]  TS2Vec: Towards Universal Representation of Time Series (Yue 等，AAAI 2022)
+          —— 分层对比学习框架，在增强的上下文视图上逐时间戳对比，首次提出对 UCR/UEA
+             125+29 数据集的通用时序表示，成为后续 SSL 时序工作的 baseline。
+  位置：引言段 2（"尤其是基于对比学习的方法..."）；相关工作 2.1；方法"本地实例级
+        对比学习"；评估协议段。
+  原因：作为"对比学习引入时序分析"的开山代表，用来说明本文本地对比分支与 TS2Vec
+        同源；同时与评估协议的"表示+下游分类器"范式保持一致。
+
+[tstcc]   Self-supervised Contrastive Representation Learning for Semi-supervised
+          Time-Series Classification (Eldele 等，TPAMI 2023)
+          —— 提出 TS-TCC：时间对比 + 上下文对比；CA-TCC 引入类感知伪标签。
+  位置：引言段 2；相关工作 2.1；方法"本地实例级对比学习"；评估协议段。
+  原因：TS-TCC 的"双对比模块"正好对应本文多层级对比/蒸馏的思想来源；也为本文使用
+        时序增强变换提供直接参考。
+
+[tfc]     TF-C: Self-Supervised Contrastive Pre-Training for Time Series via
+          Time-Frequency Consistency (Zhang 等，NeurIPS 2022)
+          —— 在时间视图与频率视图间强制邻近一致，提出时-频一致预训练。
+  位置：引言段 2；相关工作 2.1。
+  原因：为本文"周期感知加权"提供自然动机：既然时频一致性已被证明对 TS 表示有益，
+        那么显式根据 STFT/ACF 调整 shapelet 尺度权重即是其自然延伸。
+
+[simmtm]  SimMTM: A Simple Pre-Training Framework for Masked Time-Series
+          Modeling (Dong 等，NeurIPS 2023)
+          —— 把掩码建模与流形邻居重构结合，改进时序自监督。
+  位置：引言段 2；相关工作 2.1 开头（"早期方法依赖重构任务..."）。
+  原因：代表"掩码/重构类" SSL，用以补全非对比路线，说明本文选择"对比+蒸馏"而非
+        重构的缘由。
+
+[softclt] Soft Contrastive Learning for Time Series (Lee 等，ICLR 2024)
+          —— 在实例对比和时间对比中使用软分配，避免把邻近相似序列强推开。
+  位置：引言段 2；相关工作 2.1。
+  原因：与本文"联合 CL + KD"的软监督思路呼应；论证硬正负对在时序上的副作用，
+        从而动机化本文的 KL 蒸馏项。
+
+[timesurl] TimesURL: Self-supervised Contrastive Learning for Universal Time
+           Series Representation Learning (Liu & Chen, AAAI 2024)
+          —— 系统分析正负对构造、增强与损失，提出通用时序表示方案。
+  位置：引言段 2；相关工作 2.1。
+  原因：作为"通用时序表示"方向最新工作，论证本文追求"可解释通用表示"的路线合理。
+
+[timesnet] TimesNet: Temporal 2D-Variation Modeling for General Time Series
+           Analysis (Wu 等，ICLR 2023)
+          —— 发现多周期性并把 1D 时序展平为 2D 多周期张量建模。
+  位置：相关工作 2.1（"以 CNN/Transformer 为主干"）。
+  原因：代表先进但非 shapelet 的时序黑盒主干，用以对比 shapelet 路线的可解释优势，
+        同时为本文"周期感知加权"提供佐证：时序分析确实高度依赖周期结构。
+
+[fcnbaseline] Time Series Classification from Scratch with Deep Neural Networks:
+              A Strong Baseline (Wang 等，IJCNN 2017)
+          —— FCN/ResNet 作为 TSC 的强基线。
+  位置：相关工作 2.1。
+  原因：作为最经典的深度 TSC 骨干之一，用于说明现有 CNN 主干并非为 TS 而设计，
+        从而引出 shapelet 路线的必要性。
+
+[timescsl] TimeCSL: Unsupervised Contrastive Learning of General Shapelets
+           for Explorable Time Series Analysis (Liang 等，VLDB Demo 2024)
+          —— 本文 backbone；将 shapelet 表征与对比学习结合，强调可解释性与
+             "representation + task-oriented analyzer" 分析范式。
+  位置：引言段 2；引言段 4；相关工作 2.1；问题定义；方法多处；评估协议；局限性。
+  原因：整篇工作的主干思想来源，多处都必须锚定到 TimeCSL，用以论证 shapelet
+        可解释表征 + 多尺度对比的合理性。
+
+[interpgn] Shedding Light on Time Series Classification Using Interpretability
+           Gated Networks (ICLR 2025 under review)
+          —— 提出 InterpGN：把可解释 shapelet 专家与深度网络门控融合。
+  位置：引言段 2；相关工作 2.1（shapelet 路线与可解释性）。
+  原因：给 shapelet-based 可解释模型提供最新代表，强化"可解释表征仍具有
+        前沿竞争力"这一判断，支撑本文保留 shapelet 结构的决策。
+
+[unishape] A Unified Shape-Aware Foundation Model for Time Series Classification
+           (Liu 等，AAAI 2025)
+          —— 预训练 shape-aware 基础模型，用多尺度子序列原型做分类。
+  位置：相关工作 2.1。
+  原因：作为"多尺度 shape/shapelet"方向的规模化最新工作，为本文 8 个尺度的
+        shapelet 设计提供外部验证。
+
+=============================================================
+二、联邦基础、对比学习与非 IID 处理（支撑引言段 3--5 和相关工作 2.2、理论分析）
+=============================================================
+
+[fedavg]  Communication-Efficient Learning of Deep Networks from Decentralized
+          Data (McMahan 等，AISTATS 2017)
+          —— 联邦学习开山工作，提出 FedAvg。
+  位置：引言段 3；相关工作 2.2 开头；Baselines (uniform)。
+  原因：定义联邦范式的原点；本文 uniform baseline 即为标准 FedAvg 采样。
+
+[fedprox] Federated Optimization in Heterogeneous Networks (Li 等，MLSys 2020)
+          —— FedProx 通过近端项约束本地模型偏离全局模型。
+  位置：引言段 3（"约束项"）；方法总体目标（FedProx 形式）；理论分析
+        "非 IID 下纯参数平均的局限"。
+  原因：作为本文"局部-全局约束"思想在参数层面的经典对照，支撑了总体损失中
+        的 proximal 选项，也为漂移上界分析提供文献背景。
+
+[moon]    Model-Contrastive Federated Learning (Li 等，CVPR 2021)
+          —— MOON 用上一轮全局模型与本地模型在表示层做对比，抑制 non-IID 漂移。
+  位置：引言段 3；相关工作 2.2；方法"局部--全局联合对比与知识蒸馏"；
+        理论分析"局部--全局蒸馏对客户端漂移的抑制"。
+  原因：MOON 的模型级对比 = 本文"joint-CL"在参数层的前身；因此必须在方法
+        小节和理论分析处明确引用，作为设计依据与对照。
+
+[fedx]    FedX: Unsupervised Federated Learning with Cross Knowledge
+          Distillation (Han 等，ECCV 2022)
+          —— 双向知识蒸馏 + 对比学习，联邦无监督表示。
+  位置：引言段 5；相关工作 2.2；方法"joint-CL/KD"；理论分析。
+  原因：FedX 为"对比 + 蒸馏联合"在联邦 CV 场景下的直接前作，本文在时序下
+        借鉴同样的"对比+蒸馏"组合，是重要可比工作。
+
+[fedca]   Federated Unsupervised Representation Learning (FedCA, Zhang 等，
+          FITEE 2023)
+          —— 针对 FURL 的非 IID 问题，提出跨客户端表示对齐。
+  位置：相关工作 2.2；理论分析（嵌入空间失稳）。
+  原因：FedCA 首次提出 FURL 的两大难题（分布漂移 + 表示空间不一致），
+        本文的 joint-CL/KD 正是针对相同问题的时序版本。
+
+[fedmoco] Federated Contrastive Learning for Decentralized Unlabeled Medical
+          Images (FedMoCo, Dong & Voiculescu, MICCAI 2021)
+          —— 把 MoCo 迁移至医疗图像联邦，设计元数据迁移与自适应聚合。
+  位置：相关工作 2.2。
+  原因：早期 FCL 代表，指出质量感知聚合的必要性，与本文 $\omega_k=n_kq_k$
+        聚合公式思路呼应。
+
+[fedu2]   Rethinking the Representation in Federated Unsupervised Learning with
+          Non-IID Data (FedU2, Liao 等，CVPR 2024)
+          —— 发现表示坍缩与表示空间不一致，提出 FUR + EUA。
+  位置：引言段 5；相关工作 2.2；方法"joint-CL/KD"引言；理论分析。
+  原因：对非 IID 下表示空间两大失效模式做了系统化提炼，正好为本文多尺度
+        蒸馏与 joint-KD 的必要性提供外部证据。
+
+[fedproc] FedProc: Prototypical Contrastive Federated Learning on Non-IID
+          Data (Mu 等，arXiv 2021)
+          —— 类原型作为全局知识来纠正本地训练。
+  位置：相关工作 2.2。
+  原因：代表"原型式对比"的路线；提示本文虽然未显式维护类原型，但通过全局
+        模型等价传递语义中心。
+
+[fedpcl]  Federated Learning from Pre-Trained Models: A Contrastive Learning
+          Approach (FedPCL, Tan 等，NeurIPS 2022)
+          —— 基于预训练模型的类原型对比联邦。
+  位置：相关工作 2.2。
+  原因：补充 FedProc 的有监督侧变体；说明"原型级监督"同样是缓解 non-IID
+        的有效方式。
+
+[fedmi]   A Mutual Information Perspective on Federated Contrastive Learning
+          (Louizos 等，ICLR 2024)
+          —— 用互信息视角解释联邦对比学习。
+  位置：相关工作 2.2。
+  原因：给"联邦 CL + 全局监督是否有益"提供理论分析，间接为本文 joint-CL
+        的合理性背书。
+
+[fedcdl]  Reducing Non-IID Effects in Federated Autonomous Driving with
+          Contrastive Divergence Loss (Do 等，ICRA 2024)
+          —— 用散度式对比损失减轻自动驾驶联邦非 IID。
+  位置：相关工作 2.2。
+  原因：展示"对比散度"这一族损失在不同 non-IID 场景都起作用，为本文
+        joint-KD 使用 KL 散度的选择提供同族支持。
+
+[fedsmall] Federated Learning from Small Datasets (Kamp 等，ICLR 2023)
+          —— 小数据集上 daisy-chain 式模型置换，防止小样本导致聚合失败。
+  位置：相关工作 2.2 末尾。
+  原因：说明标签/样本稀缺是联邦场景的普遍困难，引出"无监督 shapelet
+        表征学习更适合标签稀缺"这一动机。
+
+=============================================================
+三、联邦知识蒸馏（支撑相关工作 2.2 后半段、方法与理论分析）
+=============================================================
+
+[flesd]   Towards Communication-Efficient and Privacy-Preserving Federated
+          Representation Learning (FLESD, Shi 等，2021)
+          —— 服务器集成客户端相似度矩阵进行相似度蒸馏。
+  位置：引言段 5（客户端选择附近对照）；相关工作 2.2；方法 joint-CL/KD；
+        理论分析。
+  原因：FLESD 的"相似度矩阵集成蒸馏" = 本文 joint-KD 的思想来源之一；
+        尤其它明确了"自监督对比对 non-IID 更鲁棒"的观察。
+
+[flpd]    Prototype Similarity Distillation for Communication-Efficient
+          Federated Unsupervised Representation Learning (Zhang 等，TKDE 2024)
+          —— 基于原型相似度的蒸馏，通信高效。
+  位置：相关工作 2.2。
+  原因：与本文联合蒸馏目标同属"相似度级知识迁移"，强化本文路线的合理性。
+
+[fedrcil] FedRCIL: Federated Knowledge Distillation for Representation-based
+          Contrastive Incremental Learning (Psaltis 等，ICCVW 2023)
+          —— 将多尺度表示蒸馏与增量对比结合。
+  位置：相关工作 2.2。
+  原因：提供"多尺度蒸馏 + 对比"在 CV 端的佐证，对应本文 scale-level KD。
+
+[fedcog]  Fake It Till Make It: Federated Learning with Consensus-Oriented
+          Generation (Ye 等，ICLR 2024)
+          —— 通过生成补全异构数据并基于生成数据做 KD。
+  位置：相关工作 2.2。
+  原因：指出"从数据侧缓解异构"的替代路径，对照本文从"损失侧"缓解异构。
+
+[fedkdsurvey] Federated Distillation: A Survey (Li 等，arXiv 2024)
+          —— 联邦蒸馏综述。
+  位置：相关工作 2.2 开头技术路线处。
+  原因：作为 FD 领域综述，提供一次性覆盖参数平均/个性化/蒸馏/迁移 等路线
+        的权威文献。
+
+[fednoro] FedNoRo: Towards Noise-Robust Federated Learning by Addressing Class
+          Imbalance and Label Noise Heterogeneity (Wu 等，IJCAI 2023)
+          —— 噪声鲁棒联邦，含 KD 与距离感知聚合。
+  位置：相关工作 2.2。
+  原因：与本文"质量感知聚合 $q_k$"在思路上相近，支撑本文聚合权重设计。
+
+[mrtf]    MrTF: Model Refinery for Transductive Federated Learning (Li 等，
+          DMKD 2023)
+          —— 服务器侧用测试样本精炼模型，稳定教师、整流蒸馏。
+  位置：相关工作 2.2。
+  原因：补全联邦蒸馏"服务器侧利用额外信息"的路线，和本文客户端侧蒸馏形成对照。
+
+[fediocd] Federated Learning via Input-Output Collaborative Distillation
+          (Gong 等，AAAI 2024)
+          —— 数据无关的输入-输出协同蒸馏。
+  位置：相关工作 2.2。
+  原因：展示无需原始数据的联邦 KD 可能路径，进一步支持"蒸馏是 FL 主流
+        知识传递形式"。
+
+=============================================================
+四、联邦时序分类 / Shapelet（支撑引言段 3、相关工作 2.2）
+=============================================================
+
+[fedst]   FedST: Secure Federated Shapelet Transformation for Time Series
+          Classification (Liang & Wang, VLDB Journal 2024)
+          —— 联邦场景下的 shapelet transformation 安全协议。
+  位置：引言段 3；相关工作 2.2。
+  原因：最直接的"联邦 + shapelet"前作；表明 shapelet 可解释性在联邦下有
+        前期探索，但仍限于监督 TSC，本文进一步扩展到无监督表征 + 客户端
+        选择。
+
+[fedtsc]  FedTSC: A Secure Federated Learning System for Interpretable Time
+          Series Classification (Liang & Wang, VLDB 2022)
+          —— 以可解释特征为基础的联邦 TSC 系统。
+  位置：引言段 3；相关工作 2.2。
+  原因：和 FedST 构成"联邦可解释 TSC"连续工作，用以定位本文在整个脉络
+        中的位置。
+
+[efdls]   An Efficient Federated Distillation Learning System for Multi-task
+          Time Series Classification (Xing 等，TIM 2022)
+          —— EFDLS：面向多任务 TSC 的特征级师生蒸馏 + 距离加权匹配。
+  位置：引言段 5；相关工作 2.2。
+  原因：唯一在时序场景下同时使用联邦 + KD 的代表工作，与本文最接近；用于
+        论证"仅靠参数平均不足，特征层面对齐更关键"。
+
+=============================================================
+五、联邦客户端选择 / 参与者采样（支撑引言段 5、相关工作 2.3、方法 OMP 段、
+   实验 Baselines、理论分析 OMP 段、局限性）
+=============================================================
+
+[oort]    Oort: Efficient Federated Learning via Guided Participant Selection
+          (Lai 等，OSDI 2021)
+          —— guided selection，把统计效用与系统速度结合。
+  位置：引言段 5；相关工作 2.3；Baselines；局限性。
+  原因：Oort 是客户端选择对照中最有代表性的"效用+速度"方案，与本文 OMP
+        形成正面对比。
+
+[fedcsadaptive] Tackling System and Statistical Heterogeneity for Federated
+                Learning with Adaptive Client Sampling (Luo 等，INFOCOM 2022)
+          —— 统计异构+系统异构联合优化的自适应采样。
+  位置：引言段 5；相关工作 2.3；Baselines；局限性。
+  原因：本文 FedCS baseline 的直接出处；同时作为"系统视角"采样的代表。
+
+[secompfl] Optimal Client Selection of Federated Learning Based on Compressed
+           Sensing (Li 等，TIFS 2025)
+          —— SecOMPFL：把客户端选择写成稀疏优化，利用 OMP 识别冗余/正交
+             客户端，并设计安全聚合协议。
+  位置：引言段 5；相关工作 2.3；方法 OMP 段；Baselines；理论分析 OMP；
+        局限性。
+  原因：本文 OMP 客户端选择的最近似前作；必须多处引用，以明确差异：本文
+        不追求重构服务器模型，而是以 OMP 系数作为贡献度，加上 EMA 平滑与
+        最小概率做动态采样分布。
+
+[folb]    Fast-Convergent Federated Learning (FOLB, Nguyen 等，JSAC 2021)
+          —— 根据设备预期改善量加权采样，加速收敛。
+  位置：相关工作 2.3；理论分析 OMP。
+  原因：代表"按预期增益采样"的思路，用于论证 OMP 选出的"代表性客户端"与
+        "高增益客户端"高度相关。
+
+[updateaware] Convergence of Update Aware Device Scheduling for Federated
+              Learning at the Wireless Edge (Amiri 等，TWC 2021)
+          —— 结合信道条件与更新重要性的无线边缘调度。
+  位置：相关工作 2.3；理论分析 OMP；局限性。
+  原因：与本文思路同样强调"更新重要性"，但偏无线系统视角，为本文拓展到
+        系统异构场景提供参考。
+
+[igpe]    Addressing Heterogeneity in Federated Learning with Client Selection
+          via Submodular Optimization (Zhang 等，ACM TOSN 2024)
+          —— 将客户端选择建模为子模优化问题。
+  位置：相关工作 2.3；局限性。
+  原因：代表"组合优化式客户端选择"，对比 OMP 的"稀疏优化式"路线。
+
+[fairerfl] A Fairer Client Selection Framework for Federated Internet of Things
+           (Mukhtiar，Web Conf 2025)
+          —— 公平性感知客户端选择，讨论 equality/equity/trade-off。
+  位置：相关工作 2.3。
+  原因：本文 min_selection_prob 正是为防止被边缘化而设，与公平性文献动机
+        一致，用以说明相关约束的必要性。
+
+=============================================================
+六、整体逻辑链条（"为什么要这样串"）
+=============================================================
+  (1) 先确立时序自监督/对比学习的发展脉络（[ts2vec,tstcc,tfc,simmtm,softclt,
+      timesurl]），再引出 shapelet 可解释表征路线（[timesnet,fcnbaseline,
+      interpgn,unishape,timescsl]），点明本文 backbone 来源；
+  (2) 在联邦角度，说明 FedAvg/FedProx 的参数级约束不足以处理 non-IID
+      ([fedavg,fedprox])，进而引出表示级对比/蒸馏（[moon,fedx,fedca,fedmoco,
+      fedu2,fedproc,fedpcl,fedmi,fedcdl,fedsmall,flesd,flpd,fedrcil,fedcog,
+      fedkdsurvey,fednoro,mrtf,fediocd]），从而定位本文 joint-CL/KD
+      与 scale-CL/KD 的设计依据；
+  (3) 在联邦时序的细分方向上，与 FedST/FedTSC/EFDLS 对接，说明本文在
+      "无监督 + shapelet + 联邦 + 客户端选择" 这一交集中独一无二；
+  (4) 在客户端选择上，以 Oort、FedCS 为系统/统计视角代表，FOLB、
+      Update-Aware、IGPE、Fairer 为补充，重点与 SecOMPFL 对接并拉开
+      差距（EMA 平滑、最小概率、与表示学习联合优化）；
+  (5) 理论分析部分，沿用 FedProx/MOON/FedU2/FedCA/FLESD 的论述脉络
+      解释漂移抑制；在 OMP 段借 SecOMPFL/FOLB/Update-Aware 说明
+      "代表性客户端"概念；
+  (6) 评估协议沿用 TimeCSL/TS2Vec/TS-TCC 的"表示 + 分类器"规范，
+      保证结果可比性；
+  (7) 局限性末尾承接 SecOMPFL/Oort/FedCS/Update-Aware/IGPE 给出
+      后续可扩展方向。

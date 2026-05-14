@@ -2,7 +2,7 @@ model:
   name: ""
   params:
     dist_measure: "mix"
-    lr: 0.1
+    lr: 0.05
     batch_size: 8
     wd: 0.0001
     momentum: 0.9
@@ -36,3 +36,14 @@ ssl:
   ema_tau: 0.99
 logPath: "./result/"
 description: "byol"
+
+evaluation:
+  protocol: "svm"  # options: svm | linear_probe
+  svm_c_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+  linear_probe:
+    lr: 0.001
+    wd: 0.0001
+    batch_size: 256
+    max_epoch: 200
+    eval_interval: 1
+    seed: 42

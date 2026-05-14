@@ -339,11 +339,13 @@ class LearningShapeletsModel(nn.Module):
                 picked[key] = tensor
         return picked
 
-    def encode_scale(self, x, scale_idx, masking=False):
+    def encode_scale(self, x, scale_idx, masking=False, normalize=False):
         """仅编码一个尺度，输出该尺度的小模型特征。"""
         x = self.shapelets_blocks.forward_scale(x, scale_idx, masking)
         x = torch.squeeze(x, 1)
-        return nn.functional.layer_norm(x, (x.shape[1],))
+        if normalize:
+            x = nn.functional.layer_norm(x, (x.shape[1],))
+        return x
 
     def forward(self, x, optimize='acc', masking=False,isProdictor=False):
 
@@ -475,13 +477,15 @@ class LearningShapeletsModelMixDistances(nn.Module):
                 picked[key] = tensor
         return picked
 
-    def encode_scale(self, x, scale_idx, masking=False):
+    def encode_scale(self, x, scale_idx, masking=False, normalize=False):
         """仅编码一个尺度，保留 mix-distance 的三个分支，但只跑该尺度。"""
         eu = torch.squeeze(self.shapelets_euclidean.forward_scale(x, scale_idx, masking), 1)
         co = torch.squeeze(self.shapelets_cosine.forward_scale(x, scale_idx, masking), 1)
         cc = torch.squeeze(self.shapelets_cross_correlation.forward_scale(x, scale_idx, masking), 1)
         out = torch.cat((eu, co, cc), dim=1)
-        return nn.functional.layer_norm(out, (out.shape[1],))
+        if normalize:
+            out = nn.functional.layer_norm(out, (out.shape[1],))
+        return out
 
     def forward(self, x, optimize='acc', masking=False):
 

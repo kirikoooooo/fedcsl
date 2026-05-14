@@ -4,7 +4,8 @@ model:
     dist_measure: "mix"
     lr: 0.05     # 当dataset=HAR时为0.05
     batch_size: 32 # 当dataset=HAR时为256
-    wd: 0
+    wd: 0.0001
+    momentum: 0.9
     ls: 0.01         #l3 多粒度学习 1
     l: 0.1       #l4 正则化系数 0.01
     beta: 0.4
@@ -29,4 +30,15 @@ ablation:
   UseACF: False
   UseDistribution: False
 logPath: "./result/"
-description: "Onlyallscale+mix_l=0.1 no-onehot"
+description: "Onlyallscale+mix_l=0.1"
+
+evaluation:
+  protocol: "svm"  # options: svm | linear_probe
+  svm_c_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+  linear_probe:
+    lr: 0.001
+    wd: 0.0001
+    batch_size: 256
+    max_epoch: 200
+    eval_interval: 1
+    seed: 42

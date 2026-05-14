@@ -2,8 +2,8 @@ model:
   name: ""
   params:
     dist_measure: "mix"
-    lr: 0.05     # 当dataset=HAR时为0.05
-    batch_size: 8 # HAR baseline 统一：16
+    lr: 0.01     # 当dataset=HAR时为0.05
+    batch_size: 32 # HAR baseline 统一：16
     wd: 0
     ls: 1         #l3 多粒度学习
     l: 0.01       #l4 正则化系数
@@ -14,7 +14,7 @@ algo: "fedcsl"
 federated:
   numClient: 50
   numRound: 200
-  numEpoch: 3
+  numEpoch: 1
   dirichlet_alpha: 1
   use_client_selection: False  # 是否启用客户端选择
   client_selection_ratio: 0.6   # 客户端选择比例（当use_client_selection为True时生效）
@@ -33,3 +33,14 @@ ablation:
 
 logPath: "./result/"
 description: "acf with select"
+
+evaluation:
+  protocol: "svm"  # options: svm | linear_probe
+  svm_c_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+  linear_probe:
+    lr: 0.001
+    wd: 0.0001
+    batch_size: 256
+    max_epoch: 200
+    eval_interval: 1
+    seed: 42

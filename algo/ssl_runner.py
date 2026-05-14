@@ -1,9 +1,9 @@
 """Federated self-supervised baselines inspired by Orchestra.
 
 当前先落地最小可跑版本：
-- SimCLR
-- SimSiam
 - BYOL
+- Orchestra
+- FedU2
 
 共同特点：
 - 复用当前项目的 shapelet encoder；
@@ -27,6 +27,7 @@ except Exception:  # pragma: no cover
     tsaug = None
 
 from .flbench_compat import AttrDict, FedAvgClient, FedAvgServer, SequentialTrainer, TensorBaseDataset
+from .fedu2_utils import eua_aggregate_state_dicts, fur_uot_loss
 from .ssl_model import OrchestraShapeletModel, ShapeletSSLModel
 
 
@@ -96,6 +97,12 @@ def _build_args(
             "cluster_m_size": int(ssl_cfg.get("cluster_m_size", 128)),
             "deg_num_classes": int(ssl_cfg.get("deg_num_classes", 5)),
             "server_cluster_rounds": int(ssl_cfg.get("server_cluster_rounds", 80)),
+            "fur_weight": float(ssl_cfg.get("fur_weight", 0.1)),
+            "fur_tau_a": float(ssl_cfg.get("fur_tau_a", 0.8)),
+            "fur_tau_b": float(ssl_cfg.get("fur_tau_b", 0.8)),
+            "fur_num_steps": int(ssl_cfg.get("fur_num_steps", 5)),
+            "server_lr": float(ssl_cfg.get("server_lr", 0.1)),
+            "sharpen_ratio": float(ssl_cfg.get("sharpen_ratio", 0.1)),
         }),
     })
 
@@ -292,31 +299,10 @@ class SSLClient(FedAvgClient):
                 loss.backward()
                 self.optimizer.step()
                 losses.append(float(loss.detach().cpu()))
-                if getattr(self.model, "method", "") == "byol":
+                if getattr(self.model, "method", "") in {"byol", "fedu2"}:
                     self.model.update_target_network(float(self.args.ssl.ema_tau))
         avg_loss = float(np.mean(losses)) if losses else float("nan")
         self.eval_results = {"after": {"train": AttrDict({"loss": avg_loss})}}
-
-
-class SimCLRClient(SSLClient):
-    def _compute_loss(self, x: torch.Tensor) -> torch.Tensor:
-        x_q, x_k = make_two_views(x, self.device)
-        _, z1 = self.model.online_project(x_q)
-        _, z2 = self.model.online_project(x_k)
-        return nt_xent_loss(z1, z2, float(self.args.ssl.temperature))
-
-
-class SimSiamClient(SSLClient):
-    def _compute_loss(self, x: torch.Tensor) -> torch.Tensor:
-        x_q, x_k = make_two_views(x, self.device)
-        _, z1 = self.model.online_project(x_q)
-        _, z2 = self.model.online_project(x_k)
-        p1 = self.model.predictor(z1)
-        p2 = self.model.predictor(z2)
-        return 0.5 * (
-            negative_cosine_similarity(p1, z2.detach()) +
-            negative_cosine_similarity(p2, z1.detach())
-        )
 
 
 class BYOLClient(SSLClient):
@@ -337,6 +323,38 @@ class BYOLClient(SSLClient):
             (2.0 + 2.0 * negative_cosine_similarity(p1, t2)) +
             (2.0 + 2.0 * negative_cosine_similarity(p2, t1))
         )
+
+
+class FedU2Client(SSLClient):
+    def set_parameters(self, package: dict[str, Any]) -> None:
+        super().set_parameters(package)
+        self.model.reset_target_network()
+
+    def _compute_loss(self, x: torch.Tensor) -> torch.Tensor:
+        x_q, x_k = make_two_views(x, self.device)
+        _, z1 = self.model.online_project(x_q)
+        _, z2 = self.model.online_project(x_k)
+        p1 = self.model.predictor(z1)
+        p2 = self.model.predictor(z2)
+        with torch.no_grad():
+            t1 = self.model.target_project(x_q)
+            t2 = self.model.target_project(x_k)
+        align_loss = 0.5 * (
+            (2.0 + 2.0 * negative_cosine_similarity(p1, t2)) +
+            (2.0 + 2.0 * negative_cosine_similarity(p2, t1))
+        )
+        fur_loss = fur_uot_loss(
+            z1,
+            tau_a=float(self.args.ssl.fur_tau_a),
+            tau_b=float(self.args.ssl.fur_tau_b),
+            num_steps=int(self.args.ssl.fur_num_steps),
+        ) + fur_uot_loss(
+            z2,
+            tau_a=float(self.args.ssl.fur_tau_a),
+            tau_b=float(self.args.ssl.fur_tau_b),
+            num_steps=int(self.args.ssl.fur_num_steps),
+        )
+        return align_loss + float(self.args.ssl.fur_weight) * fur_loss
 
 
 class OrchestraClient(SSLClient):
@@ -378,6 +396,30 @@ class OrchestraClient(SSLClient):
             self.model.local_centroids.weight.detach().cpu().clone()
         )
         return client_package
+
+
+class FedU2Server(FedAvgServer):
+    def aggregate_client_updates(self, client_packages: "OrderedDict[int, Dict[str, Any]]") -> None:
+        if self.return_diff:
+            super().aggregate_client_updates(client_packages)
+            return
+
+        weights = [float(pkg["weight"]) for pkg in client_packages.values()]
+        client_states = [pkg["regular_model_params"] for pkg in client_packages.values()]
+        aggregated = eua_aggregate_state_dicts(
+            self.public_model_params,
+            client_states,
+            weights,
+            server_lr=float(getattr(self.args.ssl, "server_lr", 0.1)),
+            sharpen_ratio=float(getattr(self.args.ssl, "sharpen_ratio", 0.1)),
+        )
+        self.public_model_params = OrderedDict(
+            (k, v.detach().cpu().clone()) for k, v in aggregated.items()
+        )
+
+        for cid, pkg in client_packages.items():
+            self.client_optimizer_states[cid] = pkg.get("optimizer_state", {})
+            self.client_lr_scheduler_states[cid] = pkg.get("lr_scheduler_state", {})
 
 
 class OrchestraServer(FedAvgServer):
@@ -443,7 +485,9 @@ def run_ssl_baseline(
     save_model_fn: Callable,
 ) -> None:
     algo = str(algo).lower()
-    if algo not in {"simclr", "simsiam", "byol", "orchestra"}:
+    if algo == "fedu2-byol":
+        algo = "fedu2"
+    if algo not in {"byol", "orchestra", "fedu2"}:
         raise ValueError(f"unsupported ssl algo: {algo}")
 
     device = torch.device("cuda") if (to_cuda and torch.cuda.is_available()) else torch.device("cpu")
@@ -481,7 +525,7 @@ def run_ssl_baseline(
                 to_cuda=to_cuda,
             )
         return ShapeletSSLModel(
-            method=algo,
+            method="fedu2" if algo == "fedu2" else algo,
             shapelets_size_and_len=shapelets_size_and_len,
             in_channels=n_channels,
             num_classes=num_classes,
@@ -493,7 +537,12 @@ def run_ssl_baseline(
         )
 
     server_model = _mk_model()
-    server = OrchestraServer(args) if algo == "orchestra" else FedAvgServer(args)
+    if algo == "orchestra":
+        server = OrchestraServer(args)
+    elif algo == "fedu2":
+        server = FedU2Server(args)
+    else:
+        server = FedAvgServer(args)
     server.model = server_model
     server.client_num = num_clients
     server.train_clients = list(range(num_clients))
@@ -520,10 +569,9 @@ def run_ssl_baseline(
         return _cls
 
     client_cls = {
-        "simclr": SimCLRClient,
-        "simsiam": SimSiamClient,
         "byol": BYOLClient,
         "orchestra": OrchestraClient,
+        "fedu2": FedU2Client,
     }[algo]
     clients = []
     for _cid in range(num_clients):

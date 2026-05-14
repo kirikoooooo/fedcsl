@@ -59,11 +59,14 @@ parser.add_argument('--min-selection-prob', type=float, default=None, help='Mini
 parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing coefficient (0.0-1.0)')
 parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
 parser.add_argument('--dirichlet-alpha', type=float, default=None, help='Dirichlet alpha for data heterogeneity (overrides config file)')
+parser.add_argument('--num-client', type=int, default=None, help='Number of federated clients (overrides config file)')
 parser.add_argument('--server-gpu', type=int, default=None, help='GPU id used by the server/model evaluation thread')
 parser.add_argument('--client-gpus', type=str, default=None,
                     help='Comma-separated GPU ids for client worker threads, e.g. "0,1,2"')
 parser.add_argument('--client-workers', type=int, default=None,
                     help='Number of client training worker threads; default comes from config or 3')
+parser.add_argument('--eval-protocol', type=str, default=None, choices=['svm', 'linear_probe'],
+                    help='Override downstream evaluation protocol: svm or linear_probe')
 
 args = parser.parse_args()
 
@@ -191,24 +194,24 @@ def _sanitize_filename(s):
     return s.strip() or "run"
 
 
-def _is_splitteacher_algo(algo_name):
-    return str(algo_name).lower() in ("fedcsl-onehot-splitteacher", "fedcsl-simclr-split")
+def _is_spilter_algo(algo_name):
+    """Spilter keeps only selected scale slices on each client."""
+    return str(algo_name).lower() in (
+        "spilter",
+        "fedcsl-spilter",
+    )
 
 
-def _is_teacher_scale_set_algo(algo_name):
-    algo = str(algo_name).lower()
-    return algo == "fedcsl-onehot-splitteacher"
+def _uses_scale_split_algo(algo_name):
+    return _is_spilter_algo(algo_name)
 
 
 def _uses_fedcsl_scale_scores(algo_name):
     algo = str(algo_name).lower()
     return algo in (
         "fedcsl",
-        "fedcsl-onehot",
-        "fedcsl-simclr",
-        "fedcsl-simclr-proj",
-        "fedcsl-simclr-split",
-        "fedcsl-onehot-splitteacher",
+        "spilter",
+        "fedcsl-spilter",
     )
 
 
@@ -522,6 +525,32 @@ def _plan_global_score_random_single_client_scales(client_scores, y_fed, seed=No
     return client_selected, scale_counts, probs
 
 
+def _plan_local_score_topm_client_scales(client_scores, top_m=4):
+    """每个 client 按自己的周期评分选择 top-m 尺度，作为拼接子模型训练。"""
+    num_clients = len(client_scores)
+    num_scales = len(client_scores[0]) if num_clients > 0 else 0
+    if num_scales <= 0:
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64)
+
+    top_m = max(1, min(int(top_m), num_scales))
+    client_selected = []
+    scale_counts = np.zeros(num_scales, dtype=np.int64)
+
+    for scores in client_scores:
+        scores = _normalize_scale_scores(scores, num_scales)
+        if np.any(scores > 0):
+            # Stable tie-breaker: higher score first, then lower scale index.
+            order = np.lexsort((np.arange(num_scales), -scores))
+        else:
+            order = np.arange(num_scales)
+        selected = [int(scale_idx) for scale_idx in order[:top_m]]
+        client_selected.append(selected)
+        for scale_idx in selected:
+            scale_counts[scale_idx] += 1
+
+    return client_selected, scale_counts
+
+
 def _spilter_allocation_mode(config):
     spilter_cfg = config.get("spilter", {}) or {}
     mode = str(spilter_cfg.get("allocation_mode", "efficiency_aware")).strip().lower()
@@ -535,20 +564,32 @@ def _spilter_allocation_mode(config):
         "global_score": "global_score_random_single",
         "score_random": "global_score_random_single",
         "period_random": "global_score_random_single",
+        "local": "local_score_topm",
+        "local_topm": "local_score_topm",
+        "local-topm": "local_score_topm",
+        "local-score-topm": "local_score_topm",
+        "local_period_topm": "local_score_topm",
+        "period_topm": "local_score_topm",
+        "period-aware-topm": "local_score_topm",
         "efficiency": "efficiency_aware",
         "efficiency-aware": "efficiency_aware",
     }
     return aliases.get(mode, mode)
 
 
+def _spilter_local_top_m(config, default=4):
+    spilter_cfg = config.get("spilter", {}) or {}
+    for key in ("local_top_m", "top_m", "num_selected_scales"):
+        if key in spilter_cfg:
+            return max(1, int(spilter_cfg[key]))
+    return max(1, int(default))
+
+
 def _spilter_system_extra_scale_count(config, default=2):
-    """读取 splitteacher 系统效率补发尺度数，兼容新旧配置写法。"""
+    """读取 Spilter 系统效率补发尺度数。"""
     spilter_cfg = config.get("spilter", {}) or {}
     if "system_extra_scale_count" in spilter_cfg:
         return max(0, int(spilter_cfg["system_extra_scale_count"]))
-    splitteacher_cfg = config.get("splitteacher", {}) or {}
-    if "extra_scale_count" in splitteacher_cfg:
-        return max(0, int(splitteacher_cfg["extra_scale_count"]))
     return max(0, int(default))
 
 
@@ -594,6 +635,7 @@ def _train_client_worker(
     batch_size,
     lr,
     wd,
+    momentum,
     use_scale_split_comm,
     server_state_cpu,
     previous_client_states,
@@ -607,7 +649,7 @@ def _train_client_worker(
 
     teacher = None
     algo_name = str(shared_kwargs.get("config", {}).get("algo", "fedcsl")).lower()
-    need_teacher = algo_name in ("fedcsl", "fedcsl-onehot", "fedcsl-onehot-splitteacher", "fedprox", "moon")
+    need_teacher = algo_name in ("fedcsl", "spilter", "fedcsl-spilter", "fedprox", "moon")
     if need_teacher and (round_idx != 0 or use_scale_split_comm):
         teacher = LearningShapeletsCL(**{**shared_kwargs, "device": device})
         _load_state_to_model(teacher.model, server_state_cpu)
@@ -620,7 +662,7 @@ def _train_client_worker(
         c = clientList[idx]
         c.set_device(device)
         if c.optimizer is None:
-            c.set_optimizer(optim.SGD(c.model.parameters(), lr=lr, weight_decay=wd))
+            c.set_optimizer(optim.SGD(c.model.parameters(), lr=lr, weight_decay=wd, momentum=momentum))
         else:
             for group in c.optimizer.param_groups:
                 group["params"] = list(c.model.parameters())
@@ -722,42 +764,282 @@ def _train_client_worker(
 
 
 # ---------------------------------------------------------------------------
-# 下游 SVC 评估：在 [10^-4, 10^4] 的 9 个 C 里挑最优，再在测试集上评估
+# 下游评估：SVM / Linear Probe（二选一，可由 config.evaluation.protocol 控制）
 # ---------------------------------------------------------------------------
 _SVC_C_GRID = [10 ** i for i in range(-4, 5)]
 
 
-def eval(transformation, transformation_test, y_train, y_test):
-    """训练集自评估选 C（不做 CV，更快），然后在测试集评估。"""
-    best_acc, C_best = -1.0, _SVC_C_GRID[0]
-    for C in _SVC_C_GRID:
-        clf = SVC(C=C, random_state=42)
+def _to_numpy_labels(y):
+    if hasattr(y, "cpu"):
+        y = y.cpu().numpy()
+    return np.asarray(y)
+
+
+def _evaluation_config(config, protocol_override=None):
+    cfg = (config or {}).get("evaluation", {}) or {}
+    protocol = protocol_override or os.environ.get("EVAL_PROTOCOL") or cfg.get("protocol", cfg.get("method", "svm"))
+    protocol = str(protocol).strip().lower()
+    aliases = {
+        "svc": "svm",
+        "linear": "linear_probe",
+        "linear-probe": "linear_probe",
+        "probe": "linear_probe",
+        "lp": "linear_probe",
+    }
+    protocol = aliases.get(protocol, protocol)
+    if protocol not in {"svm", "linear_probe"}:
+        protocol = "svm"
+
+    c_grid = cfg.get("svm_c_grid", _SVC_C_GRID)
+    if not isinstance(c_grid, (list, tuple)) or not c_grid:
+        c_grid = _SVC_C_GRID
+    c_grid = [float(v) for v in c_grid]
+
+    lp = cfg.get("linear_probe", {}) or {}
+    return {
+        "protocol": protocol,
+        "svm_c_grid": c_grid,
+        "linear_probe": {
+            "lr": float(lp.get("lr", 1e-3)),
+            "wd": float(lp.get("wd", 1e-4)),
+            "batch_size": int(lp.get("batch_size", 256)),
+            "max_epoch": int(lp.get("max_epoch", 200)),
+            "eval_interval": int(lp.get("eval_interval", 1)),
+            "seed": int(lp.get("seed", 42)),
+        },
+    }
+
+
+def _eval_svm_train_test(transformation, transformation_test, y_train, y_test, *, c_grid=None):
+    y_train = _to_numpy_labels(y_train)
+    y_test = _to_numpy_labels(y_test)
+    grid = c_grid or _SVC_C_GRID
+    best_acc, c_best = -1.0, grid[0]
+    for c in grid:
+        clf = SVC(C=float(c), random_state=42)
         clf.fit(transformation, y_train)
         acc = accuracy_score(clf.predict(transformation), y_train)
         if acc > best_acc:
-            best_acc, C_best = acc, C
-    clf = SVC(C=C_best, random_state=42)
+            best_acc, c_best = acc, float(c)
+    clf = SVC(C=c_best, random_state=42)
     clf.fit(transformation, y_train)
     train_acc = accuracy_score(clf.predict(transformation), y_train)
     test_acc = accuracy_score(clf.predict(transformation_test), y_test)
     return train_acc, test_acc
 
 
-def eval_TSTCC(transformation_train, transformation_test, transformation_val,
-               y_train, y_test, y_val):
-    """使用验证集选 C，再在测试集上评估（Epilepsy/SleepEDF/FD-A 等有 val.pt 的数据集）。"""
-    best_val_acc, C_best = -1.0, _SVC_C_GRID[0]
-    for C in _SVC_C_GRID:
-        clf = SVC(C=C, random_state=42)
+def _eval_svm_with_val(transformation_train, transformation_test, transformation_val, y_train, y_test, y_val, *, c_grid=None):
+    y_train = _to_numpy_labels(y_train)
+    y_test = _to_numpy_labels(y_test)
+    y_val = _to_numpy_labels(y_val)
+    grid = c_grid or _SVC_C_GRID
+    best_val_acc, c_best = -1.0, grid[0]
+    for c in grid:
+        clf = SVC(C=float(c), random_state=42)
         clf.fit(transformation_train, y_train)
         acc_i = accuracy_score(clf.predict(transformation_val), y_val)
         if acc_i > best_val_acc:
-            best_val_acc, C_best = acc_i, C
-    clf = SVC(C=C_best, random_state=42)
+            best_val_acc, c_best = acc_i, float(c)
+    clf = SVC(C=c_best, random_state=42)
     clf.fit(transformation_train, y_train)
     train_acc = accuracy_score(clf.predict(transformation_train), y_train)
     test_acc = accuracy_score(clf.predict(transformation_test), y_test)
     return train_acc, test_acc
+
+
+def _linear_probe_eval(
+    transformation_train,
+    transformation_test,
+    y_train,
+    y_test,
+    *,
+    transformation_val=None,
+    y_val=None,
+    params=None,
+):
+    params = params or {}
+    lr = float(params.get("lr", 1e-3))
+    wd = float(params.get("wd", 1e-4))
+    batch_size = max(4, int(params.get("batch_size", 256)))
+    max_epoch = max(1, int(params.get("max_epoch", 200)))
+    eval_interval = max(1, int(params.get("eval_interval", 1)))
+    seed = int(params.get("seed", 42))
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    x_train = torch.as_tensor(np.asarray(transformation_train), dtype=torch.float32)
+    x_test = torch.as_tensor(np.asarray(transformation_test), dtype=torch.float32)
+    y_train_np = _to_numpy_labels(y_train)
+    y_test_np = _to_numpy_labels(y_test)
+
+    classes = np.unique(y_train_np)
+    class_to_idx = {c: i for i, c in enumerate(classes.tolist())}
+    y_train_enc = torch.as_tensor([class_to_idx[c] for c in y_train_np.tolist()], dtype=torch.long)
+    y_test_enc = torch.as_tensor([class_to_idx[c] for c in y_test_np.tolist()], dtype=torch.long)
+
+    has_val = transformation_val is not None and y_val is not None
+    if has_val:
+        x_val = torch.as_tensor(np.asarray(transformation_val), dtype=torch.float32)
+        y_val_np = _to_numpy_labels(y_val)
+        y_val_enc = torch.as_tensor([class_to_idx[c] for c in y_val_np.tolist()], dtype=torch.long)
+    else:
+        x_val = None
+        y_val_enc = None
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    probe = nn.Linear(x_train.shape[1], len(classes)).to(device)
+    optimizer = optim.Adam(probe.parameters(), lr=lr, weight_decay=wd)
+    criterion = nn.CrossEntropyLoss()
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=max(10, max_epoch // 10), min_lr=1e-4
+    )
+
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(x_train, y_train_enc),
+        batch_size=max(4, min(batch_size, int(x_train.shape[0]))),
+        shuffle=True,
+        drop_last=False,
+    )
+
+    best_metric = -1.0
+    best_state = copy.deepcopy(probe.state_dict())
+
+    def _accuracy(x_tensor, y_tensor):
+        probe.eval()
+        preds = []
+        labels = []
+        eval_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(x_tensor, y_tensor),
+            batch_size=max(4, min(batch_size, int(x_tensor.shape[0]))),
+            shuffle=False,
+            drop_last=False,
+        )
+        with torch.no_grad():
+            for xb, yb in eval_loader:
+                xb = xb.to(device)
+                logits = probe(xb)
+                preds.append(torch.argmax(logits, dim=1).cpu())
+                labels.append(yb.cpu())
+        pred = torch.cat(preds).numpy()
+        label = torch.cat(labels).numpy()
+        return accuracy_score(label, pred)
+
+    for epoch in range(max_epoch):
+        probe.train()
+        epoch_losses = []
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            logits = probe(xb)
+            loss = criterion(logits, yb)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            epoch_losses.append(float(loss.detach().cpu()))
+        scheduler.step(float(np.mean(epoch_losses)) if epoch_losses else 0.0)
+
+        if (epoch + 1) % eval_interval != 0 and epoch + 1 != max_epoch:
+            continue
+        metric = _accuracy(x_val, y_val_enc) if has_val else _accuracy(x_train, y_train_enc)
+        if metric >= best_metric:
+            best_metric = float(metric)
+            best_state = copy.deepcopy(probe.state_dict())
+
+    probe.load_state_dict(best_state)
+    train_acc = _accuracy(x_train, y_train_enc)
+    test_acc = _accuracy(x_test, y_test_enc)
+    return train_acc, test_acc
+
+
+def _make_downstream_eval_fns(config, protocol_override=None):
+    eval_cfg = _evaluation_config(config, protocol_override=protocol_override)
+    protocol = eval_cfg["protocol"]
+
+    if protocol == "linear_probe":
+        lp_params = eval_cfg["linear_probe"]
+
+        def eval_train_test_fn(transformation, transformation_test, y_train, y_test):
+            return _linear_probe_eval(
+                transformation,
+                transformation_test,
+                y_train,
+                y_test,
+                params=lp_params,
+            )
+
+        def eval_tstcc_fn(transformation_train, transformation_test, transformation_val, y_train, y_test, y_val):
+            return _linear_probe_eval(
+                transformation_train,
+                transformation_test,
+                y_train,
+                y_test,
+                transformation_val=transformation_val,
+                y_val=y_val,
+                params=lp_params,
+            )
+
+        desc = (
+            f"linear_probe(lr={lp_params['lr']}, wd={lp_params['wd']}, "
+            f"batch={lp_params['batch_size']}, epoch={lp_params['max_epoch']})"
+        )
+        return eval_train_test_fn, eval_tstcc_fn, desc
+
+    svm_grid = eval_cfg["svm_c_grid"]
+
+    def eval_train_test_fn(transformation, transformation_test, y_train, y_test):
+        return _eval_svm_train_test(
+            transformation,
+            transformation_test,
+            y_train,
+            y_test,
+            c_grid=svm_grid,
+        )
+
+    def eval_tstcc_fn(transformation_train, transformation_test, transformation_val, y_train, y_test, y_val):
+        return _eval_svm_with_val(
+            transformation_train,
+            transformation_test,
+            transformation_val,
+            y_train,
+            y_test,
+            y_val,
+            c_grid=svm_grid,
+        )
+
+    return eval_train_test_fn, eval_tstcc_fn, f"svm(C_grid={svm_grid})"
+
+
+def eval(transformation, transformation_test, y_train, y_test, evaluation_cfg=None):
+    cfg = evaluation_cfg or {"protocol": "svm", "svm_c_grid": _SVC_C_GRID, "linear_probe": {}}
+    if cfg.get("protocol") == "linear_probe":
+        return _linear_probe_eval(transformation, transformation_test, y_train, y_test, params=cfg.get("linear_probe"))
+    return _eval_svm_train_test(transformation, transformation_test, y_train, y_test, c_grid=cfg.get("svm_c_grid"))
+
+
+def eval_TSTCC(transformation_train, transformation_test, transformation_val,
+               y_train, y_test, y_val, evaluation_cfg=None):
+    cfg = evaluation_cfg or {"protocol": "svm", "svm_c_grid": _SVC_C_GRID, "linear_probe": {}}
+    if cfg.get("protocol") == "linear_probe":
+        return _linear_probe_eval(
+            transformation_train,
+            transformation_test,
+            y_train,
+            y_test,
+            transformation_val=transformation_val,
+            y_val=y_val,
+            params=cfg.get("linear_probe"),
+        )
+    return _eval_svm_with_val(
+        transformation_train,
+        transformation_test,
+        transformation_val,
+        y_train,
+        y_test,
+        y_val,
+        c_grid=cfg.get("svm_c_grid"),
+    )
 
 
 def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, to_cuda=True,
@@ -783,7 +1065,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     fed_cfg = config['federated']
     model_cfg = config['model']['params']
 
-    numClient = fed_cfg['numClient']
+    numClient = args.num_client if args.num_client is not None else fed_cfg['numClient']
+    numClient = max(1, int(numClient))
     numRound = fed_cfg['numRound']
     numEpoch = fed_cfg['numEpoch']
     dirichlet_alpha = args.dirichlet_alpha if args.dirichlet_alpha is not None else fed_cfg['dirichlet_alpha']
@@ -799,9 +1082,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     dataset = args.dataset if args.dataset is not None else config.get('dataset', dataset)
     dist_measure = model_cfg['dist_measure']
+    eval_protocol_override = args.eval_protocol if args.eval_protocol is not None else None
+    eval_train_test_fn, eval_tstcc_fn, eval_protocol_desc = _make_downstream_eval_fns(
+        config, protocol_override=eval_protocol_override
+    )
+    print(f"downstream evaluation: {eval_protocol_desc}")
     lr = model_cfg['lr']
     batch_size = args.batch_size if args.batch_size is not None else model_cfg['batch_size']
-    wd = model_cfg['wd']
+    wd = model_cfg.get('wd', 0.0001)
+    momentum = model_cfg.get('momentum', 0.9)
     ls = model_cfg['ls']
     l = model_cfg['l']
     beta = model_cfg.get('beta', 0.4)
@@ -846,6 +1135,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     config.setdefault('federated', {})
     config.setdefault('model', {}).setdefault('params', {})
     config['federated']['dirichlet_alpha'] = dirichlet_alpha
+    config['federated']['numClient'] = numClient
     config['federated']['use_client_selection'] = use_client_selection
     config['federated']['client_selection_ratio'] = client_selection_ratio
     config['federated']['min_selection_prob'] = min_selection_prob
@@ -903,25 +1193,25 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     if dataset == "HAR":
         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_HAR(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
         if os.path.isfile("./HAR/val.pt"):
-            val_data = torch.load("./HAR/val.pt")
+            val_data = torch.load("./HAR/val.pt", weights_only=True)
             X_val = val_data["samples"].float()
             y_val = val_data["labels"].int()
             has_val = True
     elif dataset == "Epilepsy-TSTCC":
         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_Epilepsy(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
-        val_data = torch.load("./Epilepsy/val.pt")
+        val_data = torch.load("./Epilepsy/val.pt", weights_only=True)
         X_val = val_data["samples"].float()
         y_val = val_data["labels"].int()
         has_val = True
     elif dataset == "SleepEDF":
         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_SleepEDF(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
-        val_data = torch.load("./sleepEDF/val.pt")
+        val_data = torch.load("./sleepEDF/val.pt", weights_only=True)
         X_val = val_data["samples"].float()
         y_val = val_data["labels"].int()
         has_val = True
     elif dataset == "FD-A":
         X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_FDA(numClient, dirichlet_alpha, scoreX=shapelet_weight_X, scoreY=None)
-        val_data = torch.load("./FD-A/val.pt")
+        val_data = torch.load("./FD-A/val.pt", weights_only=True)
         X_val = val_data["samples"].float()
         y_val = val_data["labels"].int()
         X_val = X_val.unsqueeze(1)
@@ -967,15 +1257,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             to_cuda=to_cuda,
             logTxt=logTxt,
             formatted_date=formatted_date,
-            eval_train_test_fn=eval,
-            eval_tstcc_fn=eval_TSTCC,
+            eval_train_test_fn=eval_train_test_fn,
+            eval_tstcc_fn=eval_tstcc_fn,
             save_model_fn=save_model,
         )
         return
 
-    # 无监督联邦表征基线：参考 Orchestra 的 baseline 形式，采用 FedAvg 聚合 +
-    # 本地 SSL 目标（SimCLR / SimSiam / BYOL），仍复用当前 shapelet backbone 与 SVM 评估。
-    if algo.lower() in ('simclr', 'simsiam', 'byol', 'orchestra'):
+    # 无监督联邦表征基线：BYOL / Orchestra / FedU2 复用当前 shapelet backbone 与 SVM 评估。
+    if algo.lower() in ('byol', 'orchestra', 'fedu2', 'fedu2-byol'):
         from algo.ssl_runner import run_ssl_baseline
         run_ssl_baseline(
             algo=algo.lower(),
@@ -998,8 +1287,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             to_cuda=to_cuda,
             logTxt=logTxt,
             formatted_date=formatted_date,
-            eval_train_test_fn=eval,
-            eval_tstcc_fn=eval_TSTCC,
+            eval_train_test_fn=eval_train_test_fn,
+            eval_tstcc_fn=eval_tstcc_fn,
             save_model_fn=save_model,
         )
         return
@@ -1038,7 +1327,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     for idx in range(numClient):
         client = LearningShapeletsCL(**{**shared_kwargs, "device": client_device_by_idx[idx]})
-        optimizer = optim.SGD(client.model.parameters(), lr=lr, weight_decay=wd)
+        optimizer = optim.SGD(client.model.parameters(), lr=lr, weight_decay=wd, momentum=momentum)
         client.set_optimizer(optimizer)
         clientList.append(client)
 
@@ -1113,7 +1402,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     use_distribution = config['ablation'].get('UseDistribution', True)
     total_samples = len(X_all)
-    use_scale_split_comm = _is_splitteacher_algo(algo)
+    use_scale_split_comm = _uses_scale_split_algo(algo)
     if not w_locals:
         w_locals = [_state_dict_to_cpu(c.model.state_dict()) for c in clientList]
 
@@ -1122,10 +1411,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     cached_scale_hist = None
     cached_global_scale_probs = None
     scale_score_prep_sec = 0.0
-    spilter_allocation_mode = _spilter_allocation_mode(config) if _is_splitteacher_algo(algo) else None
+    spilter_allocation_mode = _spilter_allocation_mode(config) if _uses_scale_split_algo(algo) else None
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
-        if _is_splitteacher_algo(algo) and spilter_allocation_mode == "uniform_single":
+        if _uses_scale_split_algo(algo) and spilter_allocation_mode == "uniform_single":
             cached_client_scale_plans, cached_scale_hist = _plan_uniform_single_client_scales(
                 len(X_fed),
                 server.model,
@@ -1138,7 +1427,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 device=server_device,
                 batch_size=batch_size,
             )
-            if _is_splitteacher_algo(algo) and spilter_allocation_mode == "global_score_random_single":
+            if _uses_scale_split_algo(algo) and spilter_allocation_mode == "global_score_random_single":
                 cached_client_scale_plans, cached_scale_hist, cached_global_scale_probs = (
                     _plan_global_score_random_single_client_scales(
                         cached_client_scale_scores,
@@ -1146,7 +1435,17 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         seed=original_seed or 42,
                     )
                 )
-        if _is_splitteacher_algo(algo) and spilter_allocation_mode not in ("uniform_single", "global_score_random_single"):
+            elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_topm":
+                local_top_m = _spilter_local_top_m(config, default=4)
+                cached_client_scale_plans, cached_scale_hist = _plan_local_score_topm_client_scales(
+                    cached_client_scale_scores,
+                    top_m=local_top_m,
+                )
+        if _uses_scale_split_algo(algo) and spilter_allocation_mode not in (
+            "uniform_single",
+            "global_score_random_single",
+            "local_score_topm",
+        ):
             system_extra_scale_count = _spilter_system_extra_scale_count(config, default=2)
             cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
                 cached_client_scale_scores,
@@ -1154,16 +1453,24 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 extra_scale_count=system_extra_scale_count,
             )
         scale_score_prep_sec = time.perf_counter() - scale_prep_t0
-        if _is_splitteacher_algo(algo) and spilter_allocation_mode == "uniform_single":
-            prep_msg = f"[fedcsl] planned uniform single-scale clients in {scale_score_prep_sec:.3f}s"
-        elif _is_splitteacher_algo(algo) and spilter_allocation_mode == "global_score_random_single":
-            prep_msg = f"[fedcsl] planned global-score random single-scale clients in {scale_score_prep_sec:.3f}s"
+        if _uses_scale_split_algo(algo) and spilter_allocation_mode == "uniform_single":
+            prep_msg = f"[spilter] planned uniform single-scale clients in {scale_score_prep_sec:.3f}s"
+        elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "global_score_random_single":
+            prep_msg = f"[spilter] planned global-score random single-scale clients in {scale_score_prep_sec:.3f}s"
+        elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_topm":
+            prep_msg = f"[spilter] planned local-score top-m stitched clients in {scale_score_prep_sec:.3f}s"
         else:
             prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
         if cached_scale_hist is not None:
             prep_msg += f"; spilter_allocation_mode={spilter_allocation_mode}"
-            if spilter_allocation_mode not in ("uniform_single", "global_score_random_single"):
+            if spilter_allocation_mode not in (
+                "uniform_single",
+                "global_score_random_single",
+                "local_score_topm",
+            ):
                 prep_msg += f"; system_extra_scale_count={system_extra_scale_count}"
+            if spilter_allocation_mode == "local_score_topm":
+                prep_msg += f"; local_top_m={local_top_m}"
             if cached_global_scale_probs is not None:
                 prep_msg += f"; global_scale_probs={np.round(cached_global_scale_probs, 4).tolist()}"
             prep_msg += f"; planned scale coverage: {cached_scale_hist.tolist()}"
@@ -1206,6 +1513,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     batch_size,
                     lr,
                     wd,
+                    momentum,
                     use_scale_split_comm,
                     server_state_cpu,
                     w_locals,
@@ -1302,14 +1610,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             transformation_val = server.transform(X_val, result_type='numpy', normalize=True, batch_size=batch_size)
             transformation_val = scaler.transform(transformation_val)
             y_val_np = y_val.cpu().numpy() if hasattr(y_val, 'cpu') else np.asarray(y_val)
-            train_acc, test_acc = eval_TSTCC(
+            train_acc, test_acc = eval_tstcc_fn(
                 transformation_train=transformation,
                 transformation_test=transformation_test,
                 transformation_val=transformation_val,
                 y_train=y_all, y_test=y_test, y_val=y_val_np,
             )
         else:
-            train_acc, test_acc = eval(transformation, transformation_test, y_train=y_all, y_test=y_test)
+            train_acc, test_acc = eval_train_test_fn(transformation, transformation_test, y_train=y_all, y_test=y_test)
         eval_stage_sec = time.perf_counter() - eval_stage_t0
         round_total_sec = time.perf_counter() - round_t0
 
@@ -1410,7 +1718,7 @@ def _try_load_resume_ckpt(path, server, clientList):
     if not os.path.isfile(path):
         return None
     try:
-        payload = torch.load(path, map_location="cpu")
+        payload = torch.load(path, map_location="cpu", weights_only=True)
     except Exception as e:
         print(f"[fedcsl] 读取 checkpoint 失败（{path}）：{e}，从零开始", flush=True)
         return None

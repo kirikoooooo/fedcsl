@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HAR × Dirichlet α = 0.05 × {fedavg, fedprox, scaffold, fedproto, simclr, simsiam, byol, orchestra, fedcsl}
+# HAR × Dirichlet α = 0.05 × {fedavg, fedprox, moon, scaffold, fedproto, byol, orchestra, fedu2, fedcsl, spilter}
 #
 # 自动在空闲 GPU 上并行派发，核心调度逻辑见 _common.sh + gpu_sched.py。
 # 关键约束：2 号卡禁用；调度策略默认 "mem"（显存空闲比 ≥ HAR_MEM_FREE_RATIO=0.30，即显存已用不超过 70% 即可派发）。

@@ -621,6 +621,21 @@ def stop_run(run_id: str) -> Dict[str, Any]:
     return target
 
 
+def stop_all_runs() -> Dict[str, Any]:
+    """Stop all currently running runs at once."""
+    runs = _load_runs()
+    running = [r for r in runs if r.get("status") == "running"]
+    stopped = []
+    failed = []
+    for r in running:
+        try:
+            stop_run(r["id"])
+            stopped.append(r["id"])
+        except Exception:
+            failed.append(r["id"])
+    return {"stopped": stopped, "failed": failed, "total_running": len(running)}
+
+
 def tail_log(run_id: str, tail: int = 500) -> str:
     runs = _load_runs()
     target = next((r for r in runs if r["id"] == run_id), None)
@@ -707,6 +722,11 @@ def api_runs_list() -> List[Dict[str, Any]]:
 @app.post("/api/runs")
 def api_runs_launch(req: LaunchRequest) -> Dict[str, Any]:
     return launch_script(req)
+
+
+@app.post("/api/runs/stop-all")
+def api_runs_stop_all() -> Dict[str, Any]:
+    return stop_all_runs()
 
 
 @app.get("/api/runs/{run_id}/log", response_class=PlainTextResponse)

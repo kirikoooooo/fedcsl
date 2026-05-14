@@ -194,7 +194,7 @@ def _try_load_baseline_checkpoint(
     if not os.path.isfile(path):
         return None
     try:
-        payload = torch.load(path, map_location="cpu")
+        payload = torch.load(path, map_location="cpu", weights_only=True)
     except Exception as e:
         print(f"[{algo.upper()}] 读取 checkpoint 失败（{path}）：{e}，从零开始", flush=True)
         return None

@@ -1,0 +1,36 @@
+Details of Training:-----------------------
+dataset: HAR
+local train epochs: 1
+round num: 200
+batch size: 32
+lr: 0.01
+use_client_selection: False
+server_device: cuda:0
+client_workers: 3
+client_worker_devices: ['cuda:0', 'cuda:0', 'cuda:0']
+client_groups: [[0, 3, 6, 9], [1, 4, 7], [2, 5, 8]]
+-------------------------------------------
+HAR_fedcsl_dir0.5
+PID: 2972651
+PPID: 960452
+argv: FedCSL_All.py -dataset HAR --config config/configACF.yml --dirichlet-alpha 0.5 --seed 42 --description HAR_fedcsl_dir0.5 --num-client 10 --server-gpu 0 --client-gpus 0 --eval-protocol svm
+effective_dataset: HAR
+effective_dirichlet_alpha: 0.5
+ablation:  UseACF: true  UseDistribution: false  UseJointCL: true  UseJointKD: true  UseMTLHomo: false  UseProdictor: false  UseScaleCL: true  UseScaleKD: truealgo: fedcsldataset: HARdescription: HAR_fedcsl_dir0.5evaluation:  linear_probe:    batch_size: 256    eval_interval: 1    lr: 0.001    max_epoch: 200    seed: 42    wd: 0.0001  protocol: svm  svm_c_grid:  - 0.0001  - 0.001  - 0.01  - 0.1  - 1.0  - 10.0  - 100.0  - 1000.0  - 10000.0federated:  auto_resume: true  checkpoint_every: 30  client_gpus:  - 0  client_selection_method: omp  client_selection_ratio: 0.6  client_workers: 3  dirichlet_alpha: 0.5  ema_alpha: 0.3  min_selection_prob: 0.01  numClient: 10  numEpoch: 1  numRound: 200  server_gpu: 0  use_client_selection: falselogPath: ./result/model:  name: ''  params:    batch_size: 32    beta: 0.4    dist_measure: mix    gamma: 0.5    l: 0.01    lr: 0.01    ls: 1    wd: 0
+[fedcsl] precomputed client scale scores once in 3.674s
+dataset: HARround:0 server aggregation  testACC:0.9385816084153377 trainACC:1.0 avg_loss:4.931650363466564 total:4.931650 base:0.736414 structure:0.691139 joint:0.000000 scale:3.504097 scale_local:3.504097 scale_global:0.000000 cca:29.849602 sdl:39.264268 proximal:0.000000 moon:0.000000
+[round 0] timing train=45.906s distribution=6.036s agg=1.420s eval=129.038s total=182.418s
+dataset: HARround:1 server aggregation  testACC:0.9300984051577876 trainACC:1.0 avg_loss:11.36810315362872 total:11.368103 base:0.609196 structure:0.660506 joint:0.582694 scale:9.515707 scale_local:2.960197 scale_global:6.555510 cca:29.728557 sdl:36.322023 proximal:0.000000 moon:0.000000
+[round 1] timing train=66.017s distribution=4.854s agg=0.536s eval=127.982s total=199.411s
+dataset: HARround:2 server aggregation  testACC:0.9300984051577876 trainACC:1.0 avg_loss:9.982700889914579 total:9.982701 base:0.552113 structure:0.638743 joint:0.516946 scale:8.274899 scale_local:2.741714 scale_global:5.533185 cca:29.522366 sdl:34.351911 proximal:0.000000 moon:0.000000
+[round 2] timing train=56.085s distribution=5.353s agg=1.029s eval=137.255s total=199.743s
+dataset: HARround:3 server aggregation  testACC:0.9280624363759755 trainACC:1.0 avg_loss:9.1012602186324 total:9.101260 base:0.500833 structure:0.615943 joint:0.468214 scale:7.516270 scale_local:2.516445 scale_global:4.999825 cca:29.250324 sdl:32.343968 proximal:0.000000 moon:0.000000
+[round 3] timing train=53.557s distribution=2.636s agg=0.356s eval=144.844s total=201.415s
+dataset: HARround:4 server aggregation  testACC:0.9273837801153716 trainACC:1.0 avg_loss:8.552239402702252 total:8.552239 base:0.468520 structure:0.593636 joint:0.430972 scale:7.059112 scale_local:2.402750 scale_global:4.656362 cca:28.975714 sdl:30.387886 proximal:0.000000 moon:0.000000
+[round 4] timing train=52.580s distribution=2.270s agg=0.313s eval=149.521s total=204.712s
+dataset: HARround:5 server aggregation  testACC:0.9280624363759755 trainACC:1.0 avg_loss:8.041080496722662 total:8.041080 base:0.432739 structure:0.575542 joint:0.401667 scale:6.631132 scale_local:2.252501 scale_global:4.378631 cca:28.740567 sdl:28.813599 proximal:0.000000 moon:0.000000
+[round 5] timing train=63.989s distribution=2.682s agg=0.932s eval=165.018s total=232.659s
+dataset: HARround:6 server aggregation  testACC:0.9273837801153716 trainACC:1.0 avg_loss:7.716122892249993 total:7.716123 base:0.409804 structure:0.557179 joint:0.380269 scale:6.368870 scale_local:2.165158 scale_global:4.203712 cca:28.480238 sdl:27.237709 proximal:0.000000 moon:0.000000
+[round 6] timing train=65.101s distribution=2.264s agg=0.538s eval=165.240s total=233.160s
+dataset: HARround:7 server aggregation  testACC:0.9273837801153716 trainACC:1.0 avg_loss:7.3700580702928 total:7.370058 base:0.383534 structure:0.541438 joint:0.360061 scale:6.085025 scale_local:2.055949 scale_global:4.029076 cca:28.316132 sdl:25.827650 proximal:0.000000 moon:0.000000
+[round 7] timing train=65.217s distribution=2.686s agg=0.631s eval=162.607s total=231.158s

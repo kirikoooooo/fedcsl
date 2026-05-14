@@ -1,0 +1,57 @@
+model:
+  name: ""
+  params:
+    dist_measure: "mix"
+    lr: 0.01
+    batch_size: 32
+    wd: 0
+    ls: 1
+    l: 0.01
+    beta: 0.4
+    gamma: 0.7
+dataset: "AtrialFibrillation"
+algo: "spilter"
+federated:
+  numClient: 50
+  numRound: 200
+  numEpoch: 1
+  dirichlet_alpha: 1
+  use_client_selection: False
+  client_selection_ratio: 0.6
+  checkpoint_every: 30
+  auto_resume: True
+
+spilter:
+  # local_score_topm: each client selects top-m scales from its own period-score distribution.
+  # efficiency_aware: period-aware seed scales plus system-efficiency extras.
+  # uniform_single: client_id round-robin, one scale per client.
+  # global_score_random_single: sample one scale from the global period-score distribution.
+  allocation_mode: "local_score_topm"
+  local_top_m: 4
+  # stitched: concatenate selected scales into one local submodel representation.
+  selected_scale_training: "stitched"
+  system_extra_scale_count: 2
+
+ablation:
+  UseJointKD: True
+  UseJointCL: True
+  UseScaleKD: True
+  UseScaleCL: True
+  UseProdictor: False
+  UseMTLHomo: False
+  UseACF: True
+  UseDistribution: False
+
+logPath: "./result/"
+description: "spilter-local-topm"
+
+evaluation:
+  protocol: "svm"  # options: svm | linear_probe
+  svm_c_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+  linear_probe:
+    lr: 0.001
+    wd: 0.0001
+    batch_size: 256
+    max_epoch: 200
+    eval_interval: 1
+    seed: 42

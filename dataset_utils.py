@@ -6,10 +6,10 @@ from sktime.datasets import load_from_tsfile_to_dataframe,load_UCR_UEA_dataset
 
 def LoadDataset_SleepEDF(numClient,dirchlet_alpha=0.1,scoreX=None,scoreY=None):
     # 加载HAR数据集
-    X = torch.load("./sleepEDF/train.pt")
+    X = torch.load("./sleepEDF/train.pt", weights_only=True)
     X_all = X["samples"].float()
     y_all = X["labels"].int()
-    X2= torch.load("./sleepEDF/test.pt")
+    X2= torch.load("./sleepEDF/test.pt", weights_only=True)
     X_test= X2["samples"].float()
     y_test = X2["labels"].int()
 
@@ -46,12 +46,12 @@ def LoadDataset_SleepEDF(numClient,dirchlet_alpha=0.1,scoreX=None,scoreY=None):
 
 def LoadDataset_FDA(numClient,dirchlet_alpha=0.1,scoreX=None,scoreY=None):
     # 加载HAR数据集
-    X = torch.load("./FD-A/train.pt")
+    X = torch.load("./FD-A/train.pt", weights_only=True)
     X_all = X["samples"].float()
     y_all = X["labels"].int()
 
     X_all = X_all[:, np.newaxis, :]
-    X2= torch.load("./FD-A/test.pt")
+    X2= torch.load("./FD-A/test.pt", weights_only=True)
     X_test= X2["samples"].float()
     y_test = X2["labels"].int()
 
@@ -89,10 +89,10 @@ def LoadDataset_FDA(numClient,dirchlet_alpha=0.1,scoreX=None,scoreY=None):
 
 def LoadDataset_Epilepsy(numClient,dirchlet_alpha=0.1,scoreX=None,scoreY=None):
     # 加载HAR数据集
-    X = torch.load("./Epilepsy/train.pt")
+    X = torch.load("./Epilepsy/train.pt", weights_only=True)
     X_all = X["samples"].float()
     y_all = X["labels"].int()
-    X2= torch.load("./Epilepsy/test.pt")
+    X2= torch.load("./Epilepsy/test.pt", weights_only=True)
     X_test= X2["samples"].float()
     y_test = X2["labels"].int()
 
@@ -130,10 +130,10 @@ def LoadDataset_Epilepsy(numClient,dirchlet_alpha=0.1,scoreX=None,scoreY=None):
 
 def LoadDataset_HAR(numClient,dirchlet_alpha=0.1,scoreX=None,scoreY=None):
     # 加载HAR数据集
-    X = torch.load("./HAR/train.pt")
+    X = torch.load("./HAR/train.pt", weights_only=True)
     X_all = X["samples"].float()
     y_all = X["labels"].int()
-    X2= torch.load("./HAR/test.pt")
+    X2= torch.load("./HAR/test.pt", weights_only=True)
     X_test= X2["samples"].float()
     y_test = X2["labels"].int()
 

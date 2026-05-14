@@ -2,8 +2,8 @@ model:
   name: ""
   params:
     dist_measure: "mix"
-    lr: 0.05
-    batch_size: 16
+    lr: 0.1
+    batch_size: 8
     wd: 0.0001
     momentum: 0.9
     ls: 1
@@ -11,11 +11,11 @@ model:
     beta: 0.4
     gamma: 0.5
 dataset: "CharacterTrajectories"
-algo: "simsiam"
+algo: "fedu2"
 federated:
-  numClient: 3
+  numClient: 50
   numRound: 200
-  numEpoch: 3
+  numEpoch: 1
   dirichlet_alpha: 1
   use_client_selection: False
   client_selection_ratio: 0.6
@@ -34,5 +34,22 @@ ssl:
   projector_out_dim: 128
   predictor_hidden_dim: 256
   ema_tau: 0.99
+  fur_weight: 0.1
+  fur_tau_a: 0.8
+  fur_tau_b: 0.8
+  fur_num_steps: 5
+  server_lr: 0.1
+  sharpen_ratio: 0.1
 logPath: "./result/"
-description: "simsiam"
+description: "fedu2"
+
+evaluation:
+  protocol: "linear_probe"  # options: svm | linear_probe
+  svm_c_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+  linear_probe:
+    lr: 0.001
+    wd: 0.0001
+    batch_size: 256
+    max_epoch: 200
+    eval_interval: 1
+    seed: 42

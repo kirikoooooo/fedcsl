@@ -551,11 +551,7 @@ def _plan_global_score_random_single_client_scales(client_scores, y_fed, seed=No
 
 def _plan_local_score_topm_client_scales(client_scores, top_m=4):
     """每个 client 按自己的周期评分选择 top-m 尺度，作为拼接子模型训练。
-
-    在初始 top-m 分配之后，额外做一次覆盖补偿：对所有覆盖数为 0 的尺度，
-    把该尺度分配给对其评分最高的 client（追加到该 client 的计划里）。
-    这样保证 server 模型每个尺度的参数都至少被训练和聚合一次，
-    避免随机初始权重污染下游评估的特征向量。
+    严格按 top-m 选择，不做未覆盖尺度的兜底补分配。
     """
     num_clients = len(client_scores)
     num_scales = len(client_scores[0]) if num_clients > 0 else 0
@@ -578,14 +574,6 @@ def _plan_local_score_topm_client_scales(client_scores, top_m=4):
         selected = [int(scale_idx) for scale_idx in order[:top_m]]
         client_selected.append(selected)
         for scale_idx in selected:
-            scale_counts[scale_idx] += 1
-
-    # Coverage enforcement: assign uncovered scales to the best-scoring client
-    # so that every scale gets at least one gradient update per plan.
-    for scale_idx in range(num_scales):
-        if scale_counts[scale_idx] == 0:
-            best_cid = int(np.argmax([s[scale_idx] for s in normalized_scores]))
-            client_selected[best_cid].append(scale_idx)
             scale_counts[scale_idx] += 1
 
     return client_selected, scale_counts

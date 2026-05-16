@@ -2,8 +2,8 @@ model:
   name: ""
   params:
     dist_measure: "mix"
-    lr: 0.05
-    batch_size: 8
+    lr: 0.01
+    batch_size: 32
     wd: 0.0001
     momentum: 0.9
     ls: 1
@@ -15,7 +15,7 @@ algo: "spilter"
 federated:
   numClient: 50
   numRound: 200
-  numEpoch: 3
+  numEpoch: 1
   dirichlet_alpha: 1
   use_client_selection: False
   client_selection_ratio: 0.6
@@ -28,16 +28,16 @@ spilter:
   # uniform_single: client_id round-robin, one scale per client.
   # global_score_random_single: sample one scale from the global period-score distribution.
   allocation_mode: "local_score_topm"
-  local_top_m: 4
+  local_top_m: 2
   # stitched: concatenate selected scales into one local submodel representation.
   selected_scale_training: "stitched"
   system_extra_scale_count: 2
 
 ablation:
-  UseJointKD: False
-  UseJointCL: False
+  UseJointKD: True
+  UseJointCL: True
   UseScaleKD: True
-  UseScaleCL: False
+  UseScaleCL: True
   UseProdictor: False
   UseMTLHomo: False
   UseACF: True

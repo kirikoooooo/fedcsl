@@ -364,7 +364,11 @@ def main() -> int:
 
     if not torch.cuda.is_available():
         print("[warn] CUDA 不可用，将在 CPU 上测时", flush=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cpu")
+    else:
+        # 旧版 PyTorch (1.x) 要求 device 必须带 index；CUDA_VISIBLE_DEVICES
+        # 已经把目标卡映射到 cuda:0，所以这里固定用 0。
+        device = torch.device("cuda", 0)
 
     visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     gpu_name = ""

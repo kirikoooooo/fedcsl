@@ -72,12 +72,21 @@ def _shapelet_dict(len_ts: int) -> Dict[int, int]:
     }
 
 
-def _build_csl_like_config(algo_name: str) -> Dict[str, Any]:
+def _build_csl_like_config(algo_name: str, scale_aux: bool = True) -> Dict[str, Any]:
+    """构造 LearningShapeletsCL 用的 config。
+
+    scale_aux: 是否启用 UseScaleCL / UseScaleKD。Spilter stitched 路径在
+    `_compute_stitched_selected_scale_losses` 里若 ScaleCL/ScaleKD 为 True，会
+    额外对每个 selected scale 再独立 forward 一次（学生 + 老师），导致显存峰值
+    几乎随 m 翻倍 —— 这是 m=4 时显存反而高于 FedCSL 的根因。关闭后只走 stitched
+    主路径（仍有 JointCL/JointKD），能真实反映尺度切分的显存节省上界。
+    """
+    use_scale_aux = scale_aux and (algo_name in ("fedcsl", "spilter"))
     ablation = {
         "UseJointKD": algo_name in ("fedcsl", "spilter"),
         "UseJointCL": algo_name in ("fedcsl", "spilter"),
-        "UseScaleKD": algo_name in ("fedcsl", "spilter"),
-        "UseScaleCL": algo_name in ("fedcsl", "spilter"),
+        "UseScaleKD": use_scale_aux,
+        "UseScaleCL": use_scale_aux,
         "UseProdictor": False,
         "UseMTLHomo": False,
         "UseACF": algo_name in ("fedcsl", "spilter"),
@@ -154,6 +163,7 @@ def _time_csl_client_one_epoch(
     device: torch.device,
     teacher_state: Optional[Dict[str, torch.Tensor]] = None,
     warmup_batches: int = 1,
+    scale_aux: bool = True,
 ) -> tuple:
     """返回 (epoch_sec, peak_mem_mb)。"""
     from train import LearningShapeletsCL
@@ -166,7 +176,7 @@ def _time_csl_client_one_epoch(
         algo_name = algo_alias
         selected_scales = None
 
-    config = _build_csl_like_config(algo_name)
+    config = _build_csl_like_config(algo_name, scale_aux=scale_aux)
     loss_func = nn.CrossEntropyLoss()
 
     client = LearningShapeletsCL(
@@ -363,18 +373,27 @@ def main() -> int:
     )
     parser.add_argument("--num-clients", type=int, default=50)
     parser.add_argument("--alpha", type=float, default=0.1)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=0.05)
+    # 默认 32：与 config/configSpilter.yml 等主流程 yml 的 batch_size 保持一致
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--wd", type=float, default=0.0)
     parser.add_argument("--num-epoch", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup-batches", type=int, default=1)
+    parser.add_argument(
+        "--no-scale-aux",
+        action="store_true",
+        help="关闭 Spilter/FedCSL 的 UseScaleCL/UseScaleKD（per-scale 辅助 loss）。"
+             "Spilter stitched 模式下打开会让显存随 m 翻倍，是 m=4 显存反而比 FedCSL 大的原因。"
+             "用于'纯尺度切分'的显存上界对比；不会改变主流程实验。",
+    )
     parser.add_argument(
         "--output",
         type=str,
         default="data/system_efficiency_HAR_partials/{algo}.json",
     )
     args = parser.parse_args()
+    scale_aux = not args.no_scale_aux
 
     algo = args.algo.lower()
     output_path = Path(args.output.replace("{algo}", algo))
@@ -402,7 +421,11 @@ def main() -> int:
 
     print(f"[info] algo={algo} | num_clients={args.num_clients} | alpha={args.alpha}", flush=True)
     print(f"[info] device={device} | CUDA_VISIBLE_DEVICES={visible!r} | gpu={gpu_name}", flush=True)
-    print(f"[info] batch_size={args.batch_size} | lr={args.lr} | epoch={args.num_epoch}", flush=True)
+    print(
+        f"[info] batch_size={args.batch_size} | lr={args.lr} | epoch={args.num_epoch} | "
+        f"scale_aux={scale_aux}",
+        flush=True,
+    )
 
     t_load = time.perf_counter()
     X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_HAR(
@@ -425,7 +448,7 @@ def main() -> int:
     teacher_state: Optional[Dict[str, torch.Tensor]] = None
     if algo in _CSL_ALGOS:
         from train import LearningShapeletsCL
-        _seed_cfg = _build_csl_like_config("fedavg")
+        _seed_cfg = _build_csl_like_config("fedavg", scale_aux=scale_aux)
         seed_client = LearningShapeletsCL(
             shapelets_size_and_len=shapelets_size_and_len,
             loss_func=nn.CrossEntropyLoss(),
@@ -483,6 +506,7 @@ def main() -> int:
                     device=device,
                     teacher_state=teacher_state,
                     warmup_batches=args.warmup_batches,
+                    scale_aux=scale_aux,
                 )
         except Exception as exc:
             traceback.print_exc()
@@ -528,6 +552,7 @@ def main() -> int:
         "cuda_visible_devices": visible,
         "shape": {"N": int(n_ts), "C": int(in_channels), "T": int(len_ts)},
         "scales": list(shapelets_size_and_len.keys()),
+        "scale_aux": bool(scale_aux),
         "slowest_client": slowest,
         "epoch_sec_max": float(times.max()),
         "epoch_sec_mean": float(times.mean()),

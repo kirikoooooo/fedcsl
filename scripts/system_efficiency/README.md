@@ -68,7 +68,24 @@ python scripts/system_efficiency/aggregate_results.py
 | `Slowest Client Epoch (s)` | $\max_k T_k^{\text{epoch}}$（核心指标） |
 | `#Samples@Slowest` | 最慢客户端的本地样本数（异质性诊断） |
 | `Mean / Median / Min (s)` | 所有客户端 1-epoch 耗时统计量 |
+| `Mean / Max Peak Mem (MB)` | 所有客户端 1-epoch 峰值显存的均值 / 最大值 |
 | `Timed/Skipped` | 计时成功 / 因样本数 < batch 跳过 的客户端数 |
+
+## Spilter 显存节省专题
+
+同一次运行**额外**生成 `data/spilter_memory_HAR.md`，聚焦 Spilter 不同 `top-m`
+与 FedCSL 全尺度的客户端**平均峰值显存**对比，含 `Saving vs FedCSL` 与
+`Compression Ratio` 两列。指标定义：
+
+```
+\bar M(algo) = (1/K) Σ_k max_t |GPU_mem_k(t)|
+Saving(m)   = 1 - \bar M(Spilter-m) / \bar M(FedCSL)
+```
+
+dashboard 端：
+
+- `GET /api/spilter-memory/report.md` — 直接拿 markdown 报告
+- `GET /api/spilter-memory/result` — 精简 JSON（仅 FedCSL + Spilter-m1/m2/m4）
 
 ## 注意
 

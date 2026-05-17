@@ -784,6 +784,7 @@ _SYS_EFF_FILES = {
     "csv": "system_efficiency_HAR.csv",
     "md": "system_efficiency_HAR.md",
 }
+_SPILTER_MEM_MD = "spilter_memory_HAR.md"
 
 
 @app.get("/api/system-efficiency/status")
@@ -820,6 +821,54 @@ def api_system_efficiency_md() -> str:
     if not p.is_file():
         raise HTTPException(404, "system efficiency markdown report not generated yet")
     return p.read_text(encoding="utf-8")
+
+
+# ---- Spilter 显存节省专题（与 system_efficiency 共用 partial JSON 数据源）-------
+@app.get("/api/spilter-memory/report.md", response_class=PlainTextResponse)
+def api_spilter_memory_md() -> str:
+    """data/spilter_memory_HAR.md 的 markdown 文本（topm vs 平均峰值显存）。"""
+    p = _SYS_EFF_DIR / _SPILTER_MEM_MD
+    if not p.is_file():
+        raise HTTPException(
+            404,
+            "spilter memory report not generated yet; "
+            "run scripts/system_efficiency/run_har_efficiency.sh first",
+        )
+    return p.read_text(encoding="utf-8")
+
+
+@app.get("/api/spilter-memory/result")
+def api_spilter_memory_result() -> Dict[str, Any]:
+    """精简版机读结构：仅返回 Spilter-m* 与 FedCSL 的平均峰值显存 + 节省比。"""
+    p = _SYS_EFF_DIR / _SYS_EFF_FILES["json"]
+    if not p.is_file():
+        raise HTTPException(404, "system efficiency json not generated yet")
+    try:
+        agg = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"invalid json: {e}")
+    results = agg.get("results", {})
+    baseline = results.get("fedcsl", {}).get("peak_mem_mb_mean")
+    out: List[Dict[str, Any]] = []
+    pool = ["fedcsl", "spilter-m1", "spilter-m2", "spilter-m4"]
+    for algo in pool:
+        obj = results.get(algo)
+        if not obj:
+            continue
+        mem_mean = obj.get("peak_mem_mb_mean")
+        saving = None
+        ratio = None
+        if isinstance(mem_mean, (int, float)) and isinstance(baseline, (int, float)) and baseline > 0:
+            saving = 1.0 - float(mem_mean) / float(baseline)
+            ratio = float(baseline) / float(mem_mean)
+        out.append({
+            "algo": algo,
+            "peak_mem_mb_mean": mem_mean,
+            "peak_mem_mb_max": obj.get("peak_mem_mb_max"),
+            "saving_vs_fedcsl": saving,
+            "compression_ratio": ratio,
+        })
+    return {"baseline_fedcsl_mb": baseline, "results": out}
 
 
 # 静态前端

@@ -52,6 +52,17 @@ def _empty_cache(device: torch.device) -> None:
         torch.cuda.empty_cache()
 
 
+def _reset_peak_mem(device: torch.device) -> None:
+    if device.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(device)
+
+
+def _peak_mem_mb(device: torch.device) -> float:
+    if device.type == "cuda" and torch.cuda.is_available():
+        return float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0)
+    return 0.0
+
+
 def _shapelet_dict(len_ts: int) -> Dict[int, int]:
     return {
         int(i): 40
@@ -143,7 +154,8 @@ def _time_csl_client_one_epoch(
     device: torch.device,
     teacher_state: Optional[Dict[str, torch.Tensor]] = None,
     warmup_batches: int = 1,
-) -> float:
+) -> tuple:
+    """返回 (epoch_sec, peak_mem_mb)。"""
     from train import LearningShapeletsCL
 
     if algo_alias.startswith("spilter-m"):
@@ -210,20 +222,23 @@ def _time_csl_client_one_epoch(
         except Exception as e:
             print(f"  [warn] warmup failed for {algo_alias}: {e}", flush=True)
 
+    # warmup 之后再 reset peak，避免 cudnn workspace 探测过程污染显存峰值统计
     _cuda_sync(device)
+    _reset_peak_mem(device)
     t0 = time.perf_counter()
     try:
         client.train(X_client, epochs=1, batch_size=batch_size, epoch_idx=0, lr=lr)
     finally:
         _cuda_sync(device)
     dt = time.perf_counter() - t0
+    peak_mb = _peak_mem_mb(device)
 
     del client
     if teacher is not None:
         del teacher
     gc.collect()
     _empty_cache(device)
-    return float(dt)
+    return float(dt), float(peak_mb)
 
 
 def _time_ssl_client_one_epoch(
@@ -240,7 +255,8 @@ def _time_ssl_client_one_epoch(
     num_epoch: int,
     device: torch.device,
     warmup_batches: int = 1,
-) -> float:
+) -> tuple:
+    """返回 (epoch_sec, peak_mem_mb)。"""
     from algo.flbench_compat import SequentialTrainer, TensorBaseDataset
     from algo.ssl_model import OrchestraShapeletModel, ShapeletSSLModel
     from algo.ssl_runner import BYOLClient, FedU2Client, OrchestraClient
@@ -319,17 +335,19 @@ def _time_ssl_client_one_epoch(
             print(f"  [warn] ssl warmup failed: {e}", flush=True)
 
     _cuda_sync(device)
+    _reset_peak_mem(device)
     t0 = time.perf_counter()
     try:
         client.fit()
     finally:
         _cuda_sync(device)
     dt = time.perf_counter() - t0
+    peak_mb = _peak_mem_mb(device)
 
     del client
     gc.collect()
     _empty_cache(device)
-    return float(dt)
+    return float(dt), float(peak_mb)
 
 
 _CSL_ALGOS = {"fedavg", "fedprox", "fedcsl", "spilter-m1", "spilter-m2", "spilter-m4"}
@@ -438,7 +456,7 @@ def main() -> int:
             continue
         try:
             if is_ssl:
-                dt = _time_ssl_client_one_epoch(
+                dt, peak_mb = _time_ssl_client_one_epoch(
                     algo_name=algo,
                     X_client=X_client,
                     y_client=y_client,
@@ -453,7 +471,7 @@ def main() -> int:
                     warmup_batches=args.warmup_batches,
                 )
             else:
-                dt = _time_csl_client_one_epoch(
+                dt, peak_mb = _time_csl_client_one_epoch(
                     algo_alias=algo,
                     X_client=X_client,
                     shapelets_size_and_len=shapelets_size_and_len,
@@ -472,17 +490,29 @@ def main() -> int:
             print(f"  [err]  client {cid} failed: {exc}", flush=True)
             continue
 
-        per_client_times.append({"client": cid, "samples": n_samples, "epoch_sec": dt})
-        print(f"  [ok]   client {cid:3d}  samples={n_samples:5d}  epoch={dt:.3f}s", flush=True)
+        per_client_times.append({
+            "client": cid,
+            "samples": n_samples,
+            "epoch_sec": dt,
+            "peak_mem_mb": peak_mb,
+        })
+        print(
+            f"  [ok]   client {cid:3d}  samples={n_samples:5d}  "
+            f"epoch={dt:.3f}s  peak_mem={peak_mb:.1f}MB",
+            flush=True,
+        )
 
     if not per_client_times:
         print(f"[err] {algo}: all clients failed/skipped", flush=True)
         return 1
 
     times = np.array([r["epoch_sec"] for r in per_client_times], dtype=np.float64)
+    mems = np.array([r["peak_mem_mb"] for r in per_client_times], dtype=np.float64)
     samples = np.array([r["samples"] for r in per_client_times], dtype=np.int64)
     slowest_idx_local = int(np.argmax(times))
     slowest = per_client_times[slowest_idx_local]
+    heaviest_idx_local = int(np.argmax(mems))
+    heaviest = per_client_times[heaviest_idx_local]
 
     summary = {
         "algo": algo,
@@ -504,6 +534,12 @@ def main() -> int:
         "epoch_sec_median": float(np.median(times)),
         "epoch_sec_min": float(times.min()),
         "samples_at_max": int(samples[slowest_idx_local]),
+        # 显存维度（per-client 训练峰值，单位 MB）
+        "peak_mem_mb_mean": float(mems.mean()),
+        "peak_mem_mb_max": float(mems.max()),
+        "peak_mem_mb_median": float(np.median(mems)),
+        "peak_mem_mb_min": float(mems.min()),
+        "heaviest_client": heaviest,
         "per_client": per_client_times,
         "skipped": skipped,
         "timestamp": time.time(),
@@ -511,8 +547,11 @@ def main() -> int:
 
     output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(
-        f"\n[done] {algo}: slowest #{slowest['client']} = {summary['epoch_sec_max']:.3f}s "
-        f"| mean={summary['epoch_sec_mean']:.3f}s | median={summary['epoch_sec_median']:.3f}s\n"
+        f"\n[done] {algo}: "
+        f"slowest #{slowest['client']} = {summary['epoch_sec_max']:.3f}s | "
+        f"mean_epoch={summary['epoch_sec_mean']:.3f}s\n"
+        f"        mean_peak_mem={summary['peak_mem_mb_mean']:.1f}MB | "
+        f"max_peak_mem={summary['peak_mem_mb_max']:.1f}MB\n"
         f"        -> {output_path}",
         flush=True,
     )

@@ -74,34 +74,34 @@ c.model 训练 1 epoch（持续，不重置）
 
 ## 特征编码注意事项（Stitched 模式）
 
-客户端本地训练使用"拼接子模型"（默认与 FedCSL 共用一次 `forward(optimize=None)`，再 `slice_scale_features` 拼接所选尺度）：
+客户端本地训练使用「**FedCSL ``forward(optimize=None)`` 同源顺序**」，仅在所选尺度子集上计算，不全尺度过分支。
 
+默认实现（`stitched_feature_source: selected_scales_only`）调用  
+`LearningShapeletsModelMixDistances.encode_mix_forward_selected_scales`：
+
+- 欧氏 / 余弦 / 互相关各 **`forward_subset`**（只跑所选尺度 block，等价于该分支上的 m 尺度子编码器一次 forward）；
+- 与 **FedCSL 全模 forward** 一致：各分支先把所选尺度在通道维拼接成一向量，再对该向量做 **layer_norm**（结构上对应 ``ln1`` / ``ln2`` / ``ln3``；维度为「当前尺度集合在该分支上的总长」，使用 ``functional.layer_norm``，与固定宽度的 ``nn.LayerNorm`` 模块权重无关）；
+- 按全局尺度边界拆回各行后，在同一尺度位置上 **拼接 eu∥co∥cc**，再按 `selected_scales` 顺序展平 —— 与 ``forward`` 里 ``reshape`` + ``torch.cat(outs, dim=2)`` + ``reshape`` 的布局一致（只是尺度维长度为 m）。
+- **与 ``forward_slices`` 的差别**：后者 LN 统计量来自 **全部 8 个尺度**；默认路径 LN 仅基于所选 m 个尺度，数值可与切片全模输出不同。
+- `UseScaleCL` / `UseScaleKD` 辅助项复用同一套 **按尺度 mix 向量**，不对同一尺度二次 forward。
+
+**不应**再使用「整条表征单一 layer_norm」代替上述三分支结构；
+欧氏距离值域远大于余弦/互相关，若违背 FedCSL 的三分支 LN，欧氏特征会在统计量上压制其余两支（见 ``LearningShapeletsModelMixDistances.forward``）。
+
+对照模式（可选）：
+
+```yaml
+spilter:
+  # 全 8 尺度 forward(optimize=None) 后切片 —— LN 统计量与全模一致，算力仍是全尺度
+  stitched_feature_source: forward_slices
 ```
-feat_q = model(x_q, optimize=None)
-q_stitched = cat([slice_scale_features(feat_q, s) for s in selected_scales])
-# 各尺度辅助损失：同样从 feat_q / feat_k / teacher 上切片，不再二次 forward_scale
-```
 
-**归一化应分距离类型**（euclidean / cosine / cross-corr）分别进行，
-与 FedCSL `forward()` 中 ln1/ln2/ln3 的处理一致。
-
-### 默认实现：`forward_slices`（与 FedCSL 同构、省显存）
-
-配置项 `spilter.stitched_feature_source` 默认为 `forward_slices`：
-对每个视图只做一次 `model(x, optimize=None)`，stitched 表征与各尺度辅助损失均通过对输出使用 **`slice_scale_features`** 切片得到，
-不再对 stitched 与 auxiliary **重复**调用 `forward_scale` / `encode_scale`。这样 m=4 时的 autograd 峰值与 FedCSL「整模 forward + 循环切片」同量级，
-避免出现「m4 显存反而大于 FedCSL」的反直觉现象。
-
-若论文/对照实验需要恢复旧行为（子集上的 `_encode_stitched_scales` LN + 辅助项独立 forward），设置：
+旧版复现（辅助项再跑一遍 `encode_scale`，计算翻倍；stitched 主项现为 FedCSL 同源子集编码）：
 
 ```yaml
 spilter:
   stitched_feature_source: subset_ln_forward_scale
 ```
-
-原因：欧氏距离值域远大于余弦相似度（[0,1]），若用单个 layer_norm
-对所有特征一起归一化，欧氏距离会主导方差，余弦/互相关特征被压制，
-导致梯度信号失效，这是 loss 不降的根本 bug（见 _encode_stitched_scales 修复）。
 
 ---
 
@@ -117,4 +117,4 @@ spilter:
 
 ## 最后更新
 
-2026-05-17：补充 stitched `forward_slices` 默认路径（显存与 FedCSL 同构）；保留 `subset_ln_forward_scale` legacy。
+2026-05-17：`selected_scales_only` 默认走 ``encode_mix_forward_selected_scales``（FedCSL ``forward`` 同源 LN→拼接顺序，仅所选尺度）；可选 ``forward_slices`` / ``subset_ln_forward_scale``。

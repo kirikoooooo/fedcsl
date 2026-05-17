@@ -404,43 +404,21 @@ class LearningShapeletsCL:
         }
         return aliases.get(mode, mode)
 
+    def _forward_spilter_submodel_tensors(self, model, x, selected_scales):
+        """Spilter 子模型：FedCSL ``forward`` 同源管线（LN→按尺度拼 mix），仅在所选尺度上编码。
+
+        各分支 ``forward_subset`` 后，对拼接向量做与 ``forward`` 同结构的 layer_norm，再按全局尺度边界拆行并与
+        eu/co/cc 拼接；返回 stitched 与 ``per_scale_cat`` 供辅助项复用。
+        """
+        enc = getattr(model, "encode_mix_forward_selected_scales", None)
+        if enc is None:
+            raise RuntimeError("mix 模型需实现 encode_mix_forward_selected_scales")
+        return enc(x, selected_scales, masking=False)
+
     def _encode_stitched_scales(self, model, x, selected_scales):
-        # 分距离类型归一化，与 FedCSL forward() 中 ln1/ln2/ln3 的处理一致。
-        # 欧氏距离值域远大于余弦/互相关，若全部拼接后用单一 layer_norm，
-        # 欧氏特征会主导统计量，导致余弦/互相关特征被压制为近零，梯度失效。
-        eu_parts, co_parts, cc_parts = [], [], []
-        for scale_idx in selected_scales:
-            eu = torch.squeeze(
-                model.shapelets_euclidean.forward_scale(x, scale_idx, False), 1
-            )
-            co = torch.squeeze(
-                model.shapelets_cosine.forward_scale(x, scale_idx, False), 1
-            )
-            cc = torch.squeeze(
-                model.shapelets_cross_correlation.forward_scale(x, scale_idx, False), 1
-            )
-            eu_parts.append(eu)
-            co_parts.append(co)
-            cc_parts.append(cc)
-
-        eu_cat = nn.functional.layer_norm(
-            torch.cat(eu_parts, dim=1), (eu_parts[0].shape[1] * len(selected_scales),)
-        )
-        co_cat = nn.functional.layer_norm(
-            torch.cat(co_parts, dim=1), (co_parts[0].shape[1] * len(selected_scales),)
-        )
-        cc_cat = nn.functional.layer_norm(
-            torch.cat(cc_parts, dim=1), (cc_parts[0].shape[1] * len(selected_scales),)
-        )
-
-        eu_list = eu_cat.split(eu_parts[0].shape[1], dim=1)
-        co_list = co_cat.split(co_parts[0].shape[1], dim=1)
-        cc_list = cc_cat.split(cc_parts[0].shape[1], dim=1)
-        parts = [
-            torch.cat([eu_s, co_s, cc_s], dim=1)
-            for eu_s, co_s, cc_s in zip(eu_list, co_list, cc_list)
-        ]
-        return torch.cat(parts, dim=1)
+        # FedCSL 同源：见 encode_mix_forward_selected_scales（非旧的「每分支 LN 再拼」stitched_cat）。
+        stitched, _ = self._forward_spilter_submodel_tensors(model, x, selected_scales)
+        return stitched
 
     @staticmethod
     def _cat_slices_from_full_forward(model, feat: torch.Tensor, selected_scales) -> torch.Tensor:
@@ -450,7 +428,9 @@ class LearningShapeletsCL:
 
     def _stitched_feature_source(self):
         sp_cfg = self.config.get("spilter") or {}
-        return str(sp_cfg.get("stitched_feature_source", "forward_slices")).strip().lower()
+        # 默认 selected_scales_only：FedCSL ``forward`` 同源 LN→reshape 语义下的子尺度编码（``encode_mix_forward_selected_scales``），
+        # 不做全 8 尺度分支 forward。
+        return str(sp_cfg.get("stitched_feature_source", "selected_scales_only")).strip().lower()
 
     def _compute_stitched_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
         device = x_q.device
@@ -462,10 +442,9 @@ class LearningShapeletsCL:
         scale_weights = self._selected_scale_loss_weights(selected_scales)
 
         # --- 表征来源 -----------------------------------------------------------
-        # ``forward_slices``（默认）：与 FedCSL 一致，每个视图只做 1 次 ``forward(optimize=None)``，
-        # stitched / per-scale 分支全部从同一张 autograd 图切片得到 → m=4 时峰值显存不再反超 FedCSL。
-        # ``subset_ln_forward_scale``（legacy）：`_encode_stitched_scales` + 循环 `encode_scale`，
-        # 会为 stitched 与 auxiliary 各跑一遍 forward_scale，显存随 m 近似翻倍。
+        # ``selected_scales_only``（默认）：``encode_mix_forward_selected_scales``（FedCSL 同源管线，仅所选尺度）；辅助项复用。
+        # ``forward_slices``：全尺度 ``forward(optimize=None)`` + 切片（与 FedCSL 表征完全一致的对照）。
+        # ``subset_ln_forward_scale``：FedCSL 同源 stitched 编码 + 辅助项再 ``encode_scale`` 一遍（旧版复现）。
         src = self._stitched_feature_source()
         use_forward_slices = (
             src in ("forward_slices", "fedcsl", "slice", "slices")
@@ -475,16 +454,45 @@ class LearningShapeletsCL:
                 or hasattr(self.Global_Model, "slice_scale_features")
             )
         )
+        use_legacy_duplicate_aux = src in (
+            "subset_ln_forward_scale",
+            "legacy_duplicate_forward",
+        )
+        has_mix_submodel = (
+            hasattr(self.model, "shapelets_euclidean")
+            and hasattr(self.model, "shapelets_cosine")
+            and hasattr(self.model, "shapelets_cross_correlation")
+        )
+        teacher_mix_ok = (
+            self.Global_Model is None
+            or (
+                hasattr(self.Global_Model, "shapelets_euclidean")
+                and hasattr(self.Global_Model, "shapelets_cosine")
+                and hasattr(self.Global_Model, "shapelets_cross_correlation")
+            )
+        )
+
+        feat_q = feat_k = None
+        pcs_q = pcs_k = None
+        pcs_g_q = pcs_g_k = None
 
         if use_forward_slices:
             feat_q = self.model(x_q, optimize=None, masking=False)
             feat_k = self.model(x_k, optimize=None, masking=False)
             q = self._cat_slices_from_full_forward(self.model, feat_q, selected_scales)
             k = self._cat_slices_from_full_forward(self.model, feat_k, selected_scales)
-        else:
-            feat_q = feat_k = None
+        elif use_legacy_duplicate_aux and has_mix_submodel:
             q = self._encode_stitched_scales(self.model, x_q, selected_scales)
             k = self._encode_stitched_scales(self.model, x_k, selected_scales)
+        elif has_mix_submodel and teacher_mix_ok:
+            q, pcs_q = self._forward_spilter_submodel_tensors(self.model, x_q, selected_scales)
+            k, pcs_k = self._forward_spilter_submodel_tensors(self.model, x_k, selected_scales)
+        else:
+            raise RuntimeError(
+                "Spilter stitched 需要 mix-distance 模型（含 shapelets_euclidean/cosine/cross_correlation），"
+                "或请将 stitched_feature_source 设为 forward_slices。"
+            )
+
         q = nn.functional.normalize(q, dim=1)
         k = nn.functional.normalize(k, dim=1)
 
@@ -500,10 +508,16 @@ class LearningShapeletsCL:
                 feat_g_k = self.Global_Model(x_k, optimize=None, masking=False)
                 q_g = self._cat_slices_from_full_forward(self.Global_Model, feat_g_q, selected_scales)
                 k_g = self._cat_slices_from_full_forward(self.Global_Model, feat_g_k, selected_scales)
-            else:
-                feat_g_q = feat_g_k = None
+            elif use_legacy_duplicate_aux:
                 q_g = self._encode_stitched_scales(self.Global_Model, x_q, selected_scales)
                 k_g = self._encode_stitched_scales(self.Global_Model, x_k, selected_scales)
+            else:
+                q_g, pcs_g_q = self._forward_spilter_submodel_tensors(
+                    self.Global_Model, x_q, selected_scales
+                )
+                k_g, pcs_g_k = self._forward_spilter_submodel_tensors(
+                    self.Global_Model, x_k, selected_scales
+                )
             q_g = nn.functional.normalize(q_g, dim=1)
             k_g = nn.functional.normalize(k_g, dim=1)
 
@@ -512,15 +526,17 @@ class LearningShapeletsCL:
             if self.config["ablation"]["UseJointKD"]:
                 loss_local_jointCLKD += joint_distill_loss(q, q_g, k, k_g, zeta)
 
-        # Optional scale-wise auxiliary：复用同一张 full-forward 图上的切片，避免重复 encode_scale。
         for scale_idx in selected_scales:
             si = int(scale_idx)
             if use_forward_slices:
                 qi = self.model.slice_scale_features(feat_q, si)
                 ki = self.model.slice_scale_features(feat_k, si)
-            else:
+            elif use_legacy_duplicate_aux:
                 qi = self.model.encode_scale(x_q, si, masking=False)
                 ki = self.model.encode_scale(x_k, si, masking=False)
+            else:
+                qi = pcs_q[si]
+                ki = pcs_k[si]
             qi = nn.functional.normalize(qi, dim=1)
             ki = nn.functional.normalize(ki, dim=1)
             scale_weight = scale_weights.get(si, 5.0)
@@ -530,9 +546,12 @@ class LearningShapeletsCL:
                 if use_forward_slices:
                     qi_g = self.Global_Model.slice_scale_features(feat_g_q, si)
                     ki_g = self.Global_Model.slice_scale_features(feat_g_k, si)
-                else:
+                elif use_legacy_duplicate_aux:
                     qi_g = self.Global_Model.encode_scale(x_q, si, masking=False)
                     ki_g = self.Global_Model.encode_scale(x_k, si, masking=False)
+                else:
+                    qi_g = pcs_g_q[si]
+                    ki_g = pcs_g_k[si]
                 qi_g = nn.functional.normalize(qi_g, dim=1)
                 ki_g = nn.functional.normalize(ki_g, dim=1)
                 if self.config["ablation"]["UseScaleCL"]:

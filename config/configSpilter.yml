@@ -32,9 +32,9 @@ spilter:
   # stitched: concatenate selected scales into one local submodel representation.
   selected_scale_training: "stitched"
   system_extra_scale_count: 2
-  # stitched 表征来源：forward_slices（默认）= 单次 forward + slice，显存与 FedCSL 同构；
-  # subset_ln_forward_scale = 旧版子集 LN + 重复 forward_scale（仅用于对照复现）。
-  stitched_feature_source: "forward_slices"
+  # stitched：selected_scales_only（默认）= encode_mix_forward_selected_scales（FedCSL forward 同源管线，仅所选尺度）；
+  # forward_slices = 全尺度 forward 后切片（与 FedCSL 表征对照）；subset_ln_forward_scale = 旧版辅助项二次 encode_scale。
+  stitched_feature_source: "selected_scales_only"
 
 ablation:
   UseJointKD: True

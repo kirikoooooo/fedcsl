@@ -262,6 +262,28 @@ class ShapeletsDistBlocks(nn.Module):
 
         return torch.cat(parts, dim=2)
 
+    def forward_subset(self, x, scale_indices, masking=False):
+        """仅前向所选全局尺度：与依次 ``forward_scale`` 再拼接等价，但作为本子模块的一次 forward 路径。
+
+        语义上相当于「只含这些尺度 block 的拼接子编码器」跑一次 ``forward``（内部仍按尺度顺序计算各 block）。
+        ``scale_indices`` 为全局尺度下标列表，顺序决定拼接顺序。
+        """
+        parts = []
+        for si in scale_indices:
+            si = int(si)
+            if self.dist_measure == 'mix':
+                base = si * 3
+                block_indices = range(base, base + 3)
+            else:
+                block_indices = [si]
+            for idx in block_indices:
+                block = self.blocks[idx]
+                if self.checkpoint and self.dist_measure != 'cross-correlation':
+                    parts.append(checkpoint(block, x, masking))
+                else:
+                    parts.append(block(x, masking))
+        return torch.cat(parts, dim=2)
+
 
 
 
@@ -486,6 +508,64 @@ class LearningShapeletsModelMixDistances(nn.Module):
         if normalize:
             out = nn.functional.layer_norm(out, (out.shape[1],))
         return out
+
+    @staticmethod
+    def _split_mix_branch_flat(flat, selected_scales_int, branch, shapelets_size_and_len):
+        """将某分支上「所选尺度按顺序拼接」的向量切回各尺度行片段。"""
+        dims = list(shapelets_size_and_len.values())
+        parts = []
+        offset = 0
+        for si in selected_scales_int:
+            num = dims[int(si)]
+            if branch in ("eu", "co"):
+                w = num // 3
+            elif branch == "cc":
+                w = num - 2 * (num // 3)
+            else:
+                raise ValueError(branch)
+            parts.append(flat[:, offset : offset + w])
+            offset += w
+        if offset != flat.shape[1]:
+            raise RuntimeError(
+                f"分支 {branch} 拼接宽度不匹配：期望 {offset}，实际 {flat.shape[1]}"
+            )
+        return parts
+
+    def encode_mix_forward_selected_scales(self, x, selected_scales, masking=False):
+        """FedCSL ``forward(optimize=None)`` 同源顺序：分支 concat → LN → 按尺度切分 → 三分支沿特征维拼接 → 展平。
+
+        与全模 ``forward`` 的区别仅为：各分支用 ``forward_subset`` 只计算 ``selected_scales``，
+        LN 作用在「当前尺度集合在该分支上的拼接维」上（与 ``ln1``/``ln2``/``ln3`` 对全长向量归一化同源，
+        但此处用 ``functional.layer_norm``，维度为子集宽度）。
+
+        Returns:
+            stitched: ``[B, sum_j dims[scale_j]]``，尺度顺序与 ``selected_scales`` 一致。
+            per_scale_cat: 全局尺度索引 → 该尺度 mix 向量（与 ``slice_scale_features(stitched_global, si)``
+            在全局次序下的切片语义一致，但此处 stitched 仅含所选尺度按序拼接）。
+        """
+        if not selected_scales:
+            raise ValueError("selected_scales must be non-empty")
+        scales_int = [int(s) for s in selected_scales]
+        sd = self.shapelets_size_and_len
+
+        eu_raw = torch.squeeze(self.shapelets_euclidean.forward_subset(x, scales_int, masking), 1)
+        co_raw = torch.squeeze(self.shapelets_cosine.forward_subset(x, scales_int, masking), 1)
+        cc_raw = torch.squeeze(self.shapelets_cross_correlation.forward_subset(x, scales_int, masking), 1)
+
+        eu_ln = torch.nn.functional.layer_norm(eu_raw, (eu_raw.shape[1],))
+        co_ln = torch.nn.functional.layer_norm(co_raw, (co_raw.shape[1],))
+        cc_ln = torch.nn.functional.layer_norm(cc_raw, (cc_raw.shape[1],))
+
+        eu_rows = self._split_mix_branch_flat(eu_ln, scales_int, "eu", sd)
+        co_rows = self._split_mix_branch_flat(co_ln, scales_int, "co", sd)
+        cc_rows = self._split_mix_branch_flat(cc_ln, scales_int, "cc", sd)
+
+        mix_per_position = [
+            torch.cat([eu_rows[i], co_rows[i], cc_rows[i]], dim=1) for i in range(len(scales_int))
+        ]
+        stitched = torch.cat(mix_per_position, dim=1)
+        per_scale_cat = {scales_int[i]: mix_per_position[i] for i in range(len(scales_int))}
+        return stitched, per_scale_cat
 
     def forward(self, x, optimize='acc', masking=False):
 

@@ -75,9 +75,9 @@ def _shapelet_dict(len_ts: int) -> Dict[int, int]:
 def _build_csl_like_config(algo_name: str, scale_aux: bool = True) -> Dict[str, Any]:
     """构造 LearningShapeletsCL 用的 config。
 
-    scale_aux: 是否启用 UseScaleCL / UseScaleKD。主代码在默认
-    ``stitched_feature_source: forward_slices`` 下，辅助项与 stitched 主项共用同一次
-    ``forward(optimize=None)`` 的切片，不再重复 forward_scale。
+    scale_aux: 是否启用 UseScaleCL / UseScaleKD。Spilter 默认
+    ``stitched_feature_source: selected_scales_only``：``encode_mix_forward_selected_scales``（FedCSL forward 同源，仅所选尺度），
+    辅助项复用同一组表征；可选 ``forward_slices`` 做全模 forward+切片对照。
 
     ``--no-scale-aux``（SCALE_AUX=0）仅用于消融：完全关掉多尺度 CL/KD 项，只保留
     stitched + Joint 分支，便于对照实验。
@@ -98,8 +98,8 @@ def _build_csl_like_config(algo_name: str, scale_aux: bool = True) -> Dict[str, 
         spilter_cfg = {
             "allocation_mode": "local_score_topm",
             "selected_scale_training": "stitched",
-            # 与 config/configSpilter.yml 默认一致；不写则 train.py 也会默认 forward_slices
-            "stitched_feature_source": "forward_slices",
+            # 与 config/configSpilter.yml 默认一致：encode_mix_forward_selected_scales
+            "stitched_feature_source": "selected_scales_only",
         }
     return {
         "algo": algo_name,

@@ -442,6 +442,16 @@ class LearningShapeletsCL:
         ]
         return torch.cat(parts, dim=1)
 
+    @staticmethod
+    def _cat_slices_from_full_forward(model, feat: torch.Tensor, selected_scales) -> torch.Tensor:
+        """从单次 ``forward(optimize=None)`` 输出中拼接所选尺度切片（FedCSL 同源表征）。"""
+        parts = [model.slice_scale_features(feat, int(s)) for s in selected_scales]
+        return torch.cat(parts, dim=1)
+
+    def _stitched_feature_source(self):
+        sp_cfg = self.config.get("spilter") or {}
+        return str(sp_cfg.get("stitched_feature_source", "forward_slices")).strip().lower()
+
     def _compute_stitched_selected_scale_losses(self, x_q, x_k, scale_indices, gamma, zeta, algo_name):
         device = x_q.device
         selected_scales = self._normalize_scale_indices(
@@ -451,8 +461,30 @@ class LearningShapeletsCL:
             selected_scales = [0]
         scale_weights = self._selected_scale_loss_weights(selected_scales)
 
-        q = self._encode_stitched_scales(self.model, x_q, selected_scales)
-        k = self._encode_stitched_scales(self.model, x_k, selected_scales)
+        # --- 表征来源 -----------------------------------------------------------
+        # ``forward_slices``（默认）：与 FedCSL 一致，每个视图只做 1 次 ``forward(optimize=None)``，
+        # stitched / per-scale 分支全部从同一张 autograd 图切片得到 → m=4 时峰值显存不再反超 FedCSL。
+        # ``subset_ln_forward_scale``（legacy）：`_encode_stitched_scales` + 循环 `encode_scale`，
+        # 会为 stitched 与 auxiliary 各跑一遍 forward_scale，显存随 m 近似翻倍。
+        src = self._stitched_feature_source()
+        use_forward_slices = (
+            src in ("forward_slices", "fedcsl", "slice", "slices")
+            and hasattr(self.model, "slice_scale_features")
+            and (
+                self.Global_Model is None
+                or hasattr(self.Global_Model, "slice_scale_features")
+            )
+        )
+
+        if use_forward_slices:
+            feat_q = self.model(x_q, optimize=None, masking=False)
+            feat_k = self.model(x_k, optimize=None, masking=False)
+            q = self._cat_slices_from_full_forward(self.model, feat_q, selected_scales)
+            k = self._cat_slices_from_full_forward(self.model, feat_k, selected_scales)
+        else:
+            feat_q = feat_k = None
+            q = self._encode_stitched_scales(self.model, x_q, selected_scales)
+            k = self._encode_stitched_scales(self.model, x_k, selected_scales)
         q = nn.functional.normalize(q, dim=1)
         k = nn.functional.normalize(k, dim=1)
 
@@ -463,8 +495,15 @@ class LearningShapeletsCL:
         loss_local_CLKD_mutiscale = torch.tensor(0.0, device=device)
 
         if self.Global_Model is not None:
-            q_g = self._encode_stitched_scales(self.Global_Model, x_q, selected_scales)
-            k_g = self._encode_stitched_scales(self.Global_Model, x_k, selected_scales)
+            if use_forward_slices:
+                feat_g_q = self.Global_Model(x_q, optimize=None, masking=False)
+                feat_g_k = self.Global_Model(x_k, optimize=None, masking=False)
+                q_g = self._cat_slices_from_full_forward(self.Global_Model, feat_g_q, selected_scales)
+                k_g = self._cat_slices_from_full_forward(self.Global_Model, feat_g_k, selected_scales)
+            else:
+                feat_g_q = feat_g_k = None
+                q_g = self._encode_stitched_scales(self.Global_Model, x_q, selected_scales)
+                k_g = self._encode_stitched_scales(self.Global_Model, x_k, selected_scales)
             q_g = nn.functional.normalize(q_g, dim=1)
             k_g = nn.functional.normalize(k_g, dim=1)
 
@@ -473,19 +512,27 @@ class LearningShapeletsCL:
             if self.config["ablation"]["UseJointKD"]:
                 loss_local_jointCLKD += joint_distill_loss(q, q_g, k, k_g, zeta)
 
-        # Optional scale-wise auxiliary terms keep each selected slice aligned while
-        # the primary local/teacher model is the stitched submodel representation.
+        # Optional scale-wise auxiliary：复用同一张 full-forward 图上的切片，避免重复 encode_scale。
         for scale_idx in selected_scales:
-            qi = self.model.encode_scale(x_q, scale_idx, masking=False)
-            ki = self.model.encode_scale(x_k, scale_idx, masking=False)
+            si = int(scale_idx)
+            if use_forward_slices:
+                qi = self.model.slice_scale_features(feat_q, si)
+                ki = self.model.slice_scale_features(feat_k, si)
+            else:
+                qi = self.model.encode_scale(x_q, si, masking=False)
+                ki = self.model.encode_scale(x_k, si, masking=False)
             qi = nn.functional.normalize(qi, dim=1)
             ki = nn.functional.normalize(ki, dim=1)
-            scale_weight = scale_weights.get(int(scale_idx), 5.0)
+            scale_weight = scale_weights.get(si, 5.0)
             loss_local_CLKD_mutiscale += local_infonce_loss(qi, ki, self.loss_func, self.T) * scale_weight
 
             if self.Global_Model is not None:
-                qi_g = self.Global_Model.encode_scale(x_q, scale_idx, masking=False)
-                ki_g = self.Global_Model.encode_scale(x_k, scale_idx, masking=False)
+                if use_forward_slices:
+                    qi_g = self.Global_Model.slice_scale_features(feat_g_q, si)
+                    ki_g = self.Global_Model.slice_scale_features(feat_g_k, si)
+                else:
+                    qi_g = self.Global_Model.encode_scale(x_q, si, masking=False)
+                    ki_g = self.Global_Model.encode_scale(x_k, si, masking=False)
                 qi_g = nn.functional.normalize(qi_g, dim=1)
                 ki_g = nn.functional.normalize(ki_g, dim=1)
                 if self.config["ablation"]["UseScaleCL"]:

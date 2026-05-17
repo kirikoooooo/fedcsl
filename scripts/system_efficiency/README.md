@@ -91,5 +91,20 @@ dashboard 端：
 
 - 本实验在每个客户端开始前做 1 个 batch 的 cudnn warmup，避免首次卷积算子选择影响首个客户端计时；可通过 `WARMUP_BATCHES=0` 关闭。
 - FedCSL / Spilter / FedProx 会构造一个 frozen teacher (server 初始权重副本)，模拟 round ≥ 1 的稳态训练成本。FedAvg、BYOL、FedU2、Orchestra 不需要 teacher。
-- Spilter 的 `m1/m2/m4` 直接把 `Selected_Scales` 固定为 `[0..m-1]`，走 stitched 子模型分支，与主流程的 `_compute_stitched_selected_scale_losses` 等价。
+- Spilter 的 `m1/m2/m4` 直接把 `Selected_Scales` 固定为 `[0..m-1]`，走 stitched 子模型分支；与主流程一致时 `spilter.stitched_feature_source` 默认为 `forward_slices`（单次 `forward` + 切片）。
 - 实验默认只跑 1 个本地 epoch；若想测多个 epoch 的累积耗时，可设 `NUM_EPOCH=5` 等。
+- **默认 `BATCH_SIZE=32`** 与所有 `config/configXxx.yml` 主流程实验对齐；如修改 yml 里的 `batch_size` 想测时与训练匹配，请显式 `BATCH_SIZE=N` 覆盖（脚本不读 yml）。
+
+## Spilter 显存与 `SCALE_AUX`（更新说明）
+
+主代码已默认 **`forward_slices`**：`stitched` 主损失与 `UseScaleCL` / `UseScaleKD` 辅助项共用同一次 `forward(optimize=None)` 的表征，按尺度 **切片** 计算，**不再**像旧版 `subset_ln_forward_scale` 那样对同一视图重复 `forward_scale`。因此 **m=4 不应再出现「显存反常高于 FedCSL」**（二者同为「学生 2×forward + 老师 2×forward + 循环内切片」量级）。
+
+测时脚本显式写入 `stitched_feature_source: forward_slices`，与 `config/configSpilter.yml` 对齐。
+
+若需对照旧实现（论文附录 / 消融），在主配置里设 `stitched_feature_source: subset_ln_forward_scale`，或在代码侧单独讨论。
+
+**`SCALE_AUX=0`**（`--no-scale-aux`）仍可用于测时：**关闭** `UseScaleCL` / `UseScaleKD` 两项（FedCSL / Spilter 均受影响），观察「去掉多尺度对齐损失」后的算力/显存下界；**仅影响本测时命令**，不等价于主训练默认配置。
+
+```bash
+SCALE_AUX=0 bash scripts/system_efficiency/run_har_efficiency.sh
+```

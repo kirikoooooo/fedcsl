@@ -74,14 +74,30 @@ c.model 训练 1 epoch（持续，不重置）
 
 ## 特征编码注意事项（Stitched 模式）
 
-客户端本地训练使用"拼接子模型"：
+客户端本地训练使用"拼接子模型"（默认与 FedCSL 共用一次 `forward(optimize=None)`，再 `slice_scale_features` 拼接所选尺度）：
 
 ```
-q = cat([encode_scale(x_q, s) for s in selected_scales])  # (n, m*40)
+feat_q = model(x_q, optimize=None)
+q_stitched = cat([slice_scale_features(feat_q, s) for s in selected_scales])
+# 各尺度辅助损失：同样从 feat_q / feat_k / teacher 上切片，不再二次 forward_scale
 ```
 
 **归一化应分距离类型**（euclidean / cosine / cross-corr）分别进行，
 与 FedCSL `forward()` 中 ln1/ln2/ln3 的处理一致。
+
+### 默认实现：`forward_slices`（与 FedCSL 同构、省显存）
+
+配置项 `spilter.stitched_feature_source` 默认为 `forward_slices`：
+对每个视图只做一次 `model(x, optimize=None)`，stitched 表征与各尺度辅助损失均通过对输出使用 **`slice_scale_features`** 切片得到，
+不再对 stitched 与 auxiliary **重复**调用 `forward_scale` / `encode_scale`。这样 m=4 时的 autograd 峰值与 FedCSL「整模 forward + 循环切片」同量级，
+避免出现「m4 显存反而大于 FedCSL」的反直觉现象。
+
+若论文/对照实验需要恢复旧行为（子集上的 `_encode_stitched_scales` LN + 辅助项独立 forward），设置：
+
+```yaml
+spilter:
+  stitched_feature_source: subset_ln_forward_scale
+```
 
 原因：欧氏距离值域远大于余弦相似度（[0,1]），若用单个 layer_norm
 对所有特征一起归一化，欧氏距离会主导方差，余弦/互相关特征被压制，
@@ -101,4 +117,4 @@ q = cat([encode_scale(x_q, s) for s in selected_scales])  # (n, m*40)
 
 ## 最后更新
 
-2026-05-14，根据用户明确反馈持久化，确认架构需求。
+2026-05-17：补充 stitched `forward_slices` 默认路径（显存与 FedCSL 同构）；保留 `subset_ln_forward_scale` legacy。

@@ -30,12 +30,23 @@ cd "$PROJECT_ROOT"
 GPU="${GPU:-0}"
 NUM_CLIENTS="${NUM_CLIENTS:-50}"
 ALPHA="${ALPHA:-0.1}"
-BATCH_SIZE="${BATCH_SIZE:-8}"
-LR="${LR:-0.05}"
+# 与 config/configSpilter.yml 等主流程 yml 保持一致 (model.params.batch_size = 32)；
+# 想测不同 batch 的扫描，可在命令行覆盖 BATCH_SIZE。
+BATCH_SIZE="${BATCH_SIZE:-32}"
+LR="${LR:-0.01}"
 NUM_EPOCH="${NUM_EPOCH:-1}"
 WARMUP_BATCHES="${WARMUP_BATCHES:-1}"
 DEFAULT_ALGOS="fedavg fedprox byol fedu2 orchestra fedcsl spilter-m1 spilter-m2 spilter-m4"
 ALGOS="${ALGOS:-$DEFAULT_ALGOS}"
+
+# SCALE_AUX=0 关闭 UseScaleCL/UseScaleKD 的 per-scale 辅助 loss。
+# Spilter stitched 模式下，per-scale 辅助 loss 会让显存几乎随 m 翻倍
+# （是 m=4 显存反而比 FedCSL 大的根因）。设为 0 测「纯尺度切分」显存上界。
+SCALE_AUX="${SCALE_AUX:-1}"
+NO_SCALE_AUX_FLAG=""
+if [[ "$SCALE_AUX" == "0" ]]; then
+  NO_SCALE_AUX_FLAG="--no-scale-aux"
+fi
 
 PARTIALS_DIR="data/system_efficiency_HAR_partials"
 mkdir -p "$PARTIALS_DIR"
@@ -44,7 +55,7 @@ echo "================================================================"
 echo "[run_har_efficiency] HAR 系统效率实验"
 echo "  GPU=$GPU  NUM_CLIENTS=$NUM_CLIENTS  ALPHA=$ALPHA"
 echo "  BATCH_SIZE=$BATCH_SIZE  LR=$LR  NUM_EPOCH=$NUM_EPOCH"
-echo "  WARMUP_BATCHES=$WARMUP_BATCHES"
+echo "  WARMUP_BATCHES=$WARMUP_BATCHES  SCALE_AUX=$SCALE_AUX"
 echo "  PARTIALS_DIR=$PARTIALS_DIR"
 echo "  ALGOS=$ALGOS"
 echo "================================================================"
@@ -67,6 +78,7 @@ for algo in $ALGOS; do
     --lr "$LR" \
     --num-epoch "$NUM_EPOCH" \
     --warmup-batches "$WARMUP_BATCHES" \
+    $NO_SCALE_AUX_FLAG \
     --output "${PARTIALS_DIR}/{algo}.json" \
     || { echo "[err] algo=$algo failed"; FAILED+=("$algo"); }
 done

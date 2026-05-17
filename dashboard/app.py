@@ -775,6 +775,53 @@ def api_weights_delete(path: str) -> Dict[str, Any]:
     return delete_weight(path)
 
 
+# ---- 系统效率实验：暴露汇总结果（只读） -----------------------------------
+# 实验入口脚本：scripts/system_efficiency/run_har_efficiency.sh（dashboard 自动扫描可见）
+# 产物：data/system_efficiency_HAR.{json,csv,md}
+_SYS_EFF_DIR = PROJECT_ROOT / "data"
+_SYS_EFF_FILES = {
+    "json": "system_efficiency_HAR.json",
+    "csv": "system_efficiency_HAR.csv",
+    "md": "system_efficiency_HAR.md",
+}
+
+
+@app.get("/api/system-efficiency/status")
+def api_system_efficiency_status() -> Dict[str, Any]:
+    """汇总结果文件是否就绪、最近一次生成时间。"""
+    info: Dict[str, Any] = {"present": {}, "mtime": {}}
+    for kind, name in _SYS_EFF_FILES.items():
+        p = _SYS_EFF_DIR / name
+        info["present"][kind] = p.is_file()
+        info["mtime"][kind] = p.stat().st_mtime if p.is_file() else None
+    partials_dir = _SYS_EFF_DIR / "system_efficiency_HAR_partials"
+    info["partials"] = sorted(p.name for p in partials_dir.glob("*.json")) if partials_dir.is_dir() else []
+    info["partials_count"] = len(info["partials"])
+    return info
+
+
+@app.get("/api/system-efficiency/result")
+def api_system_efficiency_result() -> Dict[str, Any]:
+    """返回 data/system_efficiency_HAR.json 内容（机读结构）。"""
+    p = _SYS_EFF_DIR / _SYS_EFF_FILES["json"]
+    if not p.is_file():
+        raise HTTPException(404, "system efficiency report not generated yet; "
+                                 "run scripts/system_efficiency/run_har_efficiency.sh first")
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"invalid json: {e}")
+
+
+@app.get("/api/system-efficiency/report.md", response_class=PlainTextResponse)
+def api_system_efficiency_md() -> str:
+    """直接以 markdown 文本返回，便于前端 render 或 curl 查看。"""
+    p = _SYS_EFF_DIR / _SYS_EFF_FILES["md"]
+    if not p.is_file():
+        raise HTTPException(404, "system efficiency markdown report not generated yet")
+    return p.read_text(encoding="utf-8")
+
+
 # 静态前端
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

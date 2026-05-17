@@ -730,6 +730,30 @@ I\!\left(Z_k^{(r,1)};Z_k^{(r,2)}\right)
   \end{tabular}
   \label{tab:scale_performance}
 \end{table}
+
+\begin{table*}[htbp]
+  \centering
+  \caption{HAR 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：后 10 轮测试集 SVM 平均准确率）。加粗为该列最优。}
+  \label{tab:har_dirichlet}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lcccccc}
+    \toprule
+    Method & $\alpha=0.05$ & $\alpha=0.1$ & $\alpha=0.3$ & $\alpha=0.5$ & $\alpha=1.0$ & $\alpha=10.0$ \\
+    \midrule
+    FedAvg            & 0.9332          & 0.9370          & 0.9338          & 0.9462          & 0.9445          & 0.9484          \\
+    FedProx           & \textbf{0.9472} & 0.9399          & 0.9346          & 0.9384          & 0.9398          & 0.9458          \\
+    FedBYOL           & 0.9268          & 0.9285          & 0.9336          & 0.9284          & 0.9331          & 0.9267          \\
+    FedU2             & 0.9252          & 0.9240          & 0.9307          & 0.9286          & 0.9317          & 0.9327          \\
+    Orchestra         & 0.9344          & 0.9336          & 0.9293          & 0.9315          & 0.9325          & 0.9333          \\
+    FedCSL            & 0.9315          & 0.9339          & 0.9306          & 0.9382          & 0.9475          & 0.9514          \\
+    \midrule
+    Spilter ($m{=}1$) & 0.9261          & 0.9236          & 0.9350          & 0.9378          & 0.9253          & 0.9331          \\
+    Spilter ($m{=}2$) & 0.9377          & 0.9346          & 0.9489          & 0.9527          & 0.9405          & \textbf{0.9655} \\
+    Spilter ($m{=}4$) & 0.9414          & \textbf{0.9446} & \textbf{0.9521} & \textbf{0.9586} & \textbf{0.9573} & 0.9630          \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table*}
 \subsection{消融实验}
 
 消融实验用于回答”性能提升来自哪里”这一关键问题。具体而言，可依次关闭以下模块：joint CL、joint KD、scale CL、scale KD、ACF 周期感知加权和效率感知尺度选择。若关闭联合蒸馏后精度明显下降，则说明在非 IID 条件下特征层面对齐确实能够有效抑制客户端漂移；若关闭周期感知加权后多数据集平均精度下降，则说明不同尺度的区分性并不相同，统一等权并不是最优选择；若关闭效率感知选择（改为随机选择），则验证客户端自主贪心选择的收益。

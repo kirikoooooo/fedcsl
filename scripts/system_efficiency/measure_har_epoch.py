@@ -75,11 +75,12 @@ def _shapelet_dict(len_ts: int) -> Dict[int, int]:
 def _build_csl_like_config(algo_name: str, scale_aux: bool = True) -> Dict[str, Any]:
     """构造 LearningShapeletsCL 用的 config。
 
-    scale_aux: 是否启用 UseScaleCL / UseScaleKD。Spilter stitched 路径在
-    `_compute_stitched_selected_scale_losses` 里若 ScaleCL/ScaleKD 为 True，会
-    额外对每个 selected scale 再独立 forward 一次（学生 + 老师），导致显存峰值
-    几乎随 m 翻倍 —— 这是 m=4 时显存反而高于 FedCSL 的根因。关闭后只走 stitched
-    主路径（仍有 JointCL/JointKD），能真实反映尺度切分的显存节省上界。
+    scale_aux: 是否启用 UseScaleCL / UseScaleKD。主代码在默认
+    ``stitched_feature_source: forward_slices`` 下，辅助项与 stitched 主项共用同一次
+    ``forward(optimize=None)`` 的切片，不再重复 forward_scale。
+
+    ``--no-scale-aux``（SCALE_AUX=0）仅用于消融：完全关掉多尺度 CL/KD 项，只保留
+    stitched + Joint 分支，便于对照实验。
     """
     use_scale_aux = scale_aux and (algo_name in ("fedcsl", "spilter"))
     ablation = {
@@ -97,6 +98,8 @@ def _build_csl_like_config(algo_name: str, scale_aux: bool = True) -> Dict[str, 
         spilter_cfg = {
             "allocation_mode": "local_score_topm",
             "selected_scale_training": "stitched",
+            # 与 config/configSpilter.yml 默认一致；不写则 train.py 也会默认 forward_slices
+            "stitched_feature_source": "forward_slices",
         }
     return {
         "algo": algo_name,

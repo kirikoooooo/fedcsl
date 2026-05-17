@@ -91,29 +91,20 @@ dashboard 端：
 
 - 本实验在每个客户端开始前做 1 个 batch 的 cudnn warmup，避免首次卷积算子选择影响首个客户端计时；可通过 `WARMUP_BATCHES=0` 关闭。
 - FedCSL / Spilter / FedProx 会构造一个 frozen teacher (server 初始权重副本)，模拟 round ≥ 1 的稳态训练成本。FedAvg、BYOL、FedU2、Orchestra 不需要 teacher。
-- Spilter 的 `m1/m2/m4` 直接把 `Selected_Scales` 固定为 `[0..m-1]`，走 stitched 子模型分支，与主流程的 `_compute_stitched_selected_scale_losses` 等价。
+- Spilter 的 `m1/m2/m4` 直接把 `Selected_Scales` 固定为 `[0..m-1]`，走 stitched 子模型分支；与主流程一致时 `spilter.stitched_feature_source` 默认为 `forward_slices`（单次 `forward` + 切片）。
 - 实验默认只跑 1 个本地 epoch；若想测多个 epoch 的累积耗时，可设 `NUM_EPOCH=5` 等。
 - **默认 `BATCH_SIZE=32`** 与所有 `config/configXxx.yml` 主流程实验对齐；如修改 yml 里的 `batch_size` 想测时与训练匹配，请显式 `BATCH_SIZE=N` 覆盖（脚本不读 yml）。
 
-## 关于 Spilter-m4 实测显存可能大于 FedCSL
+## Spilter 显存与 `SCALE_AUX`（更新说明）
 
-Spilter stitched 模式（`_compute_stitched_selected_scale_losses`）实际跑的 forward 次数是：
+主代码已默认 **`forward_slices`**：`stitched` 主损失与 `UseScaleCL` / `UseScaleKD` 辅助项共用同一次 `forward(optimize=None)` 的表征，按尺度 **切片** 计算，**不再**像旧版 `subset_ln_forward_scale` 那样对同一视图重复 `forward_scale`。因此 **m=4 不应再出现「显存反常高于 FedCSL」**（二者同为「学生 2×forward + 老师 2×forward + 循环内切片」量级）。
 
-- `_encode_stitched_scales` × 4 (学生 q/k + 老师 q/k) — 每次 m 个尺度 forward
-- **加上** per-scale 循环：若 `UseScaleCL=True` 或 `UseScaleKD=True`，对每个 selected scale 再独立 forward 学生 + 老师各 2 次
+测时脚本显式写入 `stitched_feature_source: forward_slices`，与 `config/configSpilter.yml` 对齐。
 
-也就是 m=4 时 **总 forward 次数 ≈ 16 学生 + 16 老师**，autograd 图保留的中间激活几乎随 m 翻倍。FedCSL 走的 `update_CL` 主路径只做 **学生 2 次 + 老师 2 次** full forward（per-scale 循环里只 slice 不再 forward），所以 m=4 反而比 FedCSL 显存峰值高。
+若需对照旧实现（论文附录 / 消融），在主配置里设 `stitched_feature_source: subset_ln_forward_scale`，或在代码侧单独讨论。
 
-如果想测「纯 stitched 尺度切分」的显存上界（去掉 per-scale 辅助 loss 重复 forward），用：
+**`SCALE_AUX=0`**（`--no-scale-aux`）仍可用于测时：**关闭** `UseScaleCL` / `UseScaleKD` 两项（FedCSL / Spilter 均受影响），观察「去掉多尺度对齐损失」后的算力/显存下界；**仅影响本测时命令**，不等价于主训练默认配置。
 
 ```bash
 SCALE_AUX=0 bash scripts/system_efficiency/run_har_efficiency.sh
 ```
-
-这等价于给 Spilter/FedCSL 设 `UseScaleCL=False, UseScaleKD=False`，**仅影响测时实验，不影响主流程精度训练**。SCALE_AUX=0 下 m=4 的显存通常约为 FedCSL 的 50%，能直接体现 Spilter 的节省。
-
-论文写法建议：
-
-- 默认表（`SCALE_AUX=1`）反映"如实重现主流程"的端到端开销，承认 m=4 与 FedCSL 接近；
-- 附录加一组 `SCALE_AUX=0` 的对照表，体现"如果只算 stitched 主路径的显存"是怎样的。
-- 主表里**重点突出 m=1 / m=2**（这两档无论 SCALE_AUX 与否都明显省）。

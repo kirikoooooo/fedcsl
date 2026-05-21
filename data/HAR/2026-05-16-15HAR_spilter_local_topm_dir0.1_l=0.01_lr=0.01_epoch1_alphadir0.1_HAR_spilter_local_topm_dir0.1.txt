@@ -1,0 +1,420 @@
+Details of Training:-----------------------
+dataset: HAR
+local train epochs: 1
+round num: 200
+batch size: 32
+lr: 0.01
+use_client_selection: False
+server_device: cuda:0
+client_workers: 3
+client_worker_devices: ['cuda:0', 'cuda:0', 'cuda:0']
+client_groups: [[0, 3, 6, 9], [1, 4, 7], [2, 5, 8]]
+-------------------------------------------
+HAR_spilter_local_topm_dir0.1
+PID: 4079346
+PPID: 3293650
+argv: FedCSL_All.py -dataset HAR --config config/configSpilter.yml --dirichlet-alpha 0.1 --seed 42 --description HAR_spilter_local_topm_dir0.1 --num-client 10 --server-gpu 0 --client-gpus 0 --eval-protocol svm
+effective_dataset: HAR
+effective_dirichlet_alpha: 0.1
+ablation:  UseACF: true  UseDistribution: false  UseJointCL: true  UseJointKD: true  UseMTLHomo: false  UseProdictor: false  UseScaleCL: true  UseScaleKD: truealgo: spilterdataset: HARdescription: HAR_spilter_local_topm_dir0.1evaluation:  linear_probe:    batch_size: 256    eval_interval: 1    lr: 0.001    max_epoch: 200    seed: 42    wd: 0.0001  protocol: svm  svm_c_grid:  - 0.0001  - 0.001  - 0.01  - 0.1  - 1.0  - 10.0  - 100.0  - 1000.0  - 10000.0federated:  auto_resume: false  checkpoint_every: 0  client_gpus:  - 0  client_selection_method: omp  client_selection_ratio: 0.6  client_workers: 3  dirichlet_alpha: 0.1  ema_alpha: 0.3  min_selection_prob: 0.01  numClient: 10  numEpoch: 1  numRound: 200  server_gpu: 0  use_client_selection: falselogPath: ./result/model:  name: ''  params:    batch_size: 32    beta: 0.4    dist_measure: mix    gamma: 0.7    l: 0.01    lr: 0.01    ls: 1    momentum: 0.9    wd: 0.0001spilter:  allocation_mode: local_score_topm  local_top_m: 2  selected_scale_training: stitched  system_extra_scale_count: 2
+[spilter] planned local-score top-m stitched clients in 4.496s; spilter_allocation_mode=local_score_topm; local_top_m=2; planned scale coverage: [1, 1, 1, 1, 2, 7, 9, 1]
+dataset: HARround:0 server aggregation  testACC:0.9365456396335257 trainACC:0.9964291787111036 avg_loss:1.9144556678157363 total:1.914456 base:0.826243 structure:0.000000 joint:0.000000 scale:1.088213 scale_local:1.088213 scale_global:0.000000 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 0] timing train=29.946s distribution=6.721s agg=0.658s eval=131.521s total=168.849s
+dataset: HARround:1 server aggregation  testACC:0.9314557176789956 trainACC:1.0 avg_loss:2.940079504673042 total:2.940080 base:0.679167 structure:0.000000 joint:0.651201 scale:1.609712 scale_local:1.088155 scale_global:0.521557 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 1] timing train=43.053s distribution=6.517s agg=0.689s eval=142.180s total=192.451s
+dataset: HARround:2 server aggregation  testACC:0.9331523583305056 trainACC:0.997619452474069 avg_loss:2.896498227026458 total:2.896498 base:0.682079 structure:0.000000 joint:0.604759 scale:1.609660 scale_local:1.088130 scale_global:0.521530 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 2] timing train=37.963s distribution=4.924s agg=0.453s eval=137.289s total=180.637s
+dataset: HARround:3 server aggregation  testACC:0.9317950458092976 trainACC:0.9972793742560789 avg_loss:2.795083543442062 total:2.795084 base:0.626383 structure:0.000000 joint:0.559079 scale:1.609622 scale_local:1.088110 scale_global:0.521512 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 3] timing train=33.803s distribution=4.204s agg=0.426s eval=137.724s total=176.178s
+dataset: HARround:4 server aggregation  testACC:0.9304377332880895 trainACC:0.997619452474069 avg_loss:2.7899984699151954 total:2.789998 base:0.628161 structure:0.000000 joint:0.552238 scale:1.609599 scale_local:1.088099 scale_global:0.521500 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 4] timing train=32.123s distribution=3.596s agg=0.056s eval=140.331s total=176.145s
+dataset: HARround:5 server aggregation  testACC:0.9300984051577876 trainACC:0.997619452474069 avg_loss:2.7034382769183143 total:2.703438 base:0.576538 structure:0.000000 joint:0.517317 scale:1.609584 scale_local:1.088091 scale_global:0.521492 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 5] timing train=29.017s distribution=2.214s agg=0.033s eval=135.090s total=166.387s
+dataset: HARround:6 server aggregation  testACC:0.9311163895486936 trainACC:0.9977894915830641 avg_loss:2.664951634867717 total:2.664952 base:0.554620 structure:0.000000 joint:0.500760 scale:1.609572 scale_local:1.088084 scale_global:0.521488 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 6] timing train=30.998s distribution=2.362s agg=0.036s eval=141.628s total=175.051s
+dataset: HARround:7 server aggregation  testACC:0.9324737020699015 trainACC:0.9979595306920592 avg_loss:2.657686969191531 total:2.657687 base:0.550342 structure:0.000000 joint:0.497783 scale:1.609562 scale_local:1.088078 scale_global:0.521484 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 7] timing train=32.467s distribution=3.393s agg=0.075s eval=136.874s total=172.818s
+dataset: HARround:8 server aggregation  testACC:0.9324737020699015 trainACC:0.9981295698010543 avg_loss:2.687277587364596 total:2.687278 base:0.570642 structure:0.000000 joint:0.507077 scale:1.609559 scale_local:1.088077 scale_global:0.521481 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 8] timing train=32.900s distribution=3.706s agg=0.192s eval=143.991s total=180.827s
+dataset: HARround:9 server aggregation  testACC:0.9328130302002036 trainACC:0.9982996089100493 avg_loss:2.606145749209185 total:2.606146 base:0.517235 structure:0.000000 joint:0.479377 scale:1.609534 scale_local:1.088061 scale_global:0.521473 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 9] timing train=34.515s distribution=3.727s agg=0.192s eval=137.442s total=175.895s
+dataset: HARround:10 server aggregation  testACC:0.9338310145911096 trainACC:0.9982996089100493 avg_loss:2.61683258282182 total:2.616833 base:0.525007 structure:0.000000 joint:0.482297 scale:1.609529 scale_local:1.088058 scale_global:0.521471 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 10] timing train=37.099s distribution=3.891s agg=0.142s eval=136.292s total=177.523s
+dataset: HARround:11 server aggregation  testACC:0.9345096708517137 trainACC:0.9984696480190444 avg_loss:2.617738391200942 total:2.617738 base:0.530144 structure:0.000000 joint:0.478069 scale:1.609526 scale_local:1.088057 scale_global:0.521469 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 11] timing train=40.052s distribution=4.333s agg=0.056s eval=147.391s total=191.888s
+dataset: HARround:12 server aggregation  testACC:0.9355276552426196 trainACC:0.9984696480190444 avg_loss:2.6132448637947245 total:2.613245 base:0.525067 structure:0.000000 joint:0.478655 scale:1.609523 scale_local:1.088056 scale_global:0.521467 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 12] timing train=41.856s distribution=4.537s agg=0.389s eval=134.141s total=180.958s
+dataset: HARround:13 server aggregation  testACC:0.9358669833729216 trainACC:0.9984696480190444 avg_loss:2.577484064260159 total:2.577484 base:0.499618 structure:0.000000 joint:0.468360 scale:1.609506 scale_local:1.088045 scale_global:0.521461 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 13] timing train=42.109s distribution=5.201s agg=0.400s eval=120.410s total=168.132s
+dataset: HARround:14 server aggregation  testACC:0.9362063115032236 trainACC:0.9984696480190444 avg_loss:2.606175165516678 total:2.606175 base:0.520490 structure:0.000000 joint:0.476172 scale:1.609513 scale_local:1.088050 scale_global:0.521463 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 14] timing train=40.292s distribution=5.655s agg=0.531s eval=147.259s total=193.750s
+dataset: HARround:15 server aggregation  testACC:0.9368849677638276 trainACC:0.9986396871280394 avg_loss:2.5676438838586204 total:2.567644 base:0.492402 structure:0.000000 joint:0.465739 scale:1.609502 scale_local:1.088043 scale_global:0.521460 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 15] timing train=40.762s distribution=4.797s agg=0.317s eval=135.559s total=181.450s
+dataset: HARround:16 server aggregation  testACC:0.9375636240244316 trainACC:0.9986396871280394 avg_loss:2.5845340229050953 total:2.584534 base:0.506669 structure:0.000000 joint:0.468375 scale:1.609491 scale_local:1.088036 scale_global:0.521455 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 16] timing train=32.448s distribution=3.714s agg=0.060s eval=148.432s total=184.669s
+dataset: HARround:17 server aggregation  testACC:0.9372242958941296 trainACC:0.9988097262370346 avg_loss:2.571923366832051 total:2.571923 base:0.496412 structure:0.000000 joint:0.466028 scale:1.609483 scale_local:1.088031 scale_global:0.521452 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 17] timing train=37.668s distribution=4.909s agg=0.420s eval=131.281s total=174.311s
+dataset: HARround:18 server aggregation  testACC:0.9368849677638276 trainACC:0.9988097262370346 avg_loss:2.544279548536587 total:2.544280 base:0.481304 structure:0.000000 joint:0.453496 scale:1.609479 scale_local:1.088028 scale_global:0.521451 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 18] timing train=36.063s distribution=5.204s agg=0.275s eval=147.949s total=189.527s
+dataset: HARround:19 server aggregation  testACC:0.9368849677638276 trainACC:0.9988097262370346 avg_loss:2.5481576646974844 total:2.548158 base:0.477163 structure:0.000000 joint:0.461524 scale:1.609471 scale_local:1.088023 scale_global:0.521447 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 19] timing train=34.848s distribution=4.599s agg=0.473s eval=148.892s total=188.817s
+dataset: HARround:20 server aggregation  testACC:0.9368849677638276 trainACC:0.9988097262370346 avg_loss:2.5319778934376798 total:2.531978 base:0.471484 structure:0.000000 joint:0.451034 scale:1.609460 scale_local:1.088018 scale_global:0.521442 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 20] timing train=36.516s distribution=4.802s agg=0.371s eval=140.502s total=182.200s
+dataset: HARround:21 server aggregation  testACC:0.9365456396335257 trainACC:0.9988097262370346 avg_loss:2.5353515857153885 total:2.535352 base:0.477121 structure:0.000000 joint:0.448770 scale:1.609461 scale_local:1.088017 scale_global:0.521444 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 21] timing train=35.160s distribution=4.964s agg=0.137s eval=144.946s total=185.226s
+dataset: HARround:22 server aggregation  testACC:0.9375636240244316 trainACC:0.9988097262370346 avg_loss:2.536843804680771 total:2.536844 base:0.476372 structure:0.000000 joint:0.451012 scale:1.609460 scale_local:1.088016 scale_global:0.521443 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 22] timing train=36.262s distribution=5.094s agg=0.245s eval=129.247s total=170.870s
+dataset: HARround:23 server aggregation  testACC:0.9368849677638276 trainACC:0.9988097262370346 avg_loss:2.5384636126106215 total:2.538464 base:0.477004 structure:0.000000 joint:0.452007 scale:1.609453 scale_local:1.088013 scale_global:0.521441 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 23] timing train=34.285s distribution=4.577s agg=0.193s eval=148.254s total=187.320s
+dataset: HARround:24 server aggregation  testACC:0.9368849677638276 trainACC:0.9988097262370346 avg_loss:2.546048755342565 total:2.546049 base:0.481571 structure:0.000000 joint:0.455024 scale:1.609453 scale_local:1.088013 scale_global:0.521440 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 24] timing train=36.903s distribution=4.290s agg=0.096s eval=140.153s total=181.473s
+dataset: HARround:25 server aggregation  testACC:0.9365456396335257 trainACC:0.9988097262370346 avg_loss:2.5194393096252092 total:2.519439 base:0.464547 structure:0.000000 joint:0.445446 scale:1.609446 scale_local:1.088008 scale_global:0.521438 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 25] timing train=34.232s distribution=2.668s agg=0.032s eval=138.615s total=175.563s
+dataset: HARround:26 server aggregation  testACC:0.9375636240244316 trainACC:0.9988097262370346 avg_loss:2.540283904932608 total:2.540284 base:0.480423 structure:0.000000 joint:0.450416 scale:1.609444 scale_local:1.088007 scale_global:0.521437 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 26] timing train=30.167s distribution=2.215s agg=0.032s eval=145.622s total=178.046s
+dataset: HARround:27 server aggregation  testACC:0.9375636240244316 trainACC:0.9988097262370346 avg_loss:2.5140515974966484 total:2.514052 base:0.460885 structure:0.000000 joint:0.443727 scale:1.609439 scale_local:1.088003 scale_global:0.521435 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 27] timing train=31.328s distribution=2.839s agg=0.016s eval=130.534s total=164.758s
+dataset: HARround:28 server aggregation  testACC:0.9375636240244316 trainACC:0.9988097262370346 avg_loss:2.510539494914764 total:2.510539 base:0.456100 structure:0.000000 joint:0.445000 scale:1.609439 scale_local:1.088003 scale_global:0.521436 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 28] timing train=32.136s distribution=3.042s agg=0.075s eval=144.228s total=179.500s
+dataset: HARround:29 server aggregation  testACC:0.9372242958941296 trainACC:0.9988097262370346 avg_loss:2.5341630957757637 total:2.534163 base:0.475280 structure:0.000000 joint:0.449455 scale:1.609428 scale_local:1.087997 scale_global:0.521431 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 29] timing train=30.701s distribution=2.981s agg=0.023s eval=137.583s total=171.296s
+dataset: HARround:30 server aggregation  testACC:0.9372242958941296 trainACC:0.9988097262370346 avg_loss:2.508068542878876 total:2.508069 base:0.458707 structure:0.000000 joint:0.439936 scale:1.609425 scale_local:1.087996 scale_global:0.521429 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 30] timing train=32.410s distribution=3.103s agg=0.028s eval=131.452s total=167.006s
+dataset: HARround:31 server aggregation  testACC:0.9341703427214116 trainACC:1.0 avg_loss:2.516396122737212 total:2.516396 base:0.465143 structure:0.000000 joint:0.441833 scale:1.609420 scale_local:1.087993 scale_global:0.521428 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 31] timing train=29.211s distribution=2.159s agg=0.106s eval=143.000s total=174.484s
+dataset: HARround:32 server aggregation  testACC:0.9358669833729216 trainACC:0.9988097262370346 avg_loss:2.4880175814894883 total:2.488018 base:0.443258 structure:0.000000 joint:0.435348 scale:1.609411 scale_local:1.087987 scale_global:0.521425 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 32] timing train=35.786s distribution=3.672s agg=0.094s eval=131.619s total=171.226s
+dataset: HARround:33 server aggregation  testACC:0.9368849677638276 trainACC:0.9988097262370346 avg_loss:2.4840618968787487 total:2.484062 base:0.438087 structure:0.000000 joint:0.436575 scale:1.609399 scale_local:1.087979 scale_global:0.521420 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 33] timing train=34.954s distribution=4.155s agg=0.296s eval=136.432s total=175.850s
+dataset: HARround:34 server aggregation  testACC:0.9372242958941296 trainACC:0.9988097262370346 avg_loss:2.485456660119562 total:2.485457 base:0.441004 structure:0.000000 joint:0.435048 scale:1.609405 scale_local:1.087983 scale_global:0.521422 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 34] timing train=34.868s distribution=3.659s agg=0.084s eval=131.137s total=169.763s
+dataset: HARround:35 server aggregation  testACC:0.9368849677638276 trainACC:0.9988097262370346 avg_loss:2.4783219925740987 total:2.478322 base:0.439154 structure:0.000000 joint:0.429773 scale:1.609395 scale_local:1.087976 scale_global:0.521418 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 35] timing train=36.700s distribution=3.917s agg=0.186s eval=130.020s total=170.834s
+dataset: HARround:36 server aggregation  testACC:0.9362063115032236 trainACC:0.9988097262370346 avg_loss:2.4899350281233295 total:2.489935 base:0.448510 structure:0.000000 joint:0.432032 scale:1.609393 scale_local:1.087976 scale_global:0.521417 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 36] timing train=37.563s distribution=4.641s agg=0.236s eval=135.224s total=177.672s
+dataset: HARround:37 server aggregation  testACC:0.9372242958941296 trainACC:0.9988097262370346 avg_loss:2.450683249493801 total:2.450683 base:0.421913 structure:0.000000 joint:0.419393 scale:1.609377 scale_local:1.087965 scale_global:0.521412 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 37] timing train=37.337s distribution=3.677s agg=0.083s eval=128.723s total=169.842s
+dataset: HARround:38 server aggregation  testACC:0.9372242958941296 trainACC:0.9988097262370346 avg_loss:2.5090963950091316 total:2.509096 base:0.456371 structure:0.000000 joint:0.443340 scale:1.609386 scale_local:1.087972 scale_global:0.521413 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 38] timing train=36.749s distribution=4.651s agg=0.065s eval=137.233s total=178.763s
+dataset: HARround:39 server aggregation  testACC:0.9368849677638276 trainACC:0.9988097262370346 avg_loss:2.4561790552084215 total:2.456179 base:0.428282 structure:0.000000 joint:0.418526 scale:1.609371 scale_local:1.087961 scale_global:0.521409 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 39] timing train=36.974s distribution=4.978s agg=0.447s eval=130.887s total=173.331s
+dataset: HARround:40 server aggregation  testACC:0.9372242958941296 trainACC:1.0 avg_loss:2.479282884984174 total:2.479283 base:0.440707 structure:0.000000 joint:0.429204 scale:1.609373 scale_local:1.087964 scale_global:0.521409 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 40] timing train=35.874s distribution=3.854s agg=0.427s eval=135.267s total=175.436s
+dataset: HARround:41 server aggregation  testACC:0.9385816084153377 trainACC:1.0 avg_loss:2.475661597666733 total:2.475662 base:0.437728 structure:0.000000 joint:0.428563 scale:1.609370 scale_local:1.087962 scale_global:0.521408 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 41] timing train=36.863s distribution=3.922s agg=0.331s eval=133.856s total=174.987s
+dataset: HARround:42 server aggregation  testACC:0.9402782490668476 trainACC:0.9988097262370346 avg_loss:2.456934492816625 total:2.456934 base:0.429149 structure:0.000000 joint:0.418427 scale:1.609359 scale_local:1.087955 scale_global:0.521404 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 42] timing train=35.929s distribution=4.658s agg=0.327s eval=136.615s total=177.534s
+dataset: HARround:43 server aggregation  testACC:0.9379029521547336 trainACC:1.0 avg_loss:2.4464359658851618 total:2.446436 base:0.421212 structure:0.000000 joint:0.415871 scale:1.609353 scale_local:1.087950 scale_global:0.521402 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 43] timing train=36.007s distribution=4.272s agg=0.089s eval=136.708s total=177.081s
+dataset: HARround:44 server aggregation  testACC:0.9402782490668476 trainACC:0.9988097262370346 avg_loss:2.468363754791318 total:2.468364 base:0.437449 structure:0.000000 joint:0.421568 scale:1.609347 scale_local:1.087948 scale_global:0.521399 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 44] timing train=34.471s distribution=3.925s agg=0.307s eval=146.885s total=185.597s
+dataset: HARround:45 server aggregation  testACC:0.9402782490668476 trainACC:0.9988097262370346 avg_loss:2.459577162619654 total:2.459577 base:0.427361 structure:0.000000 joint:0.422878 scale:1.609338 scale_local:1.087943 scale_global:0.521396 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 45] timing train=34.270s distribution=4.362s agg=0.366s eval=138.405s total=177.413s
+dataset: HARround:46 server aggregation  testACC:0.9365456396335257 trainACC:1.0 avg_loss:2.4646511609592556 total:2.464651 base:0.429242 structure:0.000000 joint:0.426067 scale:1.609342 scale_local:1.087945 scale_global:0.521396 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 46] timing train=35.112s distribution=3.584s agg=0.347s eval=147.162s total=186.213s
+dataset: HARround:47 server aggregation  testACC:0.9389209365456397 trainACC:0.9989797653460296 avg_loss:2.42643044663188 total:2.426430 base:0.408537 structure:0.000000 joint:0.408575 scale:1.609319 scale_local:1.087931 scale_global:0.521388 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 47] timing train=32.276s distribution=3.514s agg=0.266s eval=137.763s total=173.836s
+dataset: HARround:48 server aggregation  testACC:0.9372242958941296 trainACC:1.0 avg_loss:2.4367998038858643 total:2.436800 base:0.411949 structure:0.000000 joint:0.415522 scale:1.609329 scale_local:1.087937 scale_global:0.521392 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 48] timing train=30.989s distribution=2.851s agg=0.017s eval=147.075s total=180.942s
+dataset: HARround:49 server aggregation  testACC:0.9382422802850356 trainACC:1.0 avg_loss:2.4351256049209113 total:2.435126 base:0.413156 structure:0.000000 joint:0.412644 scale:1.609326 scale_local:1.087936 scale_global:0.521391 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 49] timing train=32.254s distribution=3.033s agg=0.171s eval=140.379s total=175.849s
+dataset: HARround:50 server aggregation  testACC:0.9409569053274517 trainACC:0.9989797653460296 avg_loss:2.4458954844237186 total:2.445895 base:0.418174 structure:0.000000 joint:0.418397 scale:1.609324 scale_local:1.087935 scale_global:0.521390 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 50] timing train=33.037s distribution=2.915s agg=0.152s eval=140.062s total=176.196s
+dataset: HARround:51 server aggregation  testACC:0.9412962334577536 trainACC:0.9989797653460296 avg_loss:2.4518675963107004 total:2.451868 base:0.428081 structure:0.000000 joint:0.414470 scale:1.609317 scale_local:1.087930 scale_global:0.521387 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 51] timing train=32.465s distribution=3.080s agg=0.027s eval=147.290s total=182.881s
+dataset: HARround:52 server aggregation  testACC:0.9412962334577536 trainACC:0.9991498044550247 avg_loss:2.465472165602836 total:2.465472 base:0.434912 structure:0.000000 joint:0.421242 scale:1.609319 scale_local:1.087932 scale_global:0.521387 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 52] timing train=34.173s distribution=3.511s agg=0.487s eval=135.163s total=173.354s
+dataset: HARround:53 server aggregation  testACC:0.9423142178486597 trainACC:0.9989797653460296 avg_loss:2.41010355111661 total:2.410104 base:0.394743 structure:0.000000 joint:0.406053 scale:1.609308 scale_local:1.087924 scale_global:0.521384 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 53] timing train=35.647s distribution=3.782s agg=0.057s eval=142.693s total=182.205s
+dataset: HARround:54 server aggregation  testACC:0.9419748897183576 trainACC:0.9989797653460296 avg_loss:2.4483447717693148 total:2.448345 base:0.419351 structure:0.000000 joint:0.419686 scale:1.609307 scale_local:1.087923 scale_global:0.521384 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 54] timing train=31.586s distribution=4.138s agg=0.277s eval=131.828s total=167.842s
+dataset: HARround:55 server aggregation  testACC:0.9412962334577536 trainACC:0.9989797653460296 avg_loss:2.4155009492608763 total:2.415501 base:0.397987 structure:0.000000 joint:0.408213 scale:1.609300 scale_local:1.087918 scale_global:0.521382 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 55] timing train=34.990s distribution=4.416s agg=0.329s eval=142.241s total=181.994s
+dataset: HARround:56 server aggregation  testACC:0.9416355615880556 trainACC:0.9989797653460296 avg_loss:2.441082399325563 total:2.441082 base:0.417140 structure:0.000000 joint:0.414645 scale:1.609298 scale_local:1.087918 scale_global:0.521380 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 56] timing train=33.964s distribution=3.713s agg=0.351s eval=138.831s total=176.888s
+dataset: HARround:57 server aggregation  testACC:0.9419748897183576 trainACC:0.9989797653460296 avg_loss:2.439098137779877 total:2.439098 base:0.419154 structure:0.000000 joint:0.410657 scale:1.609287 scale_local:1.087912 scale_global:0.521376 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 57] timing train=34.927s distribution=4.359s agg=0.029s eval=133.509s total=172.839s
+dataset: HARround:58 server aggregation  testACC:0.9416355615880556 trainACC:0.9989797653460296 avg_loss:2.4186022755680923 total:2.418602 base:0.405693 structure:0.000000 joint:0.403629 scale:1.609281 scale_local:1.087907 scale_global:0.521373 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 58] timing train=33.899s distribution=4.171s agg=0.141s eval=139.447s total=177.670s
+dataset: HARround:59 server aggregation  testACC:0.9419748897183576 trainACC:0.9989797653460296 avg_loss:2.423637015168625 total:2.423637 base:0.410705 structure:0.000000 joint:0.403660 scale:1.609273 scale_local:1.087903 scale_global:0.521370 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 59] timing train=33.235s distribution=3.561s agg=0.304s eval=140.947s total=178.085s
+dataset: HARround:60 server aggregation  testACC:0.9426535459789617 trainACC:0.9991498044550247 avg_loss:2.3909946804236557 total:2.390995 base:0.387124 structure:0.000000 joint:0.394607 scale:1.609264 scale_local:1.087897 scale_global:0.521367 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 60] timing train=34.283s distribution=4.480s agg=0.352s eval=132.152s total=171.274s
+dataset: HARround:61 server aggregation  testACC:0.9426535459789617 trainACC:0.9991498044550247 avg_loss:2.4222428549526613 total:2.422243 base:0.406721 structure:0.000000 joint:0.406253 scale:1.609269 scale_local:1.087900 scale_global:0.521369 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 61] timing train=35.926s distribution=4.701s agg=0.158s eval=138.587s total=179.381s
+dataset: HARround:62 server aggregation  testACC:0.9426535459789617 trainACC:0.9991498044550247 avg_loss:2.4053605424444635 total:2.405361 base:0.393145 structure:0.000000 joint:0.402950 scale:1.609265 scale_local:1.087898 scale_global:0.521367 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 62] timing train=35.631s distribution=2.744s agg=0.087s eval=130.017s total=168.492s
+dataset: HARround:63 server aggregation  testACC:0.9426535459789617 trainACC:0.9991498044550247 avg_loss:2.38440251693894 total:2.384403 base:0.381543 structure:0.000000 joint:0.393604 scale:1.609256 scale_local:1.087892 scale_global:0.521364 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 63] timing train=31.233s distribution=2.473s agg=0.065s eval=142.316s total=176.138s
+dataset: HARround:64 server aggregation  testACC:0.9412962334577536 trainACC:1.0 avg_loss:2.395769095593962 total:2.395769 base:0.390235 structure:0.000000 joint:0.396281 scale:1.609253 scale_local:1.087891 scale_global:0.521362 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 64] timing train=36.875s distribution=4.146s agg=0.202s eval=126.105s total=167.417s
+dataset: HARround:65 server aggregation  testACC:0.9436715303698676 trainACC:0.9991498044550247 avg_loss:2.3724543168479992 total:2.372454 base:0.373782 structure:0.000000 joint:0.389430 scale:1.609243 scale_local:1.087884 scale_global:0.521359 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 65] timing train=38.479s distribution=4.867s agg=0.381s eval=142.019s total=185.753s
+dataset: HARround:66 server aggregation  testACC:0.9406175771971497 trainACC:1.0 avg_loss:2.3943095019035203 total:2.394310 base:0.388635 structure:0.000000 joint:0.396430 scale:1.609245 scale_local:1.087886 scale_global:0.521359 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 66] timing train=36.041s distribution=4.889s agg=0.372s eval=134.706s total=176.055s
+dataset: HARround:67 server aggregation  testACC:0.9402782490668476 trainACC:1.0 avg_loss:2.4004637601706116 total:2.400464 base:0.392738 structure:0.000000 joint:0.398482 scale:1.609244 scale_local:1.087885 scale_global:0.521359 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 67] timing train=38.053s distribution=4.261s agg=0.157s eval=139.331s total=181.865s
+dataset: HARround:68 server aggregation  testACC:0.9419748897183576 trainACC:1.0 avg_loss:2.380355744383691 total:2.380356 base:0.382242 structure:0.000000 joint:0.388882 scale:1.609231 scale_local:1.087877 scale_global:0.521354 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 68] timing train=37.907s distribution=3.726s agg=0.346s eval=131.537s total=173.525s
+dataset: HARround:69 server aggregation  testACC:0.9419748897183576 trainACC:1.0 avg_loss:2.3929914923892124 total:2.392991 base:0.390660 structure:0.000000 joint:0.393099 scale:1.609232 scale_local:1.087877 scale_global:0.521355 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 69] timing train=31.333s distribution=2.083s agg=0.017s eval=136.865s total=170.314s
+dataset: HARround:70 server aggregation  testACC:0.9416355615880556 trainACC:1.0 avg_loss:2.3741209328606683 total:2.374121 base:0.376174 structure:0.000000 joint:0.388724 scale:1.609222 scale_local:1.087871 scale_global:0.521351 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 70] timing train=34.469s distribution=4.079s agg=0.343s eval=130.233s total=169.152s
+dataset: HARround:71 server aggregation  testACC:0.9423142178486597 trainACC:1.0 avg_loss:2.380164741176464 total:2.380165 base:0.381872 structure:0.000000 joint:0.389064 scale:1.609228 scale_local:1.087874 scale_global:0.521354 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 71] timing train=29.893s distribution=3.518s agg=0.244s eval=133.670s total=167.384s
+dataset: HARround:72 server aggregation  testACC:0.9416355615880556 trainACC:1.0 avg_loss:2.3728169669310004 total:2.372817 base:0.375310 structure:0.000000 joint:0.388285 scale:1.609221 scale_local:1.087870 scale_global:0.521351 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 72] timing train=34.818s distribution=3.392s agg=0.086s eval=130.441s total=168.756s
+dataset: HARround:73 server aggregation  testACC:0.9416355615880556 trainACC:1.0 avg_loss:2.368869429534734 total:2.368869 base:0.373512 structure:0.000000 joint:0.386136 scale:1.609221 scale_local:1.087870 scale_global:0.521351 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 73] timing train=32.051s distribution=3.101s agg=0.132s eval=126.976s total=162.280s
+dataset: HARround:74 server aggregation  testACC:0.9419748897183576 trainACC:1.0 avg_loss:2.3741868460319644 total:2.374187 base:0.375749 structure:0.000000 joint:0.389222 scale:1.609216 scale_local:1.087868 scale_global:0.521348 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 74] timing train=31.285s distribution=3.103s agg=0.060s eval=135.629s total=170.085s
+dataset: HARround:75 server aggregation  testACC:0.9416355615880556 trainACC:1.0 avg_loss:2.4284456253261277 total:2.428446 base:0.412876 structure:0.000000 joint:0.406352 scale:1.609217 scale_local:1.087869 scale_global:0.521348 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 75] timing train=34.690s distribution=2.829s agg=0.128s eval=127.489s total=165.144s
+dataset: HARround:76 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.3815922135303826 total:2.381592 base:0.382404 structure:0.000000 joint:0.389979 scale:1.609209 scale_local:1.087863 scale_global:0.521346 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 76] timing train=33.015s distribution=2.962s agg=0.127s eval=133.100s total=169.237s
+dataset: HARround:77 server aggregation  testACC:0.9423142178486597 trainACC:1.0 avg_loss:2.378578896614466 total:2.378579 base:0.379419 structure:0.000000 joint:0.389958 scale:1.609202 scale_local:1.087858 scale_global:0.521344 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 77] timing train=33.775s distribution=2.821s agg=0.145s eval=131.865s total=168.732s
+dataset: HARround:78 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.3913543454334727 total:2.391354 base:0.389854 structure:0.000000 joint:0.392304 scale:1.609196 scale_local:1.087855 scale_global:0.521341 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 78] timing train=31.380s distribution=2.571s agg=0.014s eval=134.576s total=168.590s
+dataset: HARround:79 server aggregation  testACC:0.9429928741092637 trainACC:1.0 avg_loss:2.3889318865905076 total:2.388932 base:0.391722 structure:0.000000 joint:0.388017 scale:1.609193 scale_local:1.087853 scale_global:0.521340 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 79] timing train=31.452s distribution=1.666s agg=0.058s eval=137.080s total=170.285s
+dataset: HARround:80 server aggregation  testACC:0.9419748897183576 trainACC:1.0 avg_loss:2.3799347967728344 total:2.379935 base:0.381748 structure:0.000000 joint:0.388995 scale:1.609192 scale_local:1.087854 scale_global:0.521339 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 80] timing train=31.440s distribution=3.268s agg=0.100s eval=127.530s total=162.368s
+dataset: HARround:81 server aggregation  testACC:0.9450288428910757 trainACC:0.9991498044550247 avg_loss:2.375172845034518 total:2.375173 base:0.382827 structure:0.000000 joint:0.383165 scale:1.609180 scale_local:1.087846 scale_global:0.521335 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 81] timing train=37.012s distribution=5.076s agg=0.325s eval=131.867s total=174.291s
+dataset: HARround:82 server aggregation  testACC:0.9423142178486597 trainACC:1.0 avg_loss:2.3556594008967875 total:2.355659 base:0.365608 structure:0.000000 joint:0.380875 scale:1.609176 scale_local:1.087843 scale_global:0.521333 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 82] timing train=37.666s distribution=4.417s agg=0.435s eval=129.197s total=171.726s
+dataset: HARround:83 server aggregation  testACC:0.9419748897183576 trainACC:1.0 avg_loss:2.376474798587323 total:2.376475 base:0.383863 structure:0.000000 joint:0.383428 scale:1.609183 scale_local:1.087849 scale_global:0.521335 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 83] timing train=35.605s distribution=5.274s agg=0.430s eval=132.238s total=173.573s
+dataset: HARround:84 server aggregation  testACC:0.9416355615880556 trainACC:1.0 avg_loss:2.35276873152536 total:2.352769 base:0.364195 structure:0.000000 joint:0.379402 scale:1.609172 scale_local:1.087841 scale_global:0.521331 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 84] timing train=34.315s distribution=5.031s agg=0.357s eval=123.741s total=163.479s
+dataset: HARround:85 server aggregation  testACC:0.9419748897183576 trainACC:1.0 avg_loss:2.3853371125058285 total:2.385337 base:0.386506 structure:0.000000 joint:0.389657 scale:1.609174 scale_local:1.087843 scale_global:0.521331 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 85] timing train=32.429s distribution=3.646s agg=0.051s eval=142.277s total=178.411s
+dataset: HARround:86 server aggregation  testACC:0.9460468272819816 trainACC:0.9991498044550247 avg_loss:2.375934782609642 total:2.375935 base:0.375502 structure:0.000000 joint:0.391263 scale:1.609170 scale_local:1.087839 scale_global:0.521330 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 86] timing train=30.568s distribution=4.615s agg=0.090s eval=141.956s total=177.237s
+dataset: HARround:87 server aggregation  testACC:0.9453681710213777 trainACC:0.9991498044550247 avg_loss:2.359749906066977 total:2.359750 base:0.369134 structure:0.000000 joint:0.381457 scale:1.609159 scale_local:1.087833 scale_global:0.521326 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 87] timing train=35.877s distribution=3.267s agg=0.277s eval=133.493s total=172.944s
+dataset: HARround:88 server aggregation  testACC:0.9429928741092637 trainACC:1.0 avg_loss:2.3608360858142996 total:2.360836 base:0.369118 structure:0.000000 joint:0.382558 scale:1.609160 scale_local:1.087833 scale_global:0.521327 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 88] timing train=32.126s distribution=3.458s agg=0.258s eval=135.201s total=171.053s
+dataset: HARround:89 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.3624657145451504 total:2.362466 base:0.370127 structure:0.000000 joint:0.383174 scale:1.609164 scale_local:1.087836 scale_global:0.521328 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 89] timing train=33.630s distribution=3.483s agg=0.252s eval=140.443s total=177.830s
+dataset: HARround:90 server aggregation  testACC:0.9446895147607737 trainACC:0.9991498044550247 avg_loss:2.3429151339205694 total:2.342915 base:0.358700 structure:0.000000 joint:0.375073 scale:1.609143 scale_local:1.087822 scale_global:0.521321 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 90] timing train=33.781s distribution=3.237s agg=0.243s eval=131.515s total=168.800s
+dataset: HARround:91 server aggregation  testACC:0.9450288428910757 trainACC:0.9991498044550247 avg_loss:2.356490155298834 total:2.356490 base:0.372015 structure:0.000000 joint:0.375327 scale:1.609148 scale_local:1.087825 scale_global:0.521323 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 91] timing train=33.892s distribution=2.821s agg=0.221s eval=136.354s total=173.320s
+dataset: HARround:92 server aggregation  testACC:0.9463861554122837 trainACC:0.9991498044550247 avg_loss:2.3463990074925403 total:2.346399 base:0.361959 structure:0.000000 joint:0.375299 scale:1.609140 scale_local:1.087820 scale_global:0.521320 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 92] timing train=35.710s distribution=2.958s agg=0.077s eval=141.254s total=180.010s
+dataset: HARround:93 server aggregation  testACC:0.9460468272819816 trainACC:0.9991498044550247 avg_loss:2.360181724902282 total:2.360182 base:0.371881 structure:0.000000 joint:0.379166 scale:1.609135 scale_local:1.087818 scale_global:0.521317 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 93] timing train=35.823s distribution=3.041s agg=0.298s eval=137.757s total=176.924s
+dataset: HARround:94 server aggregation  testACC:0.9457074991516796 trainACC:0.9991498044550247 avg_loss:2.3355396406408624 total:2.335540 base:0.350948 structure:0.000000 joint:0.375467 scale:1.609124 scale_local:1.087811 scale_global:0.521313 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 94] timing train=35.752s distribution=3.511s agg=0.171s eval=133.886s total=173.353s
+dataset: HARround:95 server aggregation  testACC:0.9467254835425857 trainACC:0.9991498044550247 avg_loss:2.349984791104892 total:2.349985 base:0.361152 structure:0.000000 joint:0.379707 scale:1.609125 scale_local:1.087811 scale_global:0.521314 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 95] timing train=36.896s distribution=4.186s agg=0.444s eval=128.190s total=169.787s
+dataset: HARround:96 server aggregation  testACC:0.9467254835425857 trainACC:0.9991498044550247 avg_loss:2.3392926974368087 total:2.339293 base:0.357892 structure:0.000000 joint:0.372275 scale:1.609126 scale_local:1.087811 scale_global:0.521315 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 96] timing train=30.840s distribution=2.999s agg=0.134s eval=135.354s total=169.339s
+dataset: HARround:97 server aggregation  testACC:0.9446895147607737 trainACC:1.0 avg_loss:2.3555387342094787 total:2.355539 base:0.371635 structure:0.000000 joint:0.374776 scale:1.609128 scale_local:1.087813 scale_global:0.521315 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 97] timing train=30.268s distribution=2.526s agg=0.077s eval=128.718s total=161.604s
+dataset: HARround:98 server aggregation  testACC:0.9460468272819816 trainACC:0.9991498044550247 avg_loss:2.347417712097015 total:2.347418 base:0.366047 structure:0.000000 joint:0.372247 scale:1.609125 scale_local:1.087811 scale_global:0.521313 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 98] timing train=29.538s distribution=2.285s agg=0.036s eval=135.306s total=167.212s
+dataset: HARround:99 server aggregation  testACC:0.9423142178486597 trainACC:1.0 avg_loss:2.31894619157341 total:2.318946 base:0.346328 structure:0.000000 joint:0.363511 scale:1.609107 scale_local:1.087800 scale_global:0.521307 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 99] timing train=31.743s distribution=3.037s agg=0.045s eval=131.461s total=166.320s
+dataset: HARround:100 server aggregation  testACC:0.9474041398031897 trainACC:0.9991498044550247 avg_loss:2.316310949802215 total:2.316311 base:0.342187 structure:0.000000 joint:0.365022 scale:1.609102 scale_local:1.087797 scale_global:0.521305 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 100] timing train=31.486s distribution=3.496s agg=0.111s eval=139.364s total=174.473s
+dataset: HARround:101 server aggregation  testACC:0.9463861554122837 trainACC:0.9991498044550247 avg_loss:2.345198961765174 total:2.345199 base:0.361971 structure:0.000000 joint:0.374129 scale:1.609099 scale_local:1.087796 scale_global:0.521304 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 101] timing train=32.254s distribution=3.841s agg=0.119s eval=124.232s total=160.467s
+dataset: HARround:102 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.308130054494548 total:2.308130 base:0.337406 structure:0.000000 joint:0.361636 scale:1.609089 scale_local:1.087788 scale_global:0.521300 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 102] timing train=33.755s distribution=3.446s agg=0.056s eval=130.833s total=168.108s
+dataset: HARround:103 server aggregation  testACC:0.9467254835425857 trainACC:0.9993198435640197 avg_loss:2.3256224762505306 total:2.325622 base:0.351090 structure:0.000000 joint:0.365436 scale:1.609097 scale_local:1.087795 scale_global:0.521302 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 103] timing train=33.102s distribution=3.026s agg=0.202s eval=133.061s total=169.408s
+dataset: HARround:104 server aggregation  testACC:0.9474041398031897 trainACC:0.9993198435640197 avg_loss:2.312269929410959 total:2.312270 base:0.342668 structure:0.000000 joint:0.360518 scale:1.609084 scale_local:1.087785 scale_global:0.521298 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 104] timing train=32.342s distribution=2.688s agg=0.078s eval=139.031s total=174.159s
+dataset: HARround:105 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.31152598196712 total:2.311526 base:0.340988 structure:0.000000 joint:0.361456 scale:1.609082 scale_local:1.087784 scale_global:0.521298 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 105] timing train=31.924s distribution=3.031s agg=0.129s eval=129.342s total=164.433s
+dataset: HARround:106 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.316855548096139 total:2.316856 base:0.345746 structure:0.000000 joint:0.362031 scale:1.609079 scale_local:1.087782 scale_global:0.521297 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 106] timing train=32.440s distribution=2.463s agg=0.026s eval=135.701s total=170.635s
+dataset: HARround:107 server aggregation  testACC:0.9443501866304717 trainACC:1.0 avg_loss:2.330116840423718 total:2.330117 base:0.353191 structure:0.000000 joint:0.367840 scale:1.609086 scale_local:1.087787 scale_global:0.521299 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 107] timing train=29.790s distribution=2.279s agg=0.062s eval=128.075s total=160.215s
+dataset: HARround:108 server aggregation  testACC:0.9443501866304717 trainACC:1.0 avg_loss:2.3102463074035464 total:2.310246 base:0.343789 structure:0.000000 joint:0.357396 scale:1.609062 scale_local:1.087772 scale_global:0.521290 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 108] timing train=31.414s distribution=2.757s agg=0.044s eval=130.212s total=164.437s
+dataset: HARround:109 server aggregation  testACC:0.9467254835425857 trainACC:0.9991498044550247 avg_loss:2.291166140219388 total:2.291166 base:0.325676 structure:0.000000 joint:0.356426 scale:1.609063 scale_local:1.087773 scale_global:0.521291 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 109] timing train=33.544s distribution=2.671s agg=0.062s eval=133.507s total=169.807s
+dataset: HARround:110 server aggregation  testACC:0.9429928741092637 trainACC:1.0 avg_loss:2.3306657125052386 total:2.330666 base:0.353615 structure:0.000000 joint:0.367978 scale:1.609072 scale_local:1.087779 scale_global:0.521293 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 110] timing train=33.252s distribution=2.401s agg=0.024s eval=130.300s total=166.002s
+dataset: HARround:111 server aggregation  testACC:0.9474041398031897 trainACC:0.9989797653460296 avg_loss:2.309177407355465 total:2.309177 base:0.341406 structure:0.000000 joint:0.358707 scale:1.609065 scale_local:1.087774 scale_global:0.521290 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 111] timing train=31.897s distribution=2.348s agg=0.103s eval=128.905s total=163.266s
+dataset: HARround:112 server aggregation  testACC:0.9446895147607737 trainACC:1.0 avg_loss:2.303084782927378 total:2.303085 base:0.334834 structure:0.000000 joint:0.359193 scale:1.609057 scale_local:1.087770 scale_global:0.521287 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 112] timing train=30.803s distribution=2.145s agg=0.073s eval=135.140s total=168.184s
+dataset: HARround:113 server aggregation  testACC:0.9443501866304717 trainACC:1.0 avg_loss:2.300929885058754 total:2.300930 base:0.333844 structure:0.000000 joint:0.358033 scale:1.609053 scale_local:1.087767 scale_global:0.521286 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 113] timing train=31.928s distribution=2.204s agg=0.022s eval=128.250s total=162.426s
+dataset: HARround:114 server aggregation  testACC:0.9460468272819816 trainACC:0.9991498044550247 avg_loss:2.300374359611604 total:2.300374 base:0.335651 structure:0.000000 joint:0.355678 scale:1.609046 scale_local:1.087762 scale_global:0.521284 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 114] timing train=28.413s distribution=2.150s agg=0.074s eval=136.142s total=166.844s
+dataset: HARround:115 server aggregation  testACC:0.9450288428910757 trainACC:1.0 avg_loss:2.283584526388085 total:2.283585 base:0.320545 structure:0.000000 joint:0.353995 scale:1.609044 scale_local:1.087761 scale_global:0.521283 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 115] timing train=30.091s distribution=2.140s agg=0.019s eval=131.230s total=163.527s
+dataset: HARround:116 server aggregation  testACC:0.9460468272819816 trainACC:0.9991498044550247 avg_loss:2.255875751195994 total:2.255876 base:0.303225 structure:0.000000 joint:0.343618 scale:1.609032 scale_local:1.087754 scale_global:0.521279 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 116] timing train=30.315s distribution=2.902s agg=0.077s eval=129.426s total=162.738s
+dataset: HARround:117 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.280246927516855 total:2.280247 base:0.317494 structure:0.000000 joint:0.353720 scale:1.609032 scale_local:1.087754 scale_global:0.521278 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 117] timing train=28.235s distribution=2.177s agg=0.027s eval=136.595s total=167.051s
+dataset: HARround:118 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.28424143099031 total:2.284241 base:0.317443 structure:0.000000 joint:0.357764 scale:1.609034 scale_local:1.087756 scale_global:0.521279 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 118] timing train=33.031s distribution=2.934s agg=0.048s eval=127.452s total=163.472s
+dataset: HARround:119 server aggregation  testACC:0.9450288428910757 trainACC:1.0 avg_loss:2.292937038424511 total:2.292937 base:0.325227 structure:0.000000 joint:0.358683 scale:1.609028 scale_local:1.087752 scale_global:0.521276 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 119] timing train=30.791s distribution=2.542s agg=0.038s eval=137.001s total=170.386s
+dataset: HARround:120 server aggregation  testACC:0.9443501866304717 trainACC:1.0 avg_loss:2.262389555090376 total:2.262390 base:0.302919 structure:0.000000 joint:0.350455 scale:1.609015 scale_local:1.087743 scale_global:0.521272 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 120] timing train=31.584s distribution=2.469s agg=0.056s eval=134.847s total=168.962s
+dataset: HARround:121 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.277594565341802 total:2.277595 base:0.311589 structure:0.000000 joint:0.356989 scale:1.609017 scale_local:1.087746 scale_global:0.521272 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 121] timing train=30.373s distribution=2.598s agg=0.098s eval=137.801s total=170.877s
+dataset: HARround:122 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.280952064924029 total:2.280952 base:0.317362 structure:0.000000 joint:0.354578 scale:1.609012 scale_local:1.087743 scale_global:0.521269 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 122] timing train=30.086s distribution=2.348s agg=0.027s eval=132.077s total=164.595s
+dataset: HARround:123 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.2690615641965395 total:2.269062 base:0.300083 structure:0.000000 joint:0.359970 scale:1.609008 scale_local:1.087739 scale_global:0.521268 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 123] timing train=31.690s distribution=2.647s agg=0.123s eval=133.337s total=167.811s
+dataset: HARround:124 server aggregation  testACC:0.9436715303698676 trainACC:1.0 avg_loss:2.291490002287304 total:2.291490 base:0.322014 structure:0.000000 joint:0.360464 scale:1.609011 scale_local:1.087742 scale_global:0.521269 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 124] timing train=31.046s distribution=2.598s agg=0.071s eval=131.838s total=165.593s
+dataset: HARround:125 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.2588147781333117 total:2.258815 base:0.295894 structure:0.000000 joint:0.353928 scale:1.608993 scale_local:1.087730 scale_global:0.521263 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 125] timing train=31.690s distribution=3.414s agg=0.134s eval=129.830s total=165.076s
+dataset: HARround:126 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.279789360661063 total:2.279789 base:0.311414 structure:0.000000 joint:0.359383 scale:1.608993 scale_local:1.087731 scale_global:0.521261 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 126] timing train=28.382s distribution=3.277s agg=0.140s eval=139.165s total=170.980s
+dataset: HARround:127 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.2894718135816094 total:2.289472 base:0.317226 structure:0.000000 joint:0.363257 scale:1.608989 scale_local:1.087730 scale_global:0.521260 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 127] timing train=29.577s distribution=2.343s agg=0.030s eval=134.795s total=166.773s
+dataset: HARround:128 server aggregation  testACC:0.9436715303698676 trainACC:1.0 avg_loss:2.283265196092215 total:2.283265 base:0.314293 structure:0.000000 joint:0.359994 scale:1.608979 scale_local:1.087723 scale_global:0.521256 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 128] timing train=30.204s distribution=2.296s agg=0.030s eval=136.889s total=169.503s
+dataset: HARround:129 server aggregation  testACC:0.9436715303698676 trainACC:0.9991498044550247 avg_loss:2.264181014465641 total:2.264181 base:0.303633 structure:0.000000 joint:0.351571 scale:1.608977 scale_local:1.087721 scale_global:0.521256 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 129] timing train=29.892s distribution=2.434s agg=0.057s eval=133.520s total=165.908s
+dataset: HARround:130 server aggregation  testACC:0.9429928741092637 trainACC:1.0 avg_loss:2.2458229435508135 total:2.245823 base:0.293940 structure:0.000000 joint:0.342924 scale:1.608959 scale_local:1.087710 scale_global:0.521249 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 130] timing train=32.879s distribution=2.933s agg=0.095s eval=127.831s total=163.753s
+dataset: HARround:131 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.2735056808778014 total:2.273506 base:0.310859 structure:0.000000 joint:0.353677 scale:1.608969 scale_local:1.087718 scale_global:0.521252 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 131] timing train=30.871s distribution=2.684s agg=0.136s eval=129.753s total=163.474s
+dataset: HARround:132 server aggregation  testACC:0.9429928741092637 trainACC:1.0 avg_loss:2.258225577408785 total:2.258226 base:0.299080 structure:0.000000 joint:0.350185 scale:1.608960 scale_local:1.087711 scale_global:0.521249 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 132] timing train=31.992s distribution=2.484s agg=0.066s eval=134.394s total=168.959s
+dataset: HARround:133 server aggregation  testACC:0.9436715303698676 trainACC:0.9993198435640197 avg_loss:2.27971807660327 total:2.279718 base:0.314038 structure:0.000000 joint:0.356710 scale:1.608970 scale_local:1.087717 scale_global:0.521252 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 133] timing train=31.967s distribution=2.784s agg=0.036s eval=130.344s total=165.145s
+dataset: HARround:134 server aggregation  testACC:0.9423142178486597 trainACC:1.0 avg_loss:2.2340134520454584 total:2.234013 base:0.284243 structure:0.000000 joint:0.340828 scale:1.608943 scale_local:1.087699 scale_global:0.521244 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 134] timing train=30.306s distribution=2.622s agg=0.047s eval=132.691s total=165.691s
+dataset: HARround:135 server aggregation  testACC:0.9429928741092637 trainACC:1.0 avg_loss:2.2642257014390585 total:2.264226 base:0.307324 structure:0.000000 joint:0.347948 scale:1.608953 scale_local:1.087707 scale_global:0.521246 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 135] timing train=33.430s distribution=2.393s agg=0.045s eval=119.433s total=155.348s
+dataset: HARround:136 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.2724313263272284 total:2.272431 base:0.312852 structure:0.000000 joint:0.350623 scale:1.608956 scale_local:1.087709 scale_global:0.521247 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 136] timing train=29.975s distribution=2.615s agg=0.073s eval=131.629s total=164.338s
+dataset: HARround:137 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.24781444864927 total:2.247814 base:0.295505 structure:0.000000 joint:0.343368 scale:1.608941 scale_local:1.087699 scale_global:0.521242 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 137] timing train=31.989s distribution=2.934s agg=0.027s eval=118.832s total=153.816s
+dataset: HARround:138 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.2747659240215716 total:2.274766 base:0.313537 structure:0.000000 joint:0.352291 scale:1.608938 scale_local:1.087698 scale_global:0.521240 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 138] timing train=30.185s distribution=2.499s agg=0.046s eval=132.199s total=164.940s
+dataset: HARround:139 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.253638912084569 total:2.253639 base:0.298764 structure:0.000000 joint:0.345937 scale:1.608938 scale_local:1.087697 scale_global:0.521241 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 139] timing train=31.348s distribution=3.098s agg=0.080s eval=129.471s total=164.012s
+dataset: HARround:140 server aggregation  testACC:0.9450288428910757 trainACC:0.9991498044550247 avg_loss:2.256666226164186 total:2.256666 base:0.300110 structure:0.000000 joint:0.347615 scale:1.608941 scale_local:1.087700 scale_global:0.521242 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 140] timing train=32.593s distribution=3.300s agg=0.038s eval=137.302s total=173.248s
+dataset: HARround:141 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.240618979640589 total:2.240619 base:0.289523 structure:0.000000 joint:0.342172 scale:1.608924 scale_local:1.087688 scale_global:0.521235 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 141] timing train=33.406s distribution=3.468s agg=0.073s eval=132.621s total=169.590s
+dataset: HARround:142 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.2364893641838184 total:2.236489 base:0.286277 structure:0.000000 joint:0.341294 scale:1.608918 scale_local:1.087685 scale_global:0.521234 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 142] timing train=32.552s distribution=3.360s agg=0.015s eval=135.616s total=171.567s
+dataset: HARround:143 server aggregation  testACC:0.9423142178486597 trainACC:1.0 avg_loss:2.254869387379202 total:2.254869 base:0.297682 structure:0.000000 joint:0.348262 scale:1.608925 scale_local:1.087690 scale_global:0.521236 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 143] timing train=30.839s distribution=2.556s agg=0.040s eval=137.161s total=170.606s
+dataset: HARround:144 server aggregation  testACC:0.9423142178486597 trainACC:1.0 avg_loss:2.2613305342426173 total:2.261331 base:0.302307 structure:0.000000 joint:0.350098 scale:1.608925 scale_local:1.087689 scale_global:0.521236 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 144] timing train=29.939s distribution=2.097s agg=0.018s eval=122.583s total=154.655s
+dataset: HARround:145 server aggregation  testACC:0.9440108585001696 trainACC:0.9993198435640197 avg_loss:2.2685182627521416 total:2.268518 base:0.307349 structure:0.000000 joint:0.352242 scale:1.608927 scale_local:1.087692 scale_global:0.521235 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 145] timing train=33.061s distribution=2.081s agg=0.013s eval=134.603s total=169.807s
+dataset: HARround:146 server aggregation  testACC:0.9436715303698676 trainACC:0.9991498044550247 avg_loss:2.270478333068169 total:2.270478 base:0.311858 structure:0.000000 joint:0.349697 scale:1.608923 scale_local:1.087689 scale_global:0.521235 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 146] timing train=31.075s distribution=2.122s agg=0.018s eval=122.019s total=155.289s
+dataset: HARround:147 server aggregation  testACC:0.9436715303698676 trainACC:0.9993198435640197 avg_loss:2.2430639420708225 total:2.243064 base:0.293897 structure:0.000000 joint:0.340257 scale:1.608910 scale_local:1.087679 scale_global:0.521230 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 147] timing train=31.997s distribution=2.348s agg=0.052s eval=133.033s total=167.449s
+dataset: HARround:148 server aggregation  testACC:0.9446895147607737 trainACC:0.9994898826730148 avg_loss:2.260955727162199 total:2.260956 base:0.303665 structure:0.000000 joint:0.348392 scale:1.608900 scale_local:1.087673 scale_global:0.521226 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 148] timing train=30.878s distribution=2.490s agg=0.059s eval=118.488s total=151.933s
+dataset: HARround:149 server aggregation  testACC:0.9433322022395657 trainACC:0.9991498044550247 avg_loss:2.2813200663756112 total:2.281320 base:0.317149 structure:0.000000 joint:0.355261 scale:1.608910 scale_local:1.087681 scale_global:0.521229 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 149] timing train=32.129s distribution=2.513s agg=0.039s eval=118.896s total=153.620s
+dataset: HARround:150 server aggregation  testACC:0.9429928741092637 trainACC:0.9991498044550247 avg_loss:2.2319073726337235 total:2.231907 base:0.283998 structure:0.000000 joint:0.339018 scale:1.608891 scale_local:1.087667 scale_global:0.521224 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 150] timing train=33.002s distribution=2.826s agg=0.078s eval=118.872s total=154.786s
+dataset: HARround:151 server aggregation  testACC:0.9423142178486597 trainACC:0.9991498044550247 avg_loss:2.269567840730552 total:2.269568 base:0.309362 structure:0.000000 joint:0.351299 scale:1.608907 scale_local:1.087679 scale_global:0.521228 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 151] timing train=32.313s distribution=2.789s agg=0.024s eval=118.540s total=153.681s
+dataset: HARround:152 server aggregation  testACC:0.9433322022395657 trainACC:0.9991498044550247 avg_loss:2.2310515769169763 total:2.231052 base:0.285331 structure:0.000000 joint:0.336835 scale:1.608885 scale_local:1.087665 scale_global:0.521220 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 152] timing train=29.723s distribution=2.875s agg=0.141s eval=129.172s total=161.922s
+dataset: HARround:153 server aggregation  testACC:0.9429928741092637 trainACC:0.9991498044550247 avg_loss:2.236716279306535 total:2.236716 base:0.289892 structure:0.000000 joint:0.337943 scale:1.608882 scale_local:1.087662 scale_global:0.521220 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 153] timing train=32.104s distribution=2.631s agg=0.033s eval=124.021s total=158.799s
+dataset: HARround:154 server aggregation  testACC:0.9436715303698676 trainACC:0.9991498044550247 avg_loss:2.250700516649231 total:2.250701 base:0.298779 structure:0.000000 joint:0.343042 scale:1.608879 scale_local:1.087662 scale_global:0.521218 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 154] timing train=31.151s distribution=3.381s agg=0.057s eval=124.753s total=159.354s
+dataset: HARround:155 server aggregation  testACC:0.9423142178486597 trainACC:1.0 avg_loss:2.2388502332736593 total:2.238850 base:0.286859 structure:0.000000 joint:0.343114 scale:1.608877 scale_local:1.087659 scale_global:0.521217 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 155] timing train=31.772s distribution=3.432s agg=0.053s eval=117.711s total=152.999s
+dataset: HARround:156 server aggregation  testACC:0.9436715303698676 trainACC:0.9991498044550247 avg_loss:2.241221866410957 total:2.241222 base:0.290395 structure:0.000000 joint:0.341950 scale:1.608877 scale_local:1.087660 scale_global:0.521217 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 156] timing train=30.868s distribution=2.944s agg=0.077s eval=126.442s total=160.377s
+dataset: HARround:157 server aggregation  testACC:0.9429928741092637 trainACC:0.9991498044550247 avg_loss:2.25042120571554 total:2.250421 base:0.296452 structure:0.000000 joint:0.345089 scale:1.608881 scale_local:1.087662 scale_global:0.521218 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 157] timing train=32.541s distribution=3.424s agg=0.033s eval=134.117s total=170.136s
+dataset: HARround:158 server aggregation  testACC:0.9446895147607737 trainACC:0.9991498044550247 avg_loss:2.2280510266884646 total:2.228051 base:0.283674 structure:0.000000 joint:0.335515 scale:1.608862 scale_local:1.087650 scale_global:0.521212 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 158] timing train=32.889s distribution=3.919s agg=0.170s eval=125.929s total=162.969s
+dataset: HARround:159 server aggregation  testACC:0.9433322022395657 trainACC:0.9991498044550247 avg_loss:2.238897795153663 total:2.238898 base:0.287175 structure:0.000000 joint:0.342858 scale:1.608865 scale_local:1.087653 scale_global:0.521212 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 159] timing train=33.956s distribution=4.259s agg=0.210s eval=120.443s total=158.928s
+dataset: HARround:160 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.233606157138555 total:2.233606 base:0.286579 structure:0.000000 joint:0.338161 scale:1.608866 scale_local:1.087653 scale_global:0.521213 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 160] timing train=37.172s distribution=4.348s agg=0.093s eval=133.688s total=175.316s
+dataset: HARround:161 server aggregation  testACC:0.9419748897183576 trainACC:1.0 avg_loss:2.230264939949381 total:2.230265 base:0.285193 structure:0.000000 joint:0.336224 scale:1.608847 scale_local:1.087642 scale_global:0.521205 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 161] timing train=33.610s distribution=3.831s agg=0.098s eval=131.631s total=169.244s
+dataset: HARround:162 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.27457117848578 total:2.274571 base:0.314674 structure:0.000000 joint:0.351026 scale:1.608871 scale_local:1.087657 scale_global:0.521214 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 162] timing train=30.977s distribution=2.859s agg=0.027s eval=120.148s total=154.020s
+dataset: HARround:163 server aggregation  testACC:0.9433322022395657 trainACC:0.9991498044550247 avg_loss:2.257290013360508 total:2.257290 base:0.302729 structure:0.000000 joint:0.345698 scale:1.608863 scale_local:1.087651 scale_global:0.521211 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 163] timing train=31.704s distribution=2.626s agg=0.094s eval=137.679s total=172.111s
+dataset: HARround:164 server aggregation  testACC:0.9436715303698676 trainACC:1.0 avg_loss:2.247908934262849 total:2.247909 base:0.297980 structure:0.000000 joint:0.341075 scale:1.608854 scale_local:1.087645 scale_global:0.521210 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 164] timing train=32.754s distribution=3.454s agg=0.154s eval=138.922s total=175.366s
+dataset: HARround:165 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.2254299239498043 total:2.225430 base:0.280486 structure:0.000000 joint:0.336099 scale:1.608845 scale_local:1.087641 scale_global:0.521205 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 165] timing train=30.905s distribution=3.245s agg=0.079s eval=135.605s total=169.901s
+dataset: HARround:166 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.2403245844637216 total:2.240325 base:0.290594 structure:0.000000 joint:0.340893 scale:1.608838 scale_local:1.087635 scale_global:0.521203 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 166] timing train=34.499s distribution=3.702s agg=0.113s eval=136.115s total=174.473s
+dataset: HARround:167 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.2345579162193654 total:2.234558 base:0.288284 structure:0.000000 joint:0.337442 scale:1.608832 scale_local:1.087632 scale_global:0.521200 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 167] timing train=33.353s distribution=3.183s agg=0.078s eval=124.016s total=160.667s
+dataset: HARround:168 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.2600638580188677 total:2.260064 base:0.304781 structure:0.000000 joint:0.346435 scale:1.608847 scale_local:1.087642 scale_global:0.521206 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 168] timing train=33.785s distribution=3.510s agg=0.067s eval=129.249s total=166.623s
+dataset: HARround:169 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.23503242460722 total:2.235032 base:0.289205 structure:0.000000 joint:0.336999 scale:1.608828 scale_local:1.087629 scale_global:0.521199 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 169] timing train=32.441s distribution=3.169s agg=0.094s eval=129.835s total=165.554s
+dataset: HARround:170 server aggregation  testACC:0.9436715303698676 trainACC:1.0 avg_loss:2.219892590927298 total:2.219893 base:0.278768 structure:0.000000 joint:0.332308 scale:1.608816 scale_local:1.087621 scale_global:0.521195 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 170] timing train=35.709s distribution=2.811s agg=0.013s eval=132.711s total=171.272s
+dataset: HARround:171 server aggregation  testACC:0.9436715303698676 trainACC:1.0 avg_loss:2.2294452791141026 total:2.229445 base:0.283654 structure:0.000000 joint:0.336965 scale:1.608827 scale_local:1.087628 scale_global:0.521199 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 171] timing train=32.918s distribution=2.294s agg=0.017s eval=132.747s total=167.983s
+dataset: HARround:172 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.2616227143628347 total:2.261623 base:0.308919 structure:0.000000 joint:0.343889 scale:1.608814 scale_local:1.087621 scale_global:0.521194 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 172] timing train=32.444s distribution=2.557s agg=0.036s eval=134.893s total=169.976s
+dataset: HARround:173 server aggregation  testACC:0.9426535459789617 trainACC:1.0 avg_loss:2.2207369716513083 total:2.220737 base:0.278942 structure:0.000000 joint:0.332991 scale:1.608804 scale_local:1.087614 scale_global:0.521190 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 173] timing train=32.526s distribution=2.870s agg=0.045s eval=126.059s total=161.507s
+dataset: HARround:174 server aggregation  testACC:0.9429928741092637 trainACC:1.0 avg_loss:2.257655027935732 total:2.257655 base:0.306381 structure:0.000000 joint:0.342451 scale:1.608823 scale_local:1.087626 scale_global:0.521197 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 174] timing train=35.468s distribution=2.647s agg=0.031s eval=129.301s total=167.455s
+dataset: HARround:175 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.22910339861206 total:2.229103 base:0.284729 structure:0.000000 joint:0.335575 scale:1.608800 scale_local:1.087612 scale_global:0.521188 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 175] timing train=29.231s distribution=2.681s agg=0.073s eval=133.555s total=165.572s
+dataset: HARround:176 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.2326751824834967 total:2.232675 base:0.288584 structure:0.000000 joint:0.335297 scale:1.608795 scale_local:1.087609 scale_global:0.521186 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 176] timing train=30.324s distribution=2.147s agg=0.016s eval=133.333s total=165.832s
+dataset: HARround:177 server aggregation  testACC:0.9433322022395657 trainACC:1.0 avg_loss:2.2312410430892378 total:2.231241 base:0.285807 structure:0.000000 joint:0.336641 scale:1.608793 scale_local:1.087607 scale_global:0.521186 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 177] timing train=32.385s distribution=2.770s agg=0.098s eval=142.884s total=178.237s
+dataset: HARround:178 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.2339511923293376 total:2.233951 base:0.288615 structure:0.000000 joint:0.336544 scale:1.608792 scale_local:1.087606 scale_global:0.521186 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 178] timing train=30.002s distribution=2.527s agg=0.060s eval=129.470s total=162.067s
+dataset: HARround:179 server aggregation  testACC:0.9436715303698676 trainACC:1.0 avg_loss:2.2192970874259057 total:2.219297 base:0.279045 structure:0.000000 joint:0.331467 scale:1.608785 scale_local:1.087602 scale_global:0.521183 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 179] timing train=31.636s distribution=2.189s agg=0.024s eval=136.685s total=170.574s
+dataset: HARround:180 server aggregation  testACC:0.9443501866304717 trainACC:1.0 avg_loss:2.225935738588532 total:2.225936 base:0.285660 structure:0.000000 joint:0.331499 scale:1.608777 scale_local:1.087597 scale_global:0.521179 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 180] timing train=27.370s distribution=2.297s agg=0.090s eval=125.800s total=155.566s
+dataset: HARround:181 server aggregation  testACC:0.9446895147607737 trainACC:0.9991498044550247 avg_loss:2.226314258985075 total:2.226314 base:0.283515 structure:0.000000 joint:0.334012 scale:1.608787 scale_local:1.087604 scale_global:0.521183 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 181] timing train=30.250s distribution=2.527s agg=0.038s eval=135.225s total=168.046s
+dataset: HARround:182 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.221604846081139 total:2.221605 base:0.280484 structure:0.000000 joint:0.332338 scale:1.608783 scale_local:1.087601 scale_global:0.521182 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 182] timing train=29.623s distribution=2.628s agg=0.050s eval=126.046s total=158.386s
+dataset: HARround:183 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.2315032088557882 total:2.231503 base:0.285699 structure:0.000000 joint:0.337026 scale:1.608779 scale_local:1.087598 scale_global:0.521180 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 183] timing train=30.309s distribution=1.906s agg=0.029s eval=138.618s total=170.878s
+dataset: HARround:184 server aggregation  testACC:0.9446895147607737 trainACC:0.9991498044550247 avg_loss:2.212814334614724 total:2.212814 base:0.275195 structure:0.000000 joint:0.328857 scale:1.608763 scale_local:1.087588 scale_global:0.521175 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 184] timing train=31.111s distribution=3.224s agg=0.068s eval=129.126s total=163.540s
+dataset: HARround:185 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.206608509809179 total:2.206609 base:0.271525 structure:0.000000 joint:0.326329 scale:1.608754 scale_local:1.087583 scale_global:0.521171 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 185] timing train=31.707s distribution=2.743s agg=0.029s eval=130.063s total=164.548s
+dataset: HARround:186 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.224366459007634 total:2.224366 base:0.280689 structure:0.000000 joint:0.334916 scale:1.608761 scale_local:1.087587 scale_global:0.521174 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 186] timing train=30.569s distribution=2.443s agg=0.030s eval=124.851s total=157.909s
+dataset: HARround:187 server aggregation  testACC:0.9440108585001696 trainACC:0.9991498044550247 avg_loss:2.2135491411059767 total:2.213549 base:0.273006 structure:0.000000 joint:0.331786 scale:1.608757 scale_local:1.087583 scale_global:0.521174 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 187] timing train=32.706s distribution=2.764s agg=0.020s eval=137.476s total=172.976s
+dataset: HARround:188 server aggregation  testACC:0.9443501866304717 trainACC:0.9991498044550247 avg_loss:2.23510024292934 total:2.235100 base:0.292593 structure:0.000000 joint:0.333739 scale:1.608768 scale_local:1.087592 scale_global:0.521176 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 188] timing train=30.570s distribution=1.992s agg=0.046s eval=131.891s total=164.519s
+dataset: HARround:189 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.2417378223228646 total:2.241738 base:0.299519 structure:0.000000 joint:0.333463 scale:1.608756 scale_local:1.087584 scale_global:0.521172 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 189] timing train=32.437s distribution=2.453s agg=0.019s eval=131.259s total=166.182s
+dataset: HARround:190 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.2341256129128526 total:2.234126 base:0.291283 structure:0.000000 joint:0.334085 scale:1.608758 scale_local:1.087586 scale_global:0.521173 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 190] timing train=31.687s distribution=2.357s agg=0.035s eval=135.773s total=169.874s
+dataset: HARround:191 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.2070001393681573 total:2.207000 base:0.274308 structure:0.000000 joint:0.323948 scale:1.608744 scale_local:1.087577 scale_global:0.521167 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 191] timing train=30.247s distribution=2.686s agg=0.051s eval=126.149s total=159.167s
+dataset: HARround:192 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.2131023045201363 total:2.213102 base:0.279397 structure:0.000000 joint:0.324962 scale:1.608743 scale_local:1.087576 scale_global:0.521167 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 192] timing train=32.776s distribution=2.541s agg=0.108s eval=139.620s total=175.093s
+dataset: HARround:193 server aggregation  testACC:0.9450288428910757 trainACC:0.9991498044550247 avg_loss:2.2141418289627475 total:2.214142 base:0.279485 structure:0.000000 joint:0.325927 scale:1.608730 scale_local:1.087567 scale_global:0.521163 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 193] timing train=29.130s distribution=2.092s agg=0.016s eval=112.233s total=143.543s
+dataset: HARround:194 server aggregation  testACC:0.9450288428910757 trainACC:1.0 avg_loss:2.2229168109640796 total:2.222917 base:0.281983 structure:0.000000 joint:0.332194 scale:1.608739 scale_local:1.087574 scale_global:0.521166 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 194] timing train=32.061s distribution=2.448s agg=0.109s eval=133.616s total=168.278s
+dataset: HARround:195 server aggregation  testACC:0.9440108585001696 trainACC:1.0 avg_loss:2.2018718437159137 total:2.201872 base:0.272343 structure:0.000000 joint:0.320809 scale:1.608721 scale_local:1.087562 scale_global:0.521159 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 195] timing train=32.179s distribution=2.674s agg=0.084s eval=126.514s total=161.473s
+dataset: HARround:196 server aggregation  testACC:0.9443501866304717 trainACC:1.0 avg_loss:2.2296128281747642 total:2.229613 base:0.291952 structure:0.000000 joint:0.328936 scale:1.608725 scale_local:1.087565 scale_global:0.521160 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 196] timing train=29.796s distribution=2.510s agg=0.035s eval=119.725s total=152.085s
+dataset: HARround:197 server aggregation  testACC:0.9450288428910757 trainACC:1.0 avg_loss:2.2174051135027883 total:2.217405 base:0.279326 structure:0.000000 joint:0.329367 scale:1.608712 scale_local:1.087557 scale_global:0.521155 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 197] timing train=28.867s distribution=2.414s agg=0.041s eval=115.972s total=147.309s
+dataset: HARround:198 server aggregation  testACC:0.9453681710213777 trainACC:1.0 avg_loss:2.211549112497824 total:2.211549 base:0.275371 structure:0.000000 joint:0.327462 scale:1.608716 scale_local:1.087559 scale_global:0.521157 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 198] timing train=32.716s distribution=2.387s agg=0.018s eval=114.426s total=149.575s
+dataset: HARround:199 server aggregation  testACC:0.9450288428910757 trainACC:1.0 avg_loss:2.203177564393685 total:2.203178 base:0.268876 structure:0.000000 joint:0.325602 scale:1.608700 scale_local:1.087548 scale_global:0.521152 cca:0.000000 sdl:0.000000 proximal:0.000000 moon:0.000000
+[round 199] timing train=31.914s distribution=2.730s agg=0.077s eval=129.352s total=164.080s

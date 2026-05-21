@@ -3,7 +3,7 @@
 ## 实验设置
 
 - **数据集**: HAR (Human Activity Recognition)
-- **联邦客户端数**: K = 50, Dirichlet $\alpha$ = 0.1, batch size = 8
+- **联邦客户端数**: K = 50, Dirichlet $\alpha$ = 0.1, batch size = 32
 - **样本形状**: N=5881, C=9, T=128
 - **GPU**: NVIDIA GeForce RTX 3090
 - **总尺度数**: 8（FedCSL baseline 等价于 $m = 8$；Spilter $m \in \{1,2,4\}$ 拼接子模型）
@@ -19,12 +19,12 @@ $$
 
 | Method | top-m | Mean Peak Mem (MB) | Max Peak Mem (MB) | Saving vs FedCSL | Compression Ratio |
 |--------|:-----:|:------------------:|:-----------------:|:----------------:|:-----------------:|
-| FedCSL (baseline) | 8 | 58.7 | 59.0 | — | 1.00x (ref) |
-| Spilter-m1 | 1 | 29.1 | 29.2 | 50.4% | 2.02x |
-| Spilter-m2 | 2 | 40.1 | 40.1 | 31.7% | 1.46x |
-| Spilter-m4 | 4 | 63.8 | 64.0 | -8.7% | 0.92x |
+| FedCSL (baseline) | 8 | 178.1 | 181.3 | — | 1.00x (ref) |
+| Spilter-m1 | 1 | 51.5 | 51.7 | 71.1% | 3.46x |
+| Spilter-m2 | 2 | 78.7 | 79.1 | 55.8% | 2.26x |
+| Spilter-m4 | 4 | 130.3 | 131.5 | 26.8% | 1.37x |
 
-> **最大节省**: Spilter-m1 把客户端平均峰值显存从 58.7 MB 降到 29.1 MB —— 节省 **50.4%** ($\approx$2.02$\times$ 显存压缩)。
+> **最大节省**: Spilter-m1 把客户端平均峰值显存从 178.1 MB 降到 51.5 MB —— 节省 **71.1%** ($\approx$3.46$\times$ 显存压缩)。
 
 ## 字段说明
 
@@ -39,4 +39,4 @@ $$
 - 在客户端显存受限场景（嵌入式 / 移动 GPU），$m=1$ 的 Spilter 通常能让原本 OOM 的 FedCSL 设备重新可训练，代价是精度（参见 `data/HAR_results.md`）。
 - 论文里建议把本表与 HAR_results 的精度表对照展示：横轴 $m$，双纵轴分别为「精度」和「显存」，能直接画出 Spilter 的 Pareto 前沿。
 
-_最后更新: 2026-05-17 20:59:46_
+_最后更新: 2026-05-17 23:02:38_

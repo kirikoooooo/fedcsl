@@ -1,0 +1,207 @@
+Details of Training:-----------------------
+dataset: HAR
+local train epochs: 1
+round num: 200
+batch size: 32
+lr: 0.01
+use_client_selection: False
+server_device: cuda:0
+client_workers: 3
+client_worker_devices: ['cuda:0', 'cuda:0', 'cuda:0']
+client_groups: [[0, 3, 6, 9], [1, 4, 7], [2, 5, 8]]
+-------------------------------------------
+HAR_orchestra_dir0.05
+PID: 2978262
+PPID: 960452
+argv: FedCSL_All.py -dataset HAR --config config/configOrchestra.yml --dirichlet-alpha 0.05 --seed 42 --description HAR_orchestra_dir0.05 --num-client 10 --server-gpu 0 --client-gpus 0 --eval-protocol svm
+effective_dataset: HAR
+effective_dirichlet_alpha: 0.05
+ablation:  UseACF: false  UseDistribution: false  UseJointCL: false  UseJointKD: false  UseMTLHomo: false  UseProdictor: false  UseScaleCL: false  UseScaleKD: falsealgo: orchestradataset: HARdescription: HAR_orchestra_dir0.05evaluation:  linear_probe:    batch_size: 256    eval_interval: 1    lr: 0.001    max_epoch: 200    seed: 42    wd: 0.0001  protocol: svm  svm_c_grid:  - 0.0001  - 0.001  - 0.01  - 0.1  - 1.0  - 10.0  - 100.0  - 1000.0  - 10000.0federated:  client_gpus:  - 0  client_selection_method: omp  client_selection_ratio: 0.6  client_workers: 3  dirichlet_alpha: 0.05  ema_alpha: 0.3  min_selection_prob: 0.01  numClient: 10  numEpoch: 1  numRound: 200  server_gpu: 0  use_client_selection: falselogPath: ./result/model:  name: ''  params:    batch_size: 32    beta: 0.4    dist_measure: mix    gamma: 0.5    l: 0.01    lr: 0.01    ls: 1    momentum: 0.9    wd: 0.0001ssl:  cluster_m_size: 128  deg_num_classes: 5  ema_tau: 0.99  num_global_clusters: 32  num_local_clusters: 8  predictor_hidden_dim: 256  projector_hidden_dim: 256  projector_out_dim: 128  server_cluster_rounds: 80  temperature: 0.2
+dataset: HARround:0 server aggregation  testACC:0.9273837801153716 trainACC:0.9940486311851726 avg_loss:nan
+dataset: HARround:1 server aggregation  testACC:0.9263657957244655 trainACC:1.0 avg_loss:5.019037508667179
+dataset: HARround:2 server aggregation  testACC:0.9250084832032576 trainACC:1.0 avg_loss:4.9156491502157635
+dataset: HARround:3 server aggregation  testACC:0.9256871394638616 trainACC:0.9947287876211529 avg_loss:4.822430330542909
+dataset: HARround:4 server aggregation  testACC:0.9243298269426535 trainACC:0.994898826730148 avg_loss:4.7300216877376515
+dataset: HARround:5 server aggregation  testACC:0.9236511706820495 trainACC:0.9947287876211529 avg_loss:4.651071493427604
+dataset: HARround:6 server aggregation  testACC:0.9233118425517476 trainACC:0.995238904948138 avg_loss:4.581151722706303
+dataset: HARround:7 server aggregation  testACC:0.9229725144214456 trainACC:0.994898826730148 avg_loss:4.538558419618352
+dataset: HARround:8 server aggregation  testACC:0.9229725144214456 trainACC:0.9943887094031627 avg_loss:4.493315717242973
+dataset: HARround:21 server aggregation  testACC:0.9222938581608415 trainACC:0.9954089440571331 avg_loss:4.096698965121598
+dataset: HARround:22 server aggregation  testACC:0.9168646080760094 trainACC:1.0 avg_loss:4.057878561718741
+dataset: HARround:23 server aggregation  testACC:0.9236511706820495 trainACC:0.9957490222751233 avg_loss:4.070484720190512
+dataset: HARround:24 server aggregation  testACC:0.9195792331184255 trainACC:0.9955789831661283 avg_loss:4.024013106777517
+dataset: HARround:25 server aggregation  testACC:0.9212758737699356 trainACC:1.0 avg_loss:4.006340855386223
+dataset: HARround:26 server aggregation  testACC:0.9216152019002375 trainACC:1.0 avg_loss:3.9777659255782667
+dataset: HARround:27 server aggregation  testACC:0.9209365456396336 trainACC:1.0 avg_loss:3.9628574700118797
+dataset: HARround:28 server aggregation  testACC:0.9222938581608415 trainACC:1.0 avg_loss:3.9433667831254198
+dataset: HARround:29 server aggregation  testACC:0.9267051238547676 trainACC:0.9957490222751233 avg_loss:3.9535838590303585
+dataset: HARround:30 server aggregation  testACC:0.9222938581608415 trainACC:1.0 avg_loss:3.9276156471405157
+dataset: HARround:31 server aggregation  testACC:0.9222938581608415 trainACC:0.9960891004931134 avg_loss:3.9275673632198242
+dataset: HARround:32 server aggregation  testACC:0.9219545300305395 trainACC:0.9960891004931134 avg_loss:3.9043395693911522
+dataset: HARround:33 server aggregation  testACC:0.9243298269426535 trainACC:0.9957490222751233 avg_loss:3.8878509944298956
+dataset: HARround:34 server aggregation  testACC:0.9226331862911435 trainACC:0.9957490222751233 avg_loss:3.860277904815006
+dataset: HARround:35 server aggregation  testACC:0.9253478113335596 trainACC:0.9960891004931134 avg_loss:3.864648347504523
+dataset: HARround:36 server aggregation  testACC:0.9243298269426535 trainACC:0.9960891004931134 avg_loss:3.8533132303770343
+dataset: HARround:37 server aggregation  testACC:0.9256871394638616 trainACC:0.9957490222751233 avg_loss:3.8123965064553387
+dataset: HARround:38 server aggregation  testACC:0.9246691550729556 trainACC:0.9962591396021084 avg_loss:3.8031675671887726
+dataset: HARround:39 server aggregation  testACC:0.9253478113335596 trainACC:0.9960891004931134 avg_loss:3.834468843585113
+dataset: HARround:40 server aggregation  testACC:0.9260264675941635 trainACC:0.9955789831661283 avg_loss:3.845922649703065
+dataset: HARround:41 server aggregation  testACC:0.9243298269426535 trainACC:0.9957490222751233 avg_loss:3.7931719116505738
+dataset: HARround:42 server aggregation  testACC:0.9239904988123515 trainACC:0.9959190613841183 avg_loss:3.793156925191208
+dataset: HARround:43 server aggregation  testACC:0.9239904988123515 trainACC:0.9955789831661283 avg_loss:3.791549666942346
+dataset: HARround:44 server aggregation  testACC:0.9246691550729556 trainACC:0.9960891004931134 avg_loss:3.7852830889726006
+dataset: HARround:45 server aggregation  testACC:0.9256871394638616 trainACC:0.9962591396021084 avg_loss:3.788354772063015
+dataset: HARround:46 server aggregation  testACC:0.9222938581608415 trainACC:0.9960891004931134 avg_loss:3.754275879979871
+dataset: HARround:47 server aggregation  testACC:0.9250084832032576 trainACC:0.9959190613841183 avg_loss:3.719267025431951
+dataset: HARround:48 server aggregation  testACC:0.9236511706820495 trainACC:0.9955789831661283 avg_loss:3.745564816960021
+dataset: HARround:49 server aggregation  testACC:0.9250084832032576 trainACC:0.9955789831661283 avg_loss:3.7660010378815985
+dataset: HARround:50 server aggregation  testACC:0.9229725144214456 trainACC:0.9959190613841183 avg_loss:3.698280460719885
+dataset: HARround:51 server aggregation  testACC:0.9250084832032576 trainACC:0.9960891004931134 avg_loss:3.721910378185945
+dataset: HARround:52 server aggregation  testACC:0.9256871394638616 trainACC:0.9960891004931134 avg_loss:3.707869063569484
+dataset: HARround:53 server aggregation  testACC:0.9280624363759755 trainACC:0.9959190613841183 avg_loss:3.7038580588519197
+dataset: HARround:54 server aggregation  testACC:0.9273837801153716 trainACC:0.9965992178200986 avg_loss:3.697277270355774
+dataset: HARround:55 server aggregation  testACC:0.9277231082456736 trainACC:0.9959190613841183 avg_loss:3.6894846337931333
+dataset: HARround:56 server aggregation  testACC:0.9267051238547676 trainACC:0.9954089440571331 avg_loss:3.6955987589881625
+dataset: HARround:57 server aggregation  testACC:0.9270444519850696 trainACC:0.9959190613841183 avg_loss:3.675755668359879
+dataset: HARround:58 server aggregation  testACC:0.9267051238547676 trainACC:0.9960891004931134 avg_loss:3.6817418915185014
+dataset: HARround:59 server aggregation  testACC:0.9260264675941635 trainACC:0.9960891004931134 avg_loss:3.6321066580728782
+dataset: HARround:60 server aggregation  testACC:0.9253478113335596 trainACC:0.9962591396021084 avg_loss:3.6633193660048278
+dataset: HARround:61 server aggregation  testACC:0.9263657957244655 trainACC:0.9964291787111036 avg_loss:3.6309066920819815
+dataset: HARround:62 server aggregation  testACC:0.9236511706820495 trainACC:0.9962591396021084 avg_loss:3.6721089976440524
+dataset: HARround:63 server aggregation  testACC:0.9263657957244655 trainACC:0.9964291787111036 avg_loss:3.6405886321400764
+dataset: HARround:64 server aggregation  testACC:0.9267051238547676 trainACC:0.9962591396021084 avg_loss:3.628705744062966
+dataset: HARround:65 server aggregation  testACC:0.9250084832032576 trainACC:0.9959190613841183 avg_loss:3.6290864107079424
+dataset: HARround:66 server aggregation  testACC:0.9229725144214456 trainACC:0.9964291787111036 avg_loss:3.6023482105048727
+dataset: HARround:67 server aggregation  testACC:0.9239904988123515 trainACC:0.9960891004931134 avg_loss:3.585227887789734
+dataset: HARround:68 server aggregation  testACC:0.9253478113335596 trainACC:0.9960891004931134 avg_loss:3.6508344746065333
+dataset: HARround:69 server aggregation  testACC:0.9246691550729556 trainACC:0.9964291787111036 avg_loss:3.611938131554223
+dataset: HARround:70 server aggregation  testACC:0.9243298269426535 trainACC:0.9957490222751233 avg_loss:3.5782448915056477
+dataset: HARround:71 server aggregation  testACC:0.9239904988123515 trainACC:0.9957490222751233 avg_loss:3.607016315196307
+dataset: HARround:72 server aggregation  testACC:0.9253478113335596 trainACC:0.9964291787111036 avg_loss:3.6130038575007033
+dataset: HARround:73 server aggregation  testACC:0.9233118425517476 trainACC:0.9964291787111036 avg_loss:3.593995591660755
+dataset: HARround:74 server aggregation  testACC:0.9246691550729556 trainACC:0.9964291787111036 avg_loss:3.583271968770048
+dataset: HARround:75 server aggregation  testACC:0.9253478113335596 trainACC:0.9962591396021084 avg_loss:3.574251673443752
+dataset: HARround:76 server aggregation  testACC:0.9246691550729556 trainACC:0.9965992178200986 avg_loss:3.5927232197129144
+dataset: HARround:77 server aggregation  testACC:0.9233118425517476 trainACC:0.9962591396021084 avg_loss:3.580194049854017
+dataset: HARround:78 server aggregation  testACC:0.9243298269426535 trainACC:0.9964291787111036 avg_loss:3.58340956849104
+dataset: HARround:79 server aggregation  testACC:0.9253478113335596 trainACC:0.9965992178200986 avg_loss:3.5682101769130576
+dataset: HARround:80 server aggregation  testACC:0.9256871394638616 trainACC:0.9967692569290937 avg_loss:3.5626861442239237
+dataset: HARround:81 server aggregation  testACC:0.9273837801153716 trainACC:0.9965992178200986 avg_loss:3.5607628679236534
+dataset: HARround:82 server aggregation  testACC:0.9273837801153716 trainACC:0.9965992178200986 avg_loss:3.55961151371012
+dataset: HARround:83 server aggregation  testACC:0.9267051238547676 trainACC:0.9964291787111036 avg_loss:3.539198945082154
+dataset: HARround:84 server aggregation  testACC:0.9300984051577876 trainACC:0.9965992178200986 avg_loss:3.575273369865563
+dataset: HARround:85 server aggregation  testACC:0.9256871394638616 trainACC:0.9965992178200986 avg_loss:3.5846332188017316
+dataset: HARround:86 server aggregation  testACC:0.9233118425517476 trainACC:0.9962591396021084 avg_loss:3.5224455975925286
+dataset: HARround:87 server aggregation  testACC:0.9267051238547676 trainACC:0.9962591396021084 avg_loss:3.544080407124812
+dataset: HARround:88 server aggregation  testACC:0.9250084832032576 trainACC:0.9962591396021084 avg_loss:3.554557692038931
+dataset: HARround:89 server aggregation  testACC:0.9243298269426535 trainACC:0.9962591396021084 avg_loss:3.5607283192920733
+dataset: HARround:90 server aggregation  testACC:0.9233118425517476 trainACC:0.9962591396021084 avg_loss:3.538100610363805
+dataset: HARround:91 server aggregation  testACC:0.9233118425517476 trainACC:0.9962591396021084 avg_loss:3.5443940183795783
+dataset: HARround:92 server aggregation  testACC:0.9273837801153716 trainACC:0.9962591396021084 avg_loss:3.5149666958609544
+dataset: HARround:93 server aggregation  testACC:0.9294197488971836 trainACC:0.9964291787111036 avg_loss:3.5148457697154543
+dataset: HARround:94 server aggregation  testACC:0.9256871394638616 trainACC:0.9964291787111036 avg_loss:3.505026376123561
+dataset: HARround:95 server aggregation  testACC:0.9273837801153716 trainACC:0.9964291787111036 avg_loss:3.524373900187823
+dataset: HARround:96 server aggregation  testACC:0.9270444519850696 trainACC:0.9964291787111036 avg_loss:3.5408658956812076
+dataset: HARround:97 server aggregation  testACC:0.9270444519850696 trainACC:0.9964291787111036 avg_loss:3.5202146264851635
+dataset: HARround:98 server aggregation  testACC:0.9260264675941635 trainACC:0.9962591396021084 avg_loss:3.5259485195559663
+dataset: HARround:99 server aggregation  testACC:0.9239904988123515 trainACC:0.9964291787111036 avg_loss:3.5179463528193247
+dataset: HARround:100 server aggregation  testACC:0.9246691550729556 trainACC:0.9962591396021084 avg_loss:3.503214525589793
+dataset: HARround:101 server aggregation  testACC:0.9256871394638616 trainACC:0.9964291787111036 avg_loss:3.501489056403585
+dataset: HARround:102 server aggregation  testACC:0.9263657957244655 trainACC:0.9964291787111036 avg_loss:3.5138306520993936
+dataset: HARround:103 server aggregation  testACC:0.9277231082456736 trainACC:0.9964291787111036 avg_loss:3.4984914213767424
+dataset: HARround:104 server aggregation  testACC:0.9267051238547676 trainACC:0.9962591396021084 avg_loss:3.4978643260481284
+dataset: HARround:105 server aggregation  testACC:0.9263657957244655 trainACC:0.9964291787111036 avg_loss:3.4907882128660135
+dataset: HARround:106 server aggregation  testACC:0.9273837801153716 trainACC:0.9964291787111036 avg_loss:3.5232442458323874
+dataset: HARround:107 server aggregation  testACC:0.9270444519850696 trainACC:0.9959190613841183 avg_loss:3.52507176348846
+dataset: HARround:108 server aggregation  testACC:0.9287410926365796 trainACC:0.9962591396021084 avg_loss:3.5065047707402783
+dataset: HARround:109 server aggregation  testACC:0.9290804207668816 trainACC:0.9962591396021084 avg_loss:3.501213598419882
+dataset: HARround:110 server aggregation  testACC:0.9280624363759755 trainACC:0.9962591396021084 avg_loss:3.4965585102526795
+dataset: HARround:111 server aggregation  testACC:0.9260264675941635 trainACC:1.0 avg_loss:3.4989372472522176
+dataset: HARround:112 server aggregation  testACC:0.9267051238547676 trainACC:0.9962591396021084 avg_loss:3.4884495375263107
+dataset: HARround:113 server aggregation  testACC:0.9270444519850696 trainACC:0.9960891004931134 avg_loss:3.5093861595822977
+dataset: HARround:114 server aggregation  testACC:0.9273837801153716 trainACC:0.9960891004931134 avg_loss:3.480163516950217
+dataset: HARround:115 server aggregation  testACC:0.9287410926365796 trainACC:0.9960891004931134 avg_loss:3.5203568756112027
+dataset: HARround:116 server aggregation  testACC:0.9317950458092976 trainACC:0.9959190613841183 avg_loss:3.505609262490812
+dataset: HARround:117 server aggregation  testACC:0.9287410926365796 trainACC:0.9960891004931134 avg_loss:3.513804818876423
+dataset: HARround:118 server aggregation  testACC:0.9277231082456736 trainACC:0.9957490222751233 avg_loss:3.504728118399446
+dataset: HARround:119 server aggregation  testACC:0.9277231082456736 trainACC:0.9959190613841183 avg_loss:3.46287098519607
+dataset: HARround:120 server aggregation  testACC:0.9280624363759755 trainACC:0.9959190613841183 avg_loss:3.5135545386308755
+dataset: HARround:121 server aggregation  testACC:0.9287410926365796 trainACC:0.9960891004931134 avg_loss:3.4928863088030857
+dataset: HARround:122 server aggregation  testACC:0.9297590770274856 trainACC:0.9959190613841183 avg_loss:3.5240757507810243
+dataset: HARround:123 server aggregation  testACC:0.9290804207668816 trainACC:0.9959190613841183 avg_loss:3.4746571443320335
+dataset: HARround:124 server aggregation  testACC:0.9287410926365796 trainACC:0.9959190613841183 avg_loss:3.477185582519618
+dataset: HARround:125 server aggregation  testACC:0.9294197488971836 trainACC:0.9959190613841183 avg_loss:3.4627474578428212
+dataset: HARround:126 server aggregation  testACC:0.9267051238547676 trainACC:0.9957490222751233 avg_loss:3.4772870387422996
+dataset: HARround:127 server aggregation  testACC:0.9290804207668816 trainACC:0.9957490222751233 avg_loss:3.471911393131466
+dataset: HARround:128 server aggregation  testACC:0.9290804207668816 trainACC:0.9960891004931134 avg_loss:3.490520750398649
+dataset: HARround:129 server aggregation  testACC:0.9314557176789956 trainACC:0.9960891004931134 avg_loss:3.449350742037123
+dataset: HARround:130 server aggregation  testACC:0.9304377332880895 trainACC:0.9960891004931134 avg_loss:3.4854972192098446
+dataset: HARround:131 server aggregation  testACC:0.9270444519850696 trainACC:0.9962591396021084 avg_loss:3.4309650063014723
+dataset: HARround:132 server aggregation  testACC:0.9277231082456736 trainACC:0.9962591396021084 avg_loss:3.4646747497638017
+dataset: HARround:133 server aggregation  testACC:0.9304377332880895 trainACC:0.9962591396021084 avg_loss:3.5053203230703476
+dataset: HARround:134 server aggregation  testACC:0.9294197488971836 trainACC:0.9960891004931134 avg_loss:3.4540331498003987
+dataset: HARround:135 server aggregation  testACC:0.9307770614183916 trainACC:0.9962591396021084 avg_loss:3.471615677449421
+dataset: HARround:136 server aggregation  testACC:0.9280624363759755 trainACC:0.9962591396021084 avg_loss:3.485768424207597
+dataset: HARround:137 server aggregation  testACC:0.9273837801153716 trainACC:0.9959190613841183 avg_loss:3.433321741720421
+dataset: HARround:138 server aggregation  testACC:0.9317950458092976 trainACC:0.9964291787111036 avg_loss:3.470923549023889
+dataset: HARround:139 server aggregation  testACC:0.9328130302002036 trainACC:0.9962591396021084 avg_loss:3.4329497184172135
+dataset: HARround:140 server aggregation  testACC:0.9328130302002036 trainACC:0.9962591396021084 avg_loss:3.452841039801105
+dataset: HARround:141 server aggregation  testACC:0.9300984051577876 trainACC:0.9960891004931134 avg_loss:3.4604456169971867
+dataset: HARround:142 server aggregation  testACC:0.9328130302002036 trainACC:0.9959190613841183 avg_loss:3.4517547806768065
+dataset: HARround:143 server aggregation  testACC:0.9287410926365796 trainACC:0.9955789831661283 avg_loss:3.4424555066534994
+dataset: HARround:144 server aggregation  testACC:0.9260264675941635 trainACC:0.9960891004931134 avg_loss:3.463451937213759
+dataset: HARround:145 server aggregation  testACC:0.9284017645062775 trainACC:0.9960891004931134 avg_loss:3.410390259996588
+dataset: HARround:146 server aggregation  testACC:0.9270444519850696 trainACC:0.9957490222751233 avg_loss:3.410806088162448
+dataset: HARround:147 server aggregation  testACC:0.9307770614183916 trainACC:0.9954089440571331 avg_loss:3.4393728829860306
+dataset: HARround:148 server aggregation  testACC:0.9300984051577876 trainACC:0.9954089440571331 avg_loss:3.439496485716872
+dataset: HARround:149 server aggregation  testACC:0.9216152019002375 trainACC:0.9957490222751233 avg_loss:3.426052946867503
+dataset: HARround:150 server aggregation  testACC:0.9250084832032576 trainACC:0.9959190613841183 avg_loss:3.3902667073545514
+dataset: HARround:151 server aggregation  testACC:0.9300984051577876 trainACC:0.9960891004931134 avg_loss:3.397754330084652
+dataset: HARround:152 server aggregation  testACC:0.9300984051577876 trainACC:0.9960891004931134 avg_loss:3.413288603795158
+dataset: HARround:153 server aggregation  testACC:0.9284017645062775 trainACC:0.9964291787111036 avg_loss:3.3853750482477984
+dataset: HARround:154 server aggregation  testACC:0.9294197488971836 trainACC:0.9962591396021084 avg_loss:3.3890792689299296
+dataset: HARround:155 server aggregation  testACC:0.9311163895486936 trainACC:0.9959190613841183 avg_loss:3.349617987847158
+dataset: HARround:156 server aggregation  testACC:0.9304377332880895 trainACC:0.995068865839143 avg_loss:3.397105641949918
+dataset: HARround:157 server aggregation  testACC:0.9287410926365796 trainACC:0.9957490222751233 avg_loss:3.386505852753518
+dataset: HARround:158 server aggregation  testACC:0.9273837801153716 trainACC:0.9954089440571331 avg_loss:3.3803529997038
+dataset: HARround:159 server aggregation  testACC:0.9246691550729556 trainACC:0.9957490222751233 avg_loss:3.3657368454629606
+dataset: HARround:160 server aggregation  testACC:0.9280624363759755 trainACC:0.9955789831661283 avg_loss:3.3604205721765714
+dataset: HARround:161 server aggregation  testACC:0.9280624363759755 trainACC:0.9957490222751233 avg_loss:3.395724569664464
+dataset: HARround:162 server aggregation  testACC:0.9297590770274856 trainACC:0.9960891004931134 avg_loss:3.4163671477426334
+dataset: HARround:163 server aggregation  testACC:0.9300984051577876 trainACC:0.9957490222751233 avg_loss:3.3778969364253166
+dataset: HARround:164 server aggregation  testACC:0.9294197488971836 trainACC:0.9959190613841183 avg_loss:3.3743352836277425
+dataset: HARround:165 server aggregation  testACC:0.9294197488971836 trainACC:0.9962591396021084 avg_loss:3.3755611795025855
+dataset: HARround:166 server aggregation  testACC:0.9300984051577876 trainACC:0.9962591396021084 avg_loss:3.397706542528843
+dataset: HARround:167 server aggregation  testACC:0.9287410926365796 trainACC:0.9962591396021084 avg_loss:3.37900634765523
+dataset: HARround:168 server aggregation  testACC:0.9314557176789956 trainACC:0.9964291787111036 avg_loss:3.4197848665979302
+dataset: HARround:169 server aggregation  testACC:0.9321343739395996 trainACC:0.9962591396021084 avg_loss:3.3566124658968284
+dataset: HARround:170 server aggregation  testACC:0.9324737020699015 trainACC:0.9962591396021084 avg_loss:3.3793788801544586
+dataset: HARround:171 server aggregation  testACC:0.9338310145911096 trainACC:0.9962591396021084 avg_loss:3.384278615552261
+dataset: HARround:172 server aggregation  testACC:0.9324737020699015 trainACC:0.9962591396021084 avg_loss:3.3435898433862725
+dataset: HARround:173 server aggregation  testACC:0.9331523583305056 trainACC:0.9957490222751233 avg_loss:3.349695009971202
+dataset: HARround:174 server aggregation  testACC:0.9307770614183916 trainACC:0.9962591396021084 avg_loss:3.3690388359829293
+dataset: HARround:175 server aggregation  testACC:0.9307770614183916 trainACC:0.9962591396021084 avg_loss:3.390157304014932
+dataset: HARround:176 server aggregation  testACC:0.9321343739395996 trainACC:0.9962591396021084 avg_loss:3.350940073004094
+dataset: HARround:177 server aggregation  testACC:0.9311163895486936 trainACC:0.9962591396021084 avg_loss:3.3393619039728355
+dataset: HARround:178 server aggregation  testACC:0.9311163895486936 trainACC:0.9964291787111036 avg_loss:3.3736092637473334
+dataset: HARround:179 server aggregation  testACC:0.9307770614183916 trainACC:0.9962591396021084 avg_loss:3.3622934459043785
+dataset: HARround:180 server aggregation  testACC:0.9317950458092976 trainACC:0.9962591396021084 avg_loss:3.3698313489612333
+dataset: HARround:181 server aggregation  testACC:0.9324737020699015 trainACC:0.9962591396021084 avg_loss:3.3835129882713404
+dataset: HARround:182 server aggregation  testACC:0.9345096708517137 trainACC:0.9960891004931134 avg_loss:3.329790844462451
+dataset: HARround:183 server aggregation  testACC:0.9324737020699015 trainACC:0.9962591396021084 avg_loss:3.3515698146433737
+dataset: HARround:184 server aggregation  testACC:0.9362063115032236 trainACC:0.9962591396021084 avg_loss:3.3555852365708576
+dataset: HARround:185 server aggregation  testACC:0.9368849677638276 trainACC:0.9962591396021084 avg_loss:3.3346357345073256
+dataset: HARround:186 server aggregation  testACC:0.9345096708517137 trainACC:0.9960891004931134 avg_loss:3.3662544219240074
+dataset: HARround:187 server aggregation  testACC:0.9338310145911096 trainACC:0.9962591396021084 avg_loss:3.3284256159962795
+dataset: HARround:188 server aggregation  testACC:0.9341703427214116 trainACC:0.9959190613841183 avg_loss:3.332347153414387
+dataset: HARround:189 server aggregation  testACC:0.9317950458092976 trainACC:0.9964291787111036 avg_loss:3.343564055565716
+dataset: HARround:190 server aggregation  testACC:0.9314557176789956 trainACC:0.9962591396021084 avg_loss:3.3438265515031405
+dataset: HARround:191 server aggregation  testACC:0.9334916864608076 trainACC:0.9962591396021084 avg_loss:3.3363184420758523
+dataset: HARround:192 server aggregation  testACC:0.9307770614183916 trainACC:0.9962591396021084 avg_loss:3.3216899402656948
+dataset: HARround:193 server aggregation  testACC:0.9351883271123176 trainACC:0.9960891004931134 avg_loss:3.3810166893392912
+dataset: HARround:194 server aggregation  testACC:0.9341703427214116 trainACC:0.9960891004931134 avg_loss:3.3145588578331044
+dataset: HARround:195 server aggregation  testACC:0.9365456396335257 trainACC:0.9960891004931134 avg_loss:3.351245110324309
+dataset: HARround:196 server aggregation  testACC:0.9385816084153377 trainACC:0.9960891004931134 avg_loss:3.340658387521439
+dataset: HARround:197 server aggregation  testACC:0.9341703427214116 trainACC:0.9960891004931134 avg_loss:3.349086431652373
+dataset: HARround:198 server aggregation  testACC:0.9355276552426196 trainACC:0.9959190613841183 avg_loss:3.383539574928837
+dataset: HARround:199 server aggregation  testACC:0.9338310145911096 trainACC:0.9960891004931134 avg_loss:3.3510067181943035

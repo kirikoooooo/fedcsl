@@ -483,6 +483,7 @@ def run_ssl_baseline(
     eval_train_test_fn: Callable,
     eval_tstcc_fn: Callable,
     save_model_fn: Callable,
+    round_eval_interval: int = 1,
 ) -> None:
     algo = str(algo).lower()
     if algo == "fedu2-byol":
@@ -610,6 +611,26 @@ def run_ssl_baseline(
             if tr is not None and hasattr(tr, "loss"):
                 client_losses.append(float(tr.loss))
         avg_loss = float(np.mean(client_losses)) if client_losses else float("nan")
+
+        interval = max(1, int(round_eval_interval))
+        do_eval = (
+            round_idx == 0
+            or round_idx + 1 >= int(num_rounds)
+            or (round_idx + 1) % interval == 0
+        )
+        if not do_eval:
+            print(
+                f"[{algo.upper()}] round {round_idx + 1}/{int(num_rounds)} "
+                f"avg_loss={avg_loss} eval_skipped (every {interval} rounds)",
+                flush=True,
+            )
+            with open(logTxt, mode="a+", encoding="utf-8") as f:
+                loss_str = str(avg_loss) if np.isfinite(avg_loss) else "nan"
+                f.write(
+                    f"dataset: {dataset}round:{round_idx} server aggregation  "
+                    f"avg_loss:{loss_str} eval_skipped:interval={interval}\n"
+                )
+            return
 
         t_eval = time.time()
         try:

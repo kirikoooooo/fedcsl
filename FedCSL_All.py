@@ -91,6 +91,8 @@ parser.add_argument('--client-workers', type=int, default=None,
                     help='Number of client training worker threads; default comes from config or 3')
 parser.add_argument('--eval-protocol', type=str, default=None, choices=['svm', 'linear_probe'],
                     help='Override downstream evaluation protocol: svm or linear_probe')
+parser.add_argument('--eval-every-n-rounds', type=int, default=None,
+                    help='Run downstream SVM/linear-probe eval every N federated rounds (default: evaluation.round_eval_interval or 1)')
 
 args = parser.parse_args()
 
@@ -857,6 +859,29 @@ def _to_numpy_labels(y):
     return np.asarray(y)
 
 
+def _round_eval_interval(config, args=None):
+    """联邦通信轮下游评估间隔（默认每轮评估一次）。"""
+    if args is not None and getattr(args, "eval_every_n_rounds", None) is not None:
+        return max(1, int(args.eval_every_n_rounds))
+    env_val = os.environ.get("EVAL_EVERY_N_ROUNDS")
+    if env_val is not None and str(env_val).strip():
+        return max(1, int(env_val))
+    cfg = (config or {}).get("evaluation", {}) or {}
+    for key in ("round_eval_interval", "eval_every_n_rounds"):
+        if key in cfg and cfg[key] is not None:
+            return max(1, int(cfg[key]))
+    return 1
+
+
+def _should_eval_at_round(round_idx, num_rounds, interval):
+    interval = max(1, int(interval))
+    if round_idx == 0:
+        return True
+    if round_idx + 1 >= int(num_rounds):
+        return True
+    return (round_idx + 1) % interval == 0
+
+
 def _evaluation_config(config, protocol_override=None):
     cfg = (config or {}).get("evaluation", {}) or {}
     protocol = protocol_override or os.environ.get("EVAL_PROTOCOL") or cfg.get("protocol", cfg.get("method", "svm"))
@@ -1168,7 +1193,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     eval_train_test_fn, eval_tstcc_fn, eval_protocol_desc = _make_downstream_eval_fns(
         config, protocol_override=eval_protocol_override
     )
-    print(f"downstream evaluation: {eval_protocol_desc}")
+    round_eval_interval = _round_eval_interval(config, args)
+    print(f"downstream evaluation: {eval_protocol_desc}; every {round_eval_interval} round(s)")
     lr = model_cfg['lr']
     batch_size = args.batch_size if args.batch_size is not None else model_cfg['batch_size']
     wd = model_cfg.get('wd', 0.0001)
@@ -1262,6 +1288,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         f"argv: {' '.join(sys.argv)}",
         f"effective_dataset: {dataset}",
         f"effective_dirichlet_alpha: {dirichlet_alpha}",
+        f"effective_eval_every_n_rounds: {round_eval_interval}",
         yaml.dump(config).replace('\n', ''),
     ]
     _append_text_to_log(logTxt, "\n".join(header_lines) + "\n")
@@ -1342,6 +1369,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             eval_train_test_fn=eval_train_test_fn,
             eval_tstcc_fn=eval_tstcc_fn,
             save_model_fn=save_model,
+            round_eval_interval=round_eval_interval,
         )
         return
 
@@ -1372,6 +1400,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             eval_train_test_fn=eval_train_test_fn,
             eval_tstcc_fn=eval_tstcc_fn,
             save_model_fn=save_model,
+            round_eval_interval=round_eval_interval,
         )
         return
 
@@ -1704,33 +1733,43 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
         # ----- 下游 SVC 评估 -----
         eval_stage_t0 = time.perf_counter()
-        transformation = server.transform(X_all, result_type='numpy', normalize=True, batch_size=batch_size)
-        transformation_test = server.transform(X_test, result_type='numpy', normalize=True, batch_size=batch_size)
-        scaler = RobustScaler()
-        transformation = scaler.fit_transform(transformation)
-        transformation_test = scaler.transform(transformation_test)
-        if has_val and X_val is not None and y_val is not None:
-            transformation_val = server.transform(X_val, result_type='numpy', normalize=True, batch_size=batch_size)
-            transformation_val = scaler.transform(transformation_val)
-            y_val_np = y_val.cpu().numpy() if hasattr(y_val, 'cpu') else np.asarray(y_val)
-            train_acc, test_acc = eval_tstcc_fn(
-                transformation_train=transformation,
-                transformation_test=transformation_test,
-                transformation_val=transformation_val,
-                y_train=y_all, y_test=y_test, y_val=y_val_np,
-            )
+        do_eval = _should_eval_at_round(round, numRound, round_eval_interval)
+        if do_eval:
+            transformation = server.transform(X_all, result_type='numpy', normalize=True, batch_size=batch_size)
+            transformation_test = server.transform(X_test, result_type='numpy', normalize=True, batch_size=batch_size)
+            scaler = RobustScaler()
+            transformation = scaler.fit_transform(transformation)
+            transformation_test = scaler.transform(transformation_test)
+            if has_val and X_val is not None and y_val is not None:
+                transformation_val = server.transform(X_val, result_type='numpy', normalize=True, batch_size=batch_size)
+                transformation_val = scaler.transform(transformation_val)
+                y_val_np = y_val.cpu().numpy() if hasattr(y_val, 'cpu') else np.asarray(y_val)
+                train_acc, test_acc = eval_tstcc_fn(
+                    transformation_train=transformation,
+                    transformation_test=transformation_test,
+                    transformation_val=transformation_val,
+                    y_train=y_all, y_test=y_test, y_val=y_val_np,
+                )
+            else:
+                train_acc, test_acc = eval_train_test_fn(transformation, transformation_test, y_train=y_all, y_test=y_test)
+            eval_stage_sec = time.perf_counter() - eval_stage_t0
+
+            if test_acc > best_acc:
+                best_acc = test_acc
+                best_round = round
+                # 只 clone 到 CPU，避免 deepcopy 整个 GPU 模型（显著更快、更省显存）
+                best_state_dict = _state_dict_to_cpu(server.model.state_dict())
+
+            print(f"Classification: train={train_acc:.4f} test={test_acc:.4f} round={round}")
         else:
-            train_acc, test_acc = eval_train_test_fn(transformation, transformation_test, y_train=y_all, y_test=y_test)
-        eval_stage_sec = time.perf_counter() - eval_stage_t0
+            train_acc, test_acc = float("nan"), float("nan")
+            eval_stage_sec = 0.0
+            print(
+                f"[round {round}] downstream eval skipped (every {round_eval_interval} rounds)",
+                flush=True,
+            )
         round_total_sec = time.perf_counter() - round_t0
 
-        if test_acc > best_acc:
-            best_acc = test_acc
-            best_round = round
-            # 只 clone 到 CPU，避免 deepcopy 整个 GPU 模型（显著更快、更省显存）
-            best_state_dict = _state_dict_to_cpu(server.model.state_dict())
-
-        print(f"Classification: train={train_acc:.4f} test={test_acc:.4f} round={round}")
         print(
             f"[round {round}] timing train={train_stage_sec:.3f}s "
             f"distribution={dist_stage_sec:.3f}s agg={agg_stage_sec:.3f}s "
@@ -1744,10 +1783,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             for key in _LOSS_KEYS
         )
         with open(logTxt, mode="a+", encoding="utf-8") as f:
-            f.write(
-                f"dataset: {dataset}round:{round} server aggregation "
-                f" testACC:{test_acc} trainACC:{train_acc} avg_loss:{avg_loss_str} {avg_loss_terms_str}\n"
-            )
+            if do_eval:
+                f.write(
+                    f"dataset: {dataset}round:{round} server aggregation "
+                    f" testACC:{test_acc} trainACC:{train_acc} avg_loss:{avg_loss_str} {avg_loss_terms_str}\n"
+                )
+            else:
+                f.write(
+                    f"dataset: {dataset}round:{round} server aggregation "
+                    f" avg_loss:{avg_loss_str} {avg_loss_terms_str} eval_skipped:interval={round_eval_interval}\n"
+                )
             f.write(
                 f"[round {round}] timing train={train_stage_sec:.3f}s "
                 f"distribution={dist_stage_sec:.3f}s agg={agg_stage_sec:.3f}s "

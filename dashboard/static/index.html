@@ -218,6 +218,10 @@
                 <option value="linear_probe">Linear Probe</option>
               </select>
             </div>
+            <div class="form-row">
+              <label>评估间隔 (轮)</label>
+              <input id="baseline-eval-interval" class="control" type="number" min="1" step="1" value="1" oninput="updateBaselineSummary()" />
+            </div>
           </div>
           <div>
             <div class="form-row">
@@ -386,6 +390,8 @@
         <option value="svm" selected>SVM</option>
         <option value="linear_probe">Linear Probe</option>
       </select>
+      <label>评估间隔 (轮)</label>
+      <input type="number" id="launch-eval-interval" min="1" step="1" value="1" placeholder="默认 1 = 每轮评估" />
       <label>GPU</label>
       <select id="launch-gpu"></select>
       <label>客户端数量</label>
@@ -528,6 +534,15 @@ const alphaScriptPrefixes = [
   'scripts/fedcsl_har.sh',
   'scripts/spilter_har.sh',
 ];
+function normalizedEvalInterval(raw) {
+  const n = parseInt(String(raw ?? '1'), 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+function appendEvalLaunchArgs(args, evalInterval) {
+  const n = normalizedEvalInterval(evalInterval);
+  if (n !== 1) args.push('--eval-every-n-rounds', String(n));
+  return args;
+}
 function supportsAlphaChoice(scriptPath) {
   return alphaScriptPrefixes.includes(scriptPath);
 }
@@ -598,10 +613,12 @@ function updateBaselineSummary() {
   const gpu = document.getElementById('baseline-gpu')?.value;
   const gpuText = gpu === '' ? '自动选择' : `GPU ${gpu}`;
   const evalProtocol = document.getElementById('baseline-eval-protocol')?.value || 'svm';
+  const evalInterval = normalizedEvalInterval(document.getElementById('baseline-eval-interval')?.value);
   const evalText = evalProtocol === 'linear_probe' ? 'Linear Probe' : 'SVM';
+  const evalIntervalText = evalInterval === 1 ? '每轮' : `每 ${evalInterval} 轮`;
   const el = document.getElementById('baseline-summary');
   if (el) {
-    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}`;
+    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}`;
   }
 }
 function selectAllBaselines(checked) {
@@ -612,7 +629,7 @@ async function refreshBaselineGpuOptions() {
   await loadGpuOptions('baseline-gpu');
   updateBaselineSummary();
 }
-function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', dataset='HAR', evalProtocol='svm', extraArgs=[], envBase={}}={}) {
+function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', dataset='HAR', evalProtocol='svm', evalInterval=1, extraArgs=[], envBase={}}={}) {
   const args = [...extraArgs];
   if (numClient) args.push('--num-client', String(numClient));
   if (gpu !== '') {
@@ -622,6 +639,7 @@ function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', dataset='
   if (dataset) env.DATASET = dataset;
   if (alpha) env.DIR_ALPHA = alpha;
   if (evalProtocol) args.push('--eval-protocol', String(evalProtocol));
+  appendEvalLaunchArgs(args, evalInterval);
   if (gpu !== '') env.CUDA_VISIBLE_DEVICES = String(gpu);
   return {script, args, env};
 }
@@ -651,6 +669,10 @@ function runBadges(r) {
   if (evalProtocol) {
     badges.push(`<span class="tag">EVAL=${escapeHtml(String(evalProtocol))}</span>`);
   }
+  const evalEvery = argValue(r.args, '--eval-every-n-rounds');
+  if (evalEvery && String(evalEvery) !== '1') {
+    badges.push(`<span class="tag">EVAL_EVERY=${escapeHtml(String(evalEvery))}r</span>`);
+  }
   return badges.join(' ');
 }
 async function launchSelectedBaselines() {
@@ -661,12 +683,13 @@ async function launchSelectedBaselines() {
   const dataset = document.getElementById('baseline-dataset').value.trim() || 'HAR';
   const numClient = document.getElementById('baseline-num-client').value.trim();
   const evalProtocol = document.getElementById('baseline-eval-protocol').value.trim() || 'svm';
+  const evalInterval = normalizedEvalInterval(document.getElementById('baseline-eval-interval').value);
   const extraArgs = shellWords(document.getElementById('baseline-extra-args').value);
   const started = [];
   try {
     for (const script of scripts) {
       for (const alpha of alphas) {
-        const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, extraArgs});
+        const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs});
         const run = await api('/runs', {
           method: 'POST',
           headers: {'content-type':'application/json'},
@@ -719,6 +742,7 @@ function openLaunchModal(idx) {
   document.getElementById('launch-num-client').value = '';
   loadGpuOptions('launch-gpu');
   document.getElementById('launch-eval-protocol').value = 'svm';
+  document.getElementById('launch-eval-interval').value = '1';
   document.getElementById('launch-alpha-wrap').style.display = supportsAlphaChoice(s.path) ? 'block' : 'none';
   document.getElementById('launch-dataset-wrap').style.display = supportsDatasetChoice(s.path) ? 'block' : 'none';
   document.getElementById('launch-modal').style.display = 'flex';
@@ -734,6 +758,7 @@ async function doLaunch() {
   const alphaVal = document.getElementById('launch-alpha').value.trim();
   const datasetVal = document.getElementById('launch-dataset').value.trim();
   const evalProtocolVal = document.getElementById('launch-eval-protocol').value.trim() || 'svm';
+  const evalIntervalVal = normalizedEvalInterval(document.getElementById('launch-eval-interval').value);
   const gpuVal = document.getElementById('launch-gpu').value;
   const numClientVal = document.getElementById('launch-num-client').value.trim();
   const args = shellWords(argsRaw);
@@ -757,6 +782,7 @@ async function doLaunch() {
       if (supportsDatasetChoice(script) && datasetVal) env.DATASET = datasetVal;
       if (gpuVal !== '') env.CUDA_VISIBLE_DEVICES = gpuVal;
       const launchArgs = [...args, '--eval-protocol', evalProtocolVal];
+      appendEvalLaunchArgs(launchArgs, evalIntervalVal);
       if (numClientVal) launchArgs.push('--num-client', numClientVal);
       if (gpuVal !== '') launchArgs.push('--server-gpu', '0', '--client-gpus', '0');
       const run = await api('/runs', {

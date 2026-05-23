@@ -261,6 +261,7 @@ def run_baseline(
     eval_train_test_fn: Callable,
     eval_tstcc_fn: Callable,
     save_model_fn: Callable,
+    round_eval_interval: int = 1,
 ) -> None:
     """主入口：准备一切并驱动 FL-bench 风格的训练。
 
@@ -410,6 +411,44 @@ def run_baseline(
             if tr is not None and hasattr(tr, "loss"):
                 client_losses.append(float(tr.loss))
         avg_loss = float(np.mean(client_losses)) if client_losses else float("nan")
+
+        interval = max(1, int(round_eval_interval))
+        do_eval = (
+            round_idx == 0
+            or round_idx + 1 >= int(num_rounds)
+            or (round_idx + 1) % interval == 0
+        )
+        if not do_eval:
+            print(
+                f"[{algo.upper()}] round {round_idx + 1}/{int(num_rounds)} done  "
+                f"avg_loss={avg_loss} eval_skipped (every {interval} rounds)",
+                flush=True,
+            )
+            try:
+                with open(logTxt, mode="a+") as f:
+                    loss_str = str(avg_loss) if np.isfinite(avg_loss) else "nan"
+                    f.write(
+                        f"dataset: {dataset}round:{round_idx} server aggregation  "
+                        f"avg_loss:{loss_str} eval_skipped:interval={interval}\n"
+                    )
+            except Exception as e:  # pragma: no cover
+                print(f"[{algo.upper()}] 写日志失败: {e}")
+            ckpt_every = int(config.get("federated", {}).get("checkpoint_every", 0) or 0)
+            if ckpt_every > 0 and (round_idx + 1) % ckpt_every == 0:
+                try:
+                    _save_baseline_checkpoint(
+                        algo=algo,
+                        dataset=dataset,
+                        formatted_date=formatted_date,
+                        round_idx=round_idx,
+                        server=server,
+                        server_model=server_model,
+                        clients=clients,
+                        best=best,
+                    )
+                except Exception as e:  # pragma: no cover
+                    print(f"[{algo.upper()}] 保存 checkpoint 失败: {e}")
+            return
 
         # 下游 SVC 评估用 try/except 包裹，单轮评估失败不应中断训练。
         try:

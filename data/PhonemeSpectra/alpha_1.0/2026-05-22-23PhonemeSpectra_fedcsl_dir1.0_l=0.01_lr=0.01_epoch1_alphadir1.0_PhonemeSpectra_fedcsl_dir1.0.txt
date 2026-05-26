@@ -1,0 +1,420 @@
+Details of Training:-----------------------
+dataset: PhonemeSpectra
+local train epochs: 1
+round num: 200
+batch size: 32
+lr: 0.01
+use_client_selection: False
+server_device: cuda:0
+client_workers: 3
+client_worker_devices: ['cuda:0', 'cuda:0', 'cuda:0']
+client_groups: [[0, 3, 6, 9], [1, 4, 7], [2, 5, 8]]
+-------------------------------------------
+PhonemeSpectra_fedcsl_dir1.0
+PID: 155887
+PPID: 2072861
+argv: FedCSL_All.py -dataset PhonemeSpectra --config config/configACF.yml --dirichlet-alpha 1.0 --seed 42 --description PhonemeSpectra_fedcsl_dir1.0 --num-client 10 --server-gpu 0 --client-gpus 0 --eval-protocol svm
+effective_dataset: PhonemeSpectra
+effective_dirichlet_alpha: 1.0
+ablation:  UseACF: true  UseDistribution: false  UseJointCL: true  UseJointKD: true  UseMTLHomo: false  UseProdictor: false  UseScaleCL: true  UseScaleKD: truealgo: fedcsldataset: PhonemeSpectradescription: PhonemeSpectra_fedcsl_dir1.0evaluation:  linear_probe:    batch_size: 256    eval_interval: 1    lr: 0.001    max_epoch: 200    seed: 42    wd: 0.0001  protocol: svm  svm_c_grid:  - 0.0001  - 0.001  - 0.01  - 0.1  - 1.0  - 10.0  - 100.0  - 1000.0  - 10000.0federated:  auto_resume: false  checkpoint_every: 0  client_gpus:  - 0  client_selection_method: omp  client_selection_ratio: 0.6  client_workers: 3  dirichlet_alpha: 1.0  ema_alpha: 0.3  min_selection_prob: 0.01  numClient: 10  numEpoch: 1  numRound: 200  server_gpu: 0  use_client_selection: falselogPath: ./result/model:  name: ''  params:    batch_size: 32    beta: 0.4    dist_measure: mix    gamma: 0.5    l: 0.01    lr: 0.01    ls: 1    momentum: 0.9    wd: 0.0001
+[fedcsl] precomputed client scale scores once in 3.140s
+dataset: PhonemeSpectraround:0 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:6.7802654339275295 total:6.780265 base:0.921955 structure:0.727142 joint:0.000000 scale:5.131169 scale_local:5.131169 scale_global:0.000000 cca:30.507887 sdl:42.206268 proximal:0.000000 moon:0.000000
+[round 0] timing train=36.685s distribution=7.968s agg=0.915s eval=158.490s total=204.101s
+dataset: PhonemeSpectraround:1 server aggregation  testACC:0.1995228153892037 trainACC:1.0 avg_loss:16.740949252067345 total:16.740949 base:0.867845 structure:0.699886 joint:0.770446 scale:14.402772 scale_local:5.107482 scale_global:9.295290 cca:30.351116 sdl:39.637473 proximal:0.000000 moon:0.000000
+[round 1] timing train=58.114s distribution=5.483s agg=0.317s eval=163.156s total=227.076s
+dataset: PhonemeSpectraround:2 server aggregation  testACC:0.1995228153892037 trainACC:1.0 avg_loss:15.198487917118632 total:15.198488 base:0.806052 structure:0.699197 joint:0.687747 scale:13.005492 scale_local:4.802106 scale_global:8.203386 cca:30.282277 sdl:39.637425 proximal:0.000000 moon:0.000000
+[round 2] timing train=46.674s distribution=3.732s agg=0.437s eval=143.449s total=194.306s
+dataset: PhonemeSpectraround:3 server aggregation  testACC:0.20280345958842827 trainACC:1.0 avg_loss:14.601000972357802 total:14.601001 base:0.788922 structure:0.692462 joint:0.651883 scale:12.467733 scale_local:4.765588 scale_global:7.702145 cca:30.217572 sdl:39.028665 proximal:0.000000 moon:0.000000
+[round 3] timing train=42.137s distribution=2.501s agg=0.307s eval=150.122s total=195.092s
+dataset: PhonemeSpectraround:4 server aggregation  testACC:0.20280345958842827 trainACC:1.0 avg_loss:14.686408791308057 total:14.686409 base:0.816681 structure:0.682539 joint:0.638060 scale:12.549129 scale_local:4.998123 scale_global:7.551006 cca:30.163708 sdl:38.090211 proximal:0.000000 moon:0.000000
+[round 4] timing train=32.548s distribution=2.674s agg=0.299s eval=147.950s total=183.522s
+dataset: PhonemeSpectraround:5 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:13.864416380646857 total:13.864416 base:0.745225 structure:0.677116 joint:0.605467 scale:11.836609 scale_local:4.635711 scale_global:7.200898 cca:30.101421 sdl:37.610168 proximal:0.000000 moon:0.000000
+[round 5] timing train=31.808s distribution=2.610s agg=0.339s eval=138.561s total=173.336s
+dataset: PhonemeSpectraround:6 server aggregation  testACC:0.20339994035192366 trainACC:1.0 avg_loss:13.493561602549141 total:13.493562 base:0.708548 structure:0.669519 joint:0.589892 scale:11.525603 scale_local:4.471225 scale_global:7.054378 cca:30.028941 sdl:36.922921 proximal:0.000000 moon:0.000000
+[round 6] timing train=28.947s distribution=1.926s agg=0.358s eval=159.271s total=190.519s
+dataset: PhonemeSpectraround:7 server aggregation  testACC:0.20161049806143752 trainACC:1.0 avg_loss:13.545030504859707 total:13.545031 base:0.716996 structure:0.659906 joint:0.583398 scale:11.584731 scale_local:4.569363 scale_global:7.015368 cca:29.947976 sdl:36.042604 proximal:0.000000 moon:0.000000
+[round 7] timing train=33.470s distribution=3.396s agg=0.491s eval=150.613s total=187.994s
+dataset: PhonemeSpectraround:8 server aggregation  testACC:0.20190873844318522 trainACC:1.0 avg_loss:12.973841766317857 total:12.973842 base:0.663217 structure:0.655196 joint:0.560822 scale:11.094607 scale_local:4.303760 scale_global:6.790847 cca:29.861899 sdl:35.657682 proximal:0.000000 moon:0.000000
+[round 8] timing train=36.075s distribution=2.457s agg=0.107s eval=154.673s total=193.331s
+dataset: PhonemeSpectraround:9 server aggregation  testACC:0.20161049806143752 trainACC:1.0 avg_loss:12.804935427975813 total:12.804935 base:0.647737 structure:0.648697 joint:0.548961 scale:10.959541 scale_local:4.249089 scale_global:6.710452 cca:29.784650 sdl:35.085039 proximal:0.000000 moon:0.000000
+[round 9] timing train=33.232s distribution=2.644s agg=0.253s eval=146.362s total=182.503s
+dataset: PhonemeSpectraround:10 server aggregation  testACC:0.20131225767968983 trainACC:1.0 avg_loss:12.990140195251254 total:12.990140 base:0.676221 structure:0.645028 joint:0.546627 scale:11.122264 scale_local:4.420146 scale_global:6.702119 cca:29.714865 sdl:34.787896 proximal:0.000000 moon:0.000000
+[round 10] timing train=31.135s distribution=2.589s agg=0.252s eval=154.874s total=188.871s
+dataset: PhonemeSpectraround:11 server aggregation  testACC:0.20131225767968983 trainACC:1.0 avg_loss:13.114335766034554 total:13.114336 base:0.690219 structure:0.638778 joint:0.547248 scale:11.238091 scale_local:4.505820 scale_global:6.732271 cca:29.627324 sdl:34.250443 proximal:0.000000 moon:0.000000
+[round 11] timing train=30.737s distribution=4.106s agg=0.569s eval=147.356s total=182.790s
+dataset: PhonemeSpectraround:12 server aggregation  testACC:0.20071577691619447 trainACC:1.0 avg_loss:12.249788206630559 total:12.249788 base:0.609485 structure:0.634547 joint:0.513519 scale:10.492236 scale_local:4.076383 scale_global:6.415854 cca:29.566171 sdl:33.888555 proximal:0.000000 moon:0.000000
+[round 12] timing train=33.718s distribution=2.633s agg=0.175s eval=156.177s total=192.721s
+dataset: PhonemeSpectraround:13 server aggregation  testACC:0.1995228153892037 trainACC:1.0 avg_loss:12.293791979603421 total:12.293792 base:0.613496 structure:0.628142 joint:0.514720 scale:10.537435 scale_local:4.112993 scale_global:6.424442 cca:29.487614 sdl:33.326542 proximal:0.000000 moon:0.000000
+[round 13] timing train=33.500s distribution=2.346s agg=0.187s eval=141.093s total=177.159s
+dataset: PhonemeSpectraround:14 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:12.391847581222724 total:12.391848 base:0.630477 structure:0.621950 joint:0.512877 scale:10.626545 scale_local:4.197919 scale_global:6.428626 cca:29.416306 sdl:32.778654 proximal:0.000000 moon:0.000000
+[round 14] timing train=31.530s distribution=1.781s agg=0.424s eval=147.420s total=181.163s
+dataset: PhonemeSpectraround:15 server aggregation  testACC:0.20369818073367135 trainACC:1.0 avg_loss:11.862804877744768 total:11.862805 base:0.574531 structure:0.617162 joint:0.488527 scale:10.182584 scale_local:3.949967 scale_global:6.232617 cca:29.334530 sdl:32.381701 proximal:0.000000 moon:0.000000
+[round 15] timing train=30.905s distribution=2.397s agg=0.236s eval=159.810s total=193.366s
+dataset: PhonemeSpectraround:16 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:11.528426841987157 total:11.528427 base:0.548568 structure:0.611974 joint:0.478223 scale:9.889663 scale_local:3.787442 scale_global:6.102221 cca:29.246867 sdl:31.950484 proximal:0.000000 moon:0.000000
+[round 16] timing train=32.391s distribution=3.048s agg=0.395s eval=154.565s total=190.413s
+dataset: PhonemeSpectraround:17 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:11.433464745560077 total:11.433465 base:0.538492 structure:0.603933 joint:0.471791 scale:9.819249 scale_local:3.758071 scale_global:6.061178 cca:29.176965 sdl:31.216333 proximal:0.000000 moon:0.000000
+[round 17] timing train=36.530s distribution=3.365s agg=0.252s eval=151.603s total=191.795s
+dataset: PhonemeSpectraround:18 server aggregation  testACC:0.20071577691619447 trainACC:1.0 avg_loss:10.658746282623442 total:10.658746 base:0.468048 structure:0.595712 joint:0.441818 scale:9.153168 scale_local:3.389096 scale_global:5.764072 cca:29.098120 sdl:30.473091 proximal:0.000000 moon:0.000000
+[round 18] timing train=32.880s distribution=3.665s agg=0.437s eval=159.778s total=196.788s
+dataset: PhonemeSpectraround:19 server aggregation  testACC:0.20101401729794213 trainACC:1.0 avg_loss:10.900206702538119 total:10.900207 base:0.492922 structure:0.588489 joint:0.445072 scale:9.373724 scale_local:3.550412 scale_global:5.823312 cca:29.033070 sdl:29.815784 proximal:0.000000 moon:0.000000
+[round 19] timing train=38.058s distribution=4.016s agg=0.604s eval=148.267s total=190.998s
+dataset: PhonemeSpectraround:20 server aggregation  testACC:0.19982105577095138 trainACC:1.0 avg_loss:10.933124525107218 total:10.933125 base:0.503385 structure:0.584648 joint:0.443620 scale:9.401472 scale_local:3.595698 scale_global:5.805774 cca:28.942803 sdl:29.521997 proximal:0.000000 moon:0.000000
+[round 20] timing train=38.054s distribution=3.971s agg=0.133s eval=155.980s total=198.193s
+dataset: PhonemeSpectraround:21 server aggregation  testACC:0.20131225767968983 trainACC:1.0 avg_loss:11.380673788163508 total:11.380674 base:0.555462 structure:0.580114 joint:0.458786 scale:9.786312 scale_local:3.836328 scale_global:5.949984 cca:28.880996 sdl:29.130367 proximal:0.000000 moon:0.000000
+[round 21] timing train=31.579s distribution=2.251s agg=0.131s eval=161.967s total=195.946s
+dataset: PhonemeSpectraround:22 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:10.712583164135859 total:10.712583 base:0.494859 structure:0.576658 joint:0.428998 scale:9.212068 scale_local:3.542005 scale_global:5.670064 cca:28.817056 sdl:28.848724 proximal:0.000000 moon:0.000000
+[round 22] timing train=32.198s distribution=2.666s agg=0.405s eval=152.447s total=187.751s
+dataset: PhonemeSpectraround:23 server aggregation  testACC:0.20011929615269908 trainACC:1.0 avg_loss:10.636389608756769 total:10.636390 base:0.489613 structure:0.572379 joint:0.427642 scale:9.146756 scale_local:3.510794 scale_global:5.635962 cca:28.747169 sdl:28.490718 proximal:0.000000 moon:0.000000
+[round 23] timing train=30.945s distribution=2.360s agg=0.254s eval=160.822s total=194.415s
+dataset: PhonemeSpectraround:24 server aggregation  testACC:0.20280345958842827 trainACC:1.0 avg_loss:10.446954836763597 total:10.446955 base:0.477563 structure:0.567190 joint:0.415700 scale:8.986502 scale_local:3.446661 scale_global:5.539841 cca:28.669921 sdl:28.049090 proximal:0.000000 moon:0.000000
+[round 24] timing train=30.080s distribution=1.840s agg=0.227s eval=161.722s total=193.877s
+dataset: PhonemeSpectraround:25 server aggregation  testACC:0.20280345958842827 trainACC:1.0 avg_loss:10.563295975121417 total:10.563296 base:0.496466 structure:0.561926 joint:0.418771 scale:9.086132 scale_local:3.539284 scale_global:5.546848 cca:28.603342 sdl:27.589289 proximal:0.000000 moon:0.000000
+[round 25] timing train=33.819s distribution=4.525s agg=0.310s eval=163.861s total=202.582s
+dataset: PhonemeSpectraround:26 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:11.022069922860613 total:11.022070 base:0.537428 structure:0.558384 joint:0.434721 scale:9.491537 scale_local:3.774296 scale_global:5.717241 cca:28.555916 sdl:27.282466 proximal:0.000000 moon:0.000000
+[round 26] timing train=42.084s distribution=3.966s agg=0.173s eval=146.874s total=193.126s
+dataset: PhonemeSpectraround:27 server aggregation  testACC:0.20280345958842827 trainACC:1.0 avg_loss:10.451219580407237 total:10.451220 base:0.491992 structure:0.557320 joint:0.412622 scale:8.989285 scale_local:3.511745 scale_global:5.477540 cca:28.487486 sdl:27.244543 proximal:0.000000 moon:0.000000
+[round 27] timing train=35.148s distribution=3.756s agg=0.185s eval=128.985s total=168.100s
+dataset: PhonemeSpectraround:28 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:10.076849695556838 total:10.076850 base:0.458600 structure:0.548552 joint:0.400475 scale:8.669222 scale_local:3.322582 scale_global:5.346640 cca:28.386484 sdl:26.468745 proximal:0.000000 moon:0.000000
+[round 28] timing train=34.709s distribution=2.752s agg=0.384s eval=160.480s total=198.343s
+dataset: PhonemeSpectraround:29 server aggregation  testACC:0.20041753653444677 trainACC:1.0 avg_loss:10.398900635050564 total:10.398901 base:0.491596 structure:0.544332 joint:0.408210 scale:8.954762 scale_local:3.514847 scale_global:5.439915 cca:28.318221 sdl:26.114980 proximal:0.000000 moon:0.000000
+[round 29] timing train=29.893s distribution=2.624s agg=0.193s eval=162.725s total=195.486s
+dataset: PhonemeSpectraround:30 server aggregation  testACC:0.20011929615269908 trainACC:1.0 avg_loss:9.941308784824926 total:9.941309 base:0.457235 structure:0.541136 joint:0.387707 scale:8.555231 scale_local:3.316849 scale_global:5.238383 cca:28.251751 sdl:25.861815 proximal:0.000000 moon:0.000000
+[round 30] timing train=34.994s distribution=3.194s agg=0.193s eval=155.676s total=194.066s
+dataset: PhonemeSpectraround:31 server aggregation  testACC:0.20071577691619447 trainACC:1.0 avg_loss:10.054909027398976 total:10.054909 base:0.470831 structure:0.535432 joint:0.392589 scale:8.656057 scale_local:3.384045 scale_global:5.272012 cca:28.200547 sdl:25.342679 proximal:0.000000 moon:0.000000
+[round 31] timing train=30.223s distribution=1.669s agg=0.274s eval=146.497s total=178.676s
+dataset: PhonemeSpectraround:32 server aggregation  testACC:0.20101401729794213 trainACC:1.0 avg_loss:9.649646665682472 total:9.649647 base:0.437721 structure:0.530889 joint:0.376928 scale:8.304108 scale_local:3.200189 scale_global:5.103920 cca:28.104529 sdl:24.984372 proximal:0.000000 moon:0.000000
+[round 32] timing train=29.422s distribution=3.422s agg=0.276s eval=139.671s total=172.821s
+dataset: PhonemeSpectraround:33 server aggregation  testACC:0.19982105577095138 trainACC:1.0 avg_loss:9.607752065600122 total:9.607752 base:0.437501 structure:0.524319 joint:0.371582 scale:8.274350 scale_local:3.208601 scale_global:5.065750 cca:27.989377 sdl:24.442570 proximal:0.000000 moon:0.000000
+[round 33] timing train=37.867s distribution=4.819s agg=0.151s eval=131.372s total=174.221s
+dataset: PhonemeSpectraround:34 server aggregation  testACC:0.20161049806143752 trainACC:1.0 avg_loss:9.744826703215036 total:9.744827 base:0.456570 structure:0.521416 joint:0.373742 scale:8.393099 scale_local:3.302438 scale_global:5.090661 cca:27.931132 sdl:24.210466 proximal:0.000000 moon:0.000000
+[round 34] timing train=32.220s distribution=2.888s agg=0.154s eval=134.630s total=169.916s
+dataset: PhonemeSpectraround:35 server aggregation  testACC:0.20310169997017596 trainACC:1.0 avg_loss:9.658998343427081 total:9.658998 base:0.449992 structure:0.519237 joint:0.367404 scale:8.322365 scale_local:3.277443 scale_global:5.044922 cca:27.867051 sdl:24.056652 proximal:0.000000 moon:0.000000
+[round 35] timing train=31.938s distribution=4.736s agg=0.530s eval=132.972s total=170.193s
+dataset: PhonemeSpectraround:36 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:9.402469613380209 total:9.402470 base:0.424010 structure:0.514563 joint:0.360839 scale:8.103059 scale_local:3.131179 scale_global:4.971880 cca:27.788049 sdl:23.668226 proximal:0.000000 moon:0.000000
+[round 36] timing train=39.954s distribution=2.654s agg=0.095s eval=122.821s total=165.540s
+dataset: PhonemeSpectraround:37 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:9.49632093308164 total:9.496321 base:0.442689 structure:0.509776 joint:0.362813 scale:8.181043 scale_local:3.207088 scale_global:4.973955 cca:27.738410 sdl:23.239179 proximal:0.000000 moon:0.000000
+[round 37] timing train=40.322s distribution=4.490s agg=0.149s eval=117.980s total=162.959s
+dataset: PhonemeSpectraround:38 server aggregation  testACC:0.20280345958842827 trainACC:1.0 avg_loss:9.481484409705363 total:9.481484 base:0.445070 structure:0.505143 joint:0.358136 scale:8.173136 scale_local:3.237830 scale_global:4.935306 cca:27.650274 sdl:22.863983 proximal:0.000000 moon:0.000000
+[round 38] timing train=38.211s distribution=3.885s agg=0.425s eval=124.092s total=166.631s
+dataset: PhonemeSpectraround:39 server aggregation  testACC:0.2042946614971667 trainACC:1.0 avg_loss:9.069477033802544 total:9.069477 base:0.411502 structure:0.502837 joint:0.342199 scale:7.812940 scale_local:3.042045 scale_global:4.770895 cca:27.576819 sdl:22.706834 proximal:0.000000 moon:0.000000
+[round 39] timing train=35.185s distribution=4.393s agg=0.455s eval=127.774s total=167.882s
+dataset: PhonemeSpectraround:40 server aggregation  testACC:0.2045929018789144 trainACC:1.0 avg_loss:8.955864885947037 total:8.955865 base:0.397616 structure:0.498523 joint:0.340205 scale:7.719521 scale_local:2.980035 scale_global:4.739486 cca:27.534211 sdl:22.318042 proximal:0.000000 moon:0.000000
+[round 40] timing train=38.289s distribution=5.081s agg=0.525s eval=124.895s total=168.828s
+dataset: PhonemeSpectraround:41 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:9.428628412990587 total:9.428628 base:0.444962 structure:0.494972 joint:0.355023 scale:8.133672 scale_local:3.241725 scale_global:4.891947 cca:27.514816 sdl:21.982400 proximal:0.000000 moon:0.000000
+[round 41] timing train=42.150s distribution=5.121s agg=0.621s eval=120.894s total=168.803s
+dataset: PhonemeSpectraround:42 server aggregation  testACC:0.20190873844318522 trainACC:1.0 avg_loss:9.324912568791769 total:9.324913 base:0.443805 structure:0.493196 joint:0.350906 scale:8.037006 scale_local:3.212297 scale_global:4.824709 cca:27.461109 sdl:21.858463 proximal:0.000000 moon:0.000000
+[round 42] timing train=39.773s distribution=3.472s agg=0.321s eval=120.184s total=163.763s
+dataset: PhonemeSpectraround:43 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:8.739078359317178 total:8.739078 base:0.393113 structure:0.490140 joint:0.329252 scale:7.526574 scale_local:2.919488 scale_global:4.607086 cca:27.377469 sdl:21.636508 proximal:0.000000 moon:0.000000
+[round 43] timing train=32.604s distribution=4.039s agg=0.294s eval=112.219s total=149.164s
+dataset: PhonemeSpectraround:44 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:9.28416887796526 total:9.284169 base:0.440935 structure:0.484322 joint:0.348713 scale:8.010199 scale_local:3.183386 scale_global:4.826813 cca:27.301197 sdl:21.131048 proximal:0.000000 moon:0.000000
+[round 44] timing train=33.221s distribution=2.445s agg=0.246s eval=114.921s total=150.843s
+dataset: PhonemeSpectraround:45 server aggregation  testACC:0.20161049806143752 trainACC:1.0 avg_loss:9.102767223388188 total:9.102767 base:0.429283 structure:0.483627 joint:0.342065 scale:7.847792 scale_local:3.127608 scale_global:4.720184 cca:27.273142 sdl:21.089520 proximal:0.000000 moon:0.000000
+[round 45] timing train=29.314s distribution=2.760s agg=0.110s eval=117.467s total=149.668s
+dataset: PhonemeSpectraround:46 server aggregation  testACC:0.20190873844318522 trainACC:1.0 avg_loss:9.068571131952716 total:9.068571 base:0.428380 structure:0.480500 joint:0.339262 scale:7.820429 scale_local:3.126243 scale_global:4.694186 cca:27.246332 sdl:20.803661 proximal:0.000000 moon:0.000000
+[round 46] timing train=24.897s distribution=2.882s agg=0.170s eval=100.758s total=128.724s
+dataset: PhonemeSpectraround:47 server aggregation  testACC:0.20131225767968983 trainACC:1.0 avg_loss:8.937265104223421 total:8.937265 base:0.415057 structure:0.477565 joint:0.332682 scale:7.711962 scale_local:3.065410 scale_global:4.646552 cca:27.159770 sdl:20.596706 proximal:0.000000 moon:0.000000
+[round 47] timing train=24.276s distribution=2.829s agg=0.093s eval=98.610s total=125.815s
+dataset: PhonemeSpectraround:48 server aggregation  testACC:0.20041753653444677 trainACC:1.0 avg_loss:8.757776065968521 total:8.757776 base:0.398728 structure:0.475129 joint:0.329229 scale:7.554690 scale_local:2.965904 scale_global:4.588786 cca:27.116477 sdl:20.396419 proximal:0.000000 moon:0.000000
+[round 48] timing train=22.729s distribution=2.395s agg=0.064s eval=94.602s total=119.798s
+dataset: PhonemeSpectraround:49 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:8.25192808447226 total:8.251928 base:0.356740 structure:0.470882 joint:0.307515 scale:7.116791 scale_local:2.744025 scale_global:4.372766 cca:27.071137 sdl:20.017067 proximal:0.000000 moon:0.000000
+[round 49] timing train=23.626s distribution=1.493s agg=0.047s eval=99.044s total=124.218s
+dataset: PhonemeSpectraround:50 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:8.616846192886461 total:8.616846 base:0.391168 structure:0.467538 joint:0.320786 scale:7.437354 scale_local:2.932179 scale_global:4.505175 cca:27.003410 sdl:19.750396 proximal:0.000000 moon:0.000000
+[round 50] timing train=24.268s distribution=1.482s agg=0.090s eval=103.455s total=129.305s
+dataset: PhonemeSpectraround:51 server aggregation  testACC:0.20101401729794213 trainACC:1.0 avg_loss:9.070967746365685 total:9.070968 base:0.432704 structure:0.464654 joint:0.337280 scale:7.836329 scale_local:3.162293 scale_global:4.674036 cca:26.954685 sdl:19.510740 proximal:0.000000 moon:0.000000
+[round 51] timing train=31.099s distribution=2.518s agg=0.131s eval=102.604s total=136.360s
+dataset: PhonemeSpectraround:52 server aggregation  testACC:0.20369818073367135 trainACC:1.0 avg_loss:8.648255779792631 total:8.648256 base:0.399800 structure:0.462761 joint:0.322545 scale:7.463150 scale_local:2.970293 scale_global:4.492856 cca:26.922573 sdl:19.353533 proximal:0.000000 moon:0.000000
+[round 52] timing train=32.591s distribution=1.478s agg=0.053s eval=101.782s total=135.913s
+dataset: PhonemeSpectraround:53 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:8.427006640883045 total:8.427007 base:0.377836 structure:0.459797 joint:0.311059 scale:7.278314 scale_local:2.865562 scale_global:4.412751 cca:26.865237 sdl:19.114506 proximal:0.000000 moon:0.000000
+[round 53] timing train=30.258s distribution=2.763s agg=0.215s eval=110.160s total=143.406s
+dataset: PhonemeSpectraround:54 server aggregation  testACC:0.20190873844318522 trainACC:1.0 avg_loss:9.334222138443554 total:9.334222 base:0.457843 structure:0.457794 joint:0.346526 scale:8.072060 scale_local:3.312268 scale_global:4.759791 cca:26.789623 sdl:18.989802 proximal:0.000000 moon:0.000000
+[round 54] timing train=30.543s distribution=3.485s agg=0.146s eval=102.195s total=136.382s
+dataset: PhonemeSpectraround:55 server aggregation  testACC:0.2045929018789144 trainACC:1.0 avg_loss:8.654893365100788 total:8.654893 base:0.398345 structure:0.455677 joint:0.319957 scale:7.480914 scale_local:2.985475 scale_global:4.495438 cca:26.731628 sdl:18.836113 proximal:0.000000 moon:0.000000
+[round 55] timing train=25.091s distribution=2.679s agg=0.228s eval=99.794s total=127.845s
+dataset: PhonemeSpectraround:56 server aggregation  testACC:0.20608410378765285 trainACC:1.0 avg_loss:9.090099628099544 total:9.090100 base:0.440749 structure:0.454353 joint:0.337636 scale:7.857362 scale_local:3.191189 scale_global:4.666173 cca:26.729203 sdl:18.706070 proximal:0.000000 moon:0.000000
+[round 56] timing train=23.044s distribution=2.488s agg=0.177s eval=99.522s total=125.249s
+dataset: PhonemeSpectraround:57 server aggregation  testACC:0.207873546078139 trainACC:1.0 avg_loss:8.59416056042236 total:8.594161 base:0.399208 structure:0.452503 joint:0.317758 scale:7.424692 scale_local:2.966005 scale_global:4.458688 cca:26.679552 sdl:18.570707 proximal:0.000000 moon:0.000000
+[round 57] timing train=22.066s distribution=2.218s agg=0.102s eval=101.076s total=125.478s
+dataset: PhonemeSpectraround:58 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:9.072063084596007 total:9.072063 base:0.441085 structure:0.449796 joint:0.336049 scale:7.845133 scale_local:3.201312 scale_global:4.643821 cca:26.629418 sdl:18.350176 proximal:0.000000 moon:0.000000
+[round 58] timing train=22.291s distribution=1.498s agg=0.111s eval=108.053s total=131.964s
+dataset: PhonemeSpectraround:59 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:8.848825399975604 total:8.848825 base:0.424259 structure:0.448659 joint:0.326205 scale:7.649702 scale_local:3.103913 scale_global:4.545790 cca:26.606606 sdl:18.259259 proximal:0.000000 moon:0.000000
+[round 59] timing train=24.293s distribution=2.419s agg=0.141s eval=106.377s total=133.247s
+dataset: PhonemeSpectraround:60 server aggregation  testACC:0.207873546078139 trainACC:1.0 avg_loss:8.736850665940107 total:8.736851 base:0.409735 structure:0.447091 joint:0.322581 scale:7.557444 scale_local:3.038123 scale_global:4.519321 cca:26.573985 sdl:18.135131 proximal:0.000000 moon:0.000000
+[round 60] timing train=22.991s distribution=2.514s agg=0.199s eval=111.152s total=136.871s
+dataset: PhonemeSpectraround:61 server aggregation  testACC:0.20578586340590516 trainACC:1.0 avg_loss:8.816490165628261 total:8.816490 base:0.420368 structure:0.444348 joint:0.326055 scale:7.625718 scale_local:3.083089 scale_global:4.542629 cca:26.504431 sdl:17.930408 proximal:0.000000 moon:0.000000
+[round 61] timing train=29.287s distribution=2.503s agg=0.071s eval=109.702s total=141.569s
+dataset: PhonemeSpectraround:62 server aggregation  testACC:0.20608410378765285 trainACC:1.0 avg_loss:8.433364251471417 total:8.433364 base:0.383205 structure:0.441625 joint:0.311133 scale:7.297401 scale_local:2.906408 scale_global:4.390993 cca:26.485301 sdl:17.677224 proximal:0.000000 moon:0.000000
+[round 62] timing train=29.738s distribution=2.530s agg=0.060s eval=99.688s total=132.026s
+dataset: PhonemeSpectraround:63 server aggregation  testACC:0.2051893826424098 trainACC:1.0 avg_loss:8.140337015542139 total:8.140337 base:0.361929 structure:0.439354 joint:0.300200 scale:7.038853 scale_local:2.770966 scale_global:4.267888 cca:26.457855 sdl:17.477595 proximal:0.000000 moon:0.000000
+[round 63] timing train=32.617s distribution=2.806s agg=0.119s eval=103.949s total=139.505s
+dataset: PhonemeSpectraround:64 server aggregation  testACC:0.2051893826424098 trainACC:1.0 avg_loss:8.896436474764716 total:8.896436 base:0.425409 structure:0.436909 joint:0.326356 scale:7.707762 scale_local:3.144929 scale_global:4.562833 cca:26.389529 sdl:17.301378 proximal:0.000000 moon:0.000000
+[round 64] timing train=32.062s distribution=2.789s agg=0.131s eval=106.387s total=141.390s
+dataset: PhonemeSpectraround:65 server aggregation  testACC:0.2042946614971667 trainACC:1.0 avg_loss:8.468557482075626 total:8.468557 base:0.390366 structure:0.436257 joint:0.311153 scale:7.330782 scale_local:2.949150 scale_global:4.381632 cca:26.393162 sdl:17.232494 proximal:0.000000 moon:0.000000
+[round 65] timing train=28.638s distribution=2.192s agg=0.068s eval=117.698s total=148.607s
+dataset: PhonemeSpectraround:66 server aggregation  testACC:0.20399642111541902 trainACC:1.0 avg_loss:8.166937092982693 total:8.166937 base:0.360293 structure:0.433132 joint:0.300473 scale:7.073039 scale_local:2.784176 scale_global:4.288863 cca:26.308031 sdl:17.005179 proximal:0.000000 moon:0.000000
+[round 66] timing train=26.683s distribution=2.505s agg=0.057s eval=116.267s total=145.529s
+dataset: PhonemeSpectraround:67 server aggregation  testACC:0.20369818073367135 trainACC:1.0 avg_loss:8.091007321848847 total:8.091007 base:0.357518 structure:0.429164 joint:0.296544 scale:7.007782 scale_local:2.771571 scale_global:4.236210 cca:26.240341 sdl:16.676020 proximal:0.000000 moon:0.000000
+[round 67] timing train=27.437s distribution=3.374s agg=0.145s eval=106.417s total=137.383s
+dataset: PhonemeSpectraround:68 server aggregation  testACC:0.20161049806143752 trainACC:1.0 avg_loss:8.222738244551193 total:8.222738 base:0.372600 structure:0.427256 joint:0.302135 scale:7.120747 scale_local:2.845253 scale_global:4.275494 cca:26.208529 sdl:16.517107 proximal:0.000000 moon:0.000000
+[round 68] timing train=26.133s distribution=3.463s agg=0.215s eval=111.737s total=141.559s
+dataset: PhonemeSpectraround:69 server aggregation  testACC:0.20101401729794213 trainACC:1.0 avg_loss:8.172048936451292 total:8.172049 base:0.368687 structure:0.425079 joint:0.302113 scale:7.076171 scale_local:2.808709 scale_global:4.267461 cca:26.159446 sdl:16.348416 proximal:0.000000 moon:0.000000
+[round 69] timing train=28.288s distribution=3.144s agg=0.099s eval=118.461s total=150.001s
+dataset: PhonemeSpectraround:70 server aggregation  testACC:0.2045929018789144 trainACC:1.0 avg_loss:8.521447008050684 total:8.521447 base:0.395711 structure:0.422992 joint:0.310440 scale:7.392303 scale_local:2.997429 scale_global:4.394875 cca:26.136385 sdl:16.162865 proximal:0.000000 moon:0.000000
+[round 70] timing train=35.975s distribution=4.285s agg=0.104s eval=104.771s total=145.147s
+dataset: PhonemeSpectraround:71 server aggregation  testACC:0.2042946614971667 trainACC:1.0 avg_loss:8.231877814634977 total:8.231878 base:0.371925 structure:0.421068 joint:0.303772 scale:7.135113 scale_local:2.846940 scale_global:4.288172 cca:26.055765 sdl:16.051062 proximal:0.000000 moon:0.000000
+[round 71] timing train=29.078s distribution=3.763s agg=0.218s eval=113.997s total=147.074s
+dataset: PhonemeSpectraround:72 server aggregation  testACC:0.20369818073367135 trainACC:1.0 avg_loss:8.04233457153254 total:8.042335 base:0.357006 structure:0.418874 joint:0.295227 scale:6.971227 scale_local:2.769067 scale_global:4.202160 cca:26.013982 sdl:15.873410 proximal:0.000000 moon:0.000000
+[round 72] timing train=25.424s distribution=2.424s agg=0.157s eval=107.175s total=135.187s
+dataset: PhonemeSpectraround:73 server aggregation  testACC:0.2045929018789144 trainACC:1.0 avg_loss:7.950674833296632 total:7.950675 base:0.347069 structure:0.415181 joint:0.290052 scale:6.898374 scale_local:2.727218 scale_global:4.171156 cca:25.956082 sdl:15.561989 proximal:0.000000 moon:0.000000
+[round 73] timing train=25.393s distribution=2.214s agg=0.063s eval=108.257s total=135.934s
+dataset: PhonemeSpectraround:74 server aggregation  testACC:0.2051893826424098 trainACC:1.0 avg_loss:7.311062285356348 total:7.311062 base:0.297563 structure:0.412625 joint:0.267008 scale:6.333867 scale_local:2.431306 scale_global:3.902560 cca:25.918030 sdl:15.344438 proximal:0.000000 moon:0.000000
+[round 74] timing train=22.788s distribution=3.176s agg=0.142s eval=108.837s total=134.952s
+dataset: PhonemeSpectraround:75 server aggregation  testACC:0.2048911422606621 trainACC:1.0 avg_loss:7.752242797874912 total:7.752243 base:0.333648 structure:0.410216 joint:0.281229 scale:6.727150 scale_local:2.654704 scale_global:4.072446 cca:25.900919 sdl:15.120687 proximal:0.000000 moon:0.000000
+[round 75] timing train=23.599s distribution=3.419s agg=0.169s eval=102.062s total=129.258s
+dataset: PhonemeSpectraround:76 server aggregation  testACC:0.2045929018789144 trainACC:1.0 avg_loss:8.269621044824502 total:8.269621 base:0.384312 structure:0.408889 joint:0.298257 scale:7.178164 scale_local:2.933021 scale_global:4.245143 cca:25.891597 sdl:14.997261 proximal:0.000000 moon:0.000000
+[round 76] timing train=21.270s distribution=2.420s agg=0.096s eval=114.828s total=138.621s
+dataset: PhonemeSpectraround:77 server aggregation  testACC:0.2045929018789144 trainACC:1.0 avg_loss:7.821870941386147 total:7.821871 base:0.341564 structure:0.407458 joint:0.281486 scale:6.791363 scale_local:2.711824 scale_global:4.079539 cca:25.885470 sdl:14.860306 proximal:0.000000 moon:0.000000
+[round 77] timing train=21.311s distribution=1.481s agg=0.089s eval=110.030s total=132.934s
+dataset: PhonemeSpectraround:78 server aggregation  testACC:0.2048911422606621 trainACC:1.0 avg_loss:8.139057296344896 total:8.139057 base:0.372270 structure:0.405169 joint:0.297956 scale:7.063663 scale_local:2.849167 scale_global:4.214496 cca:25.848937 sdl:14.667939 proximal:0.000000 moon:0.000000
+[round 78] timing train=18.983s distribution=1.523s agg=0.074s eval=108.764s total=129.351s
+dataset: PhonemeSpectraround:79 server aggregation  testACC:0.2051893826424098 trainACC:1.0 avg_loss:7.729836197055825 total:7.729836 base:0.341767 structure:0.403385 joint:0.278067 scale:6.706617 scale_local:2.679809 scale_global:4.026808 cca:25.777632 sdl:14.560829 proximal:0.000000 moon:0.000000
+[round 79] timing train=20.689s distribution=1.497s agg=0.073s eval=112.463s total=134.737s
+dataset: PhonemeSpectraround:80 server aggregation  testACC:0.20310169997017596 trainACC:1.0 avg_loss:7.830316390163538 total:7.830316 base:0.344293 structure:0.400801 joint:0.282599 scale:6.802623 scale_local:2.713909 scale_global:4.088715 cca:25.729564 sdl:14.350505 proximal:0.000000 moon:0.000000
+[round 80] timing train=19.385s distribution=1.483s agg=0.051s eval=109.896s total=130.822s
+dataset: PhonemeSpectraround:81 server aggregation  testACC:0.20280345958842827 trainACC:1.0 avg_loss:7.612607860838086 total:7.612608 base:0.323883 structure:0.399219 joint:0.275273 scale:6.614233 scale_local:2.608284 scale_global:4.005949 cca:25.773577 sdl:14.148326 proximal:0.000000 moon:0.000000
+[round 81] timing train=22.462s distribution=1.468s agg=0.056s eval=110.578s total=134.570s
+dataset: PhonemeSpectraround:82 server aggregation  testACC:0.2042946614971667 trainACC:1.0 avg_loss:7.803482713534829 total:7.803483 base:0.346278 structure:0.397752 joint:0.281713 scale:6.777739 scale_local:2.713217 scale_global:4.064522 cca:25.773275 sdl:14.001923 proximal:0.000000 moon:0.000000
+[round 82] timing train=22.455s distribution=1.494s agg=0.056s eval=100.419s total=124.432s
+dataset: PhonemeSpectraround:83 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:7.508098601206624 total:7.508099 base:0.318540 structure:0.395695 joint:0.271152 scale:6.522712 scale_local:2.573584 scale_global:3.949127 cca:25.741371 sdl:13.828129 proximal:0.000000 moon:0.000000
+[round 83] timing train=23.973s distribution=1.516s agg=0.049s eval=99.276s total=124.822s
+dataset: PhonemeSpectraround:84 server aggregation  testACC:0.20339994035192366 trainACC:1.0 avg_loss:6.983072840752887 total:6.983073 base:0.277670 structure:0.393413 joint:0.251025 scale:6.060964 scale_local:2.323656 scale_global:3.737308 cca:25.702559 sdl:13.638766 proximal:0.000000 moon:0.000000
+[round 84] timing train=25.578s distribution=2.204s agg=0.062s eval=101.627s total=129.478s
+dataset: PhonemeSpectraround:85 server aggregation  testACC:0.20339994035192366 trainACC:1.0 avg_loss:7.589173644657957 total:7.589174 base:0.326022 structure:0.391379 joint:0.271966 scale:6.599806 scale_local:2.626852 scale_global:3.972955 cca:25.719441 sdl:13.418447 proximal:0.000000 moon:0.000000
+[round 85] timing train=24.892s distribution=2.198s agg=0.128s eval=102.879s total=130.103s
+dataset: PhonemeSpectraround:86 server aggregation  testACC:0.20310169997017596 trainACC:1.0 avg_loss:7.451707777504418 total:7.451708 base:0.320291 structure:0.389427 joint:0.265552 scale:6.476438 scale_local:2.583535 scale_global:3.892904 cca:25.667914 sdl:13.274761 proximal:0.000000 moon:0.000000
+[round 86] timing train=22.249s distribution=2.417s agg=0.185s eval=107.239s total=132.097s
+dataset: PhonemeSpectraround:87 server aggregation  testACC:0.2051893826424098 trainACC:1.0 avg_loss:7.664771678220227 total:7.664772 base:0.337128 structure:0.389058 joint:0.274636 scale:6.663950 scale_local:2.675829 scale_global:3.988120 cca:25.709855 sdl:13.195950 proximal:0.000000 moon:0.000000
+[round 87] timing train=21.390s distribution=2.285s agg=0.086s eval=111.110s total=134.878s
+dataset: PhonemeSpectraround:88 server aggregation  testACC:0.20578586340590516 trainACC:1.0 avg_loss:8.15433211585134 total:8.154332 base:0.378569 structure:0.388299 joint:0.291291 scale:7.096173 scale_local:2.926276 scale_global:4.169897 cca:25.659157 sdl:13.170737 proximal:0.000000 moon:0.000000
+[round 88] timing train=21.462s distribution=1.470s agg=0.065s eval=108.613s total=131.621s
+dataset: PhonemeSpectraround:89 server aggregation  testACC:0.20548762302415746 trainACC:1.0 avg_loss:7.821726723985458 total:7.821727 base:0.349291 structure:0.387541 joint:0.281778 scale:6.803117 scale_local:2.741453 scale_global:4.061664 cca:25.638630 sdl:13.115476 proximal:0.000000 moon:0.000000
+[round 89] timing train=19.105s distribution=2.324s agg=0.092s eval=95.492s total=117.022s
+dataset: PhonemeSpectraround:90 server aggregation  testACC:0.20578586340590516 trainACC:1.0 avg_loss:7.760036573093399 total:7.760037 base:0.341637 structure:0.385839 joint:0.277811 scale:6.754750 scale_local:2.721275 scale_global:4.033475 cca:25.628578 sdl:12.955321 proximal:0.000000 moon:0.000000
+[round 90] timing train=20.853s distribution=2.401s agg=0.089s eval=110.879s total=134.230s
+dataset: PhonemeSpectraround:91 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:7.5366671196850685 total:7.536667 base:0.328788 structure:0.384699 joint:0.271918 scale:6.551262 scale_local:2.617944 scale_global:3.933318 cca:25.592365 sdl:12.877553 proximal:0.000000 moon:0.000000
+[round 91] timing train=23.290s distribution=2.448s agg=0.161s eval=107.790s total=133.700s
+dataset: PhonemeSpectraround:92 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:7.136064717571767 total:7.136065 base:0.297037 structure:0.382062 joint:0.256220 scale:6.200747 scale_local:2.431737 scale_global:3.769010 cca:25.570969 sdl:12.635186 proximal:0.000000 moon:0.000000
+[round 92] timing train=25.239s distribution=2.562s agg=0.068s eval=101.259s total=129.136s
+dataset: PhonemeSpectraround:93 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:7.3483161254693545 total:7.348316 base:0.315040 structure:0.380090 joint:0.266202 scale:6.386984 scale_local:2.531733 scale_global:3.855251 cca:25.597463 sdl:12.411567 proximal:0.000000 moon:0.000000
+[round 93] timing train=24.894s distribution=2.665s agg=0.193s eval=109.280s total=137.049s
+dataset: PhonemeSpectraround:94 server aggregation  testACC:0.2051893826424098 trainACC:1.0 avg_loss:7.59124615041684 total:7.591246 base:0.337359 structure:0.379488 joint:0.270965 scale:6.603434 scale_local:2.682942 scale_global:3.920492 cca:25.588978 sdl:12.359775 proximal:0.000000 moon:0.000000
+[round 94] timing train=25.065s distribution=2.812s agg=0.114s eval=106.905s total=134.905s
+dataset: PhonemeSpectraround:95 server aggregation  testACC:0.20548762302415746 trainACC:1.0 avg_loss:7.479022381622365 total:7.479022 base:0.325267 structure:0.378800 joint:0.266467 scale:6.508489 scale_local:2.631002 scale_global:3.877487 cca:25.624251 sdl:12.255720 proximal:0.000000 moon:0.000000
+[round 95] timing train=25.549s distribution=1.604s agg=0.118s eval=104.118s total=131.396s
+dataset: PhonemeSpectraround:96 server aggregation  testACC:0.20399642111541902 trainACC:1.0 avg_loss:7.493618683927497 total:7.493619 base:0.328997 structure:0.377198 joint:0.268875 scale:6.518548 scale_local:2.626487 scale_global:3.892061 cca:25.588622 sdl:12.131139 proximal:0.000000 moon:0.000000
+[round 96] timing train=26.788s distribution=2.484s agg=0.071s eval=101.779s total=131.130s
+dataset: PhonemeSpectraround:97 server aggregation  testACC:0.20369818073367135 trainACC:1.0 avg_loss:7.331688345655063 total:7.331688 base:0.313525 structure:0.376072 joint:0.262986 scale:6.379106 scale_local:2.543064 scale_global:3.836042 cca:25.557746 sdl:12.049451 proximal:0.000000 moon:0.000000
+[round 97] timing train=25.008s distribution=2.146s agg=0.071s eval=104.050s total=131.334s
+dataset: PhonemeSpectraround:98 server aggregation  testACC:0.2048911422606621 trainACC:1.0 avg_loss:8.297863776971491 total:8.297864 base:0.390462 structure:0.375059 joint:0.295202 scale:7.237141 scale_local:3.018399 scale_global:4.218742 cca:25.540110 sdl:11.965767 proximal:0.000000 moon:0.000000
+[round 98] timing train=26.741s distribution=3.248s agg=0.062s eval=113.115s total=143.179s
+dataset: PhonemeSpectraround:99 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:7.402989984529118 total:7.402990 base:0.319274 structure:0.374297 joint:0.265843 scale:6.443576 scale_local:2.586984 scale_global:3.856592 cca:25.505107 sdl:11.924637 proximal:0.000000 moon:0.000000
+[round 99] timing train=28.166s distribution=3.489s agg=0.258s eval=112.842s total=144.776s
+dataset: PhonemeSpectraround:100 server aggregation  testACC:0.20668058455114824 trainACC:1.0 avg_loss:7.408916888041214 total:7.408917 base:0.320314 structure:0.373000 joint:0.268424 scale:6.447179 scale_local:2.574420 scale_global:3.872759 cca:25.498896 sdl:11.801126 proximal:0.000000 moon:0.000000
+[round 100] timing train=27.145s distribution=4.783s agg=0.490s eval=112.683s total=145.112s
+dataset: PhonemeSpectraround:101 server aggregation  testACC:0.20668058455114824 trainACC:1.0 avg_loss:7.615659734844781 total:7.615660 base:0.338361 structure:0.371350 joint:0.274121 scale:6.631827 scale_local:2.677370 scale_global:3.954457 cca:25.455915 sdl:11.679111 proximal:0.000000 moon:0.000000
+[round 101] timing train=25.268s distribution=3.873s agg=0.270s eval=107.604s total=137.030s
+dataset: PhonemeSpectraround:102 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:7.546908121084853 total:7.546908 base:0.335213 structure:0.370238 joint:0.268828 scale:6.572628 scale_local:2.675071 scale_global:3.897558 cca:25.428723 sdl:11.595104 proximal:0.000000 moon:0.000000
+[round 102] timing train=24.128s distribution=2.242s agg=0.152s eval=109.926s total=136.473s
+dataset: PhonemeSpectraround:103 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:7.50676546244665 total:7.506765 base:0.330952 structure:0.368639 joint:0.268801 scale:6.538374 scale_local:2.642358 scale_global:3.896015 cca:25.375256 sdl:11.488602 proximal:0.000000 moon:0.000000
+[round 103] timing train=23.530s distribution=2.357s agg=0.091s eval=100.643s total=126.642s
+dataset: PhonemeSpectraround:104 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:6.862169801218155 total:6.862170 base:0.281630 structure:0.367210 joint:0.245460 scale:5.967869 scale_local:2.349087 scale_global:3.618782 cca:25.398164 sdl:11.322840 proximal:0.000000 moon:0.000000
+[round 104] timing train=23.632s distribution=2.200s agg=0.059s eval=101.505s total=127.411s
+dataset: PhonemeSpectraround:105 server aggregation  testACC:0.20638234416940054 trainACC:1.0 avg_loss:7.956767158746185 total:7.956767 base:0.362971 structure:0.366277 joint:0.284759 scale:6.942761 scale_local:2.861379 scale_global:4.081382 cca:25.409988 sdl:11.217688 proximal:0.000000 moon:0.000000
+[round 105] timing train=23.514s distribution=2.238s agg=0.317s eval=101.258s total=127.335s
+dataset: PhonemeSpectraround:106 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:7.566800722009726 total:7.566801 base:0.333570 structure:0.365261 joint:0.269953 scale:6.598017 scale_local:2.682824 scale_global:3.915193 cca:25.361659 sdl:11.164432 proximal:0.000000 moon:0.000000
+[round 106] timing train=22.930s distribution=2.135s agg=0.057s eval=110.212s total=135.346s
+dataset: PhonemeSpectraround:107 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:7.169448548809914 total:7.169449 base:0.304078 structure:0.363724 joint:0.255020 scale:6.246627 scale_local:2.501475 scale_global:3.745152 cca:25.323017 sdl:11.049337 proximal:0.000000 moon:0.000000
+[round 107] timing train=23.060s distribution=2.406s agg=0.207s eval=105.331s total=131.013s
+dataset: PhonemeSpectraround:108 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:6.950962598611033 total:6.950963 base:0.286053 structure:0.361777 joint:0.248836 scale:6.054297 scale_local:2.385601 scale_global:3.668696 cca:25.306324 sdl:10.871347 proximal:0.000000 moon:0.000000
+[round 108] timing train=24.380s distribution=2.286s agg=0.073s eval=99.786s total=126.536s
+dataset: PhonemeSpectraround:109 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:7.524564148153911 total:7.524564 base:0.333677 structure:0.361308 joint:0.267999 scale:6.561581 scale_local:2.670686 scale_global:3.890895 cca:25.341996 sdl:10.788810 proximal:0.000000 moon:0.000000
+[round 109] timing train=29.377s distribution=2.371s agg=0.224s eval=106.564s total=138.548s
+dataset: PhonemeSpectraround:110 server aggregation  testACC:0.20847002684163435 trainACC:1.0 avg_loss:8.086751067947949 total:8.086751 base:0.379421 structure:0.360811 joint:0.288147 scale:7.058372 scale_local:2.941969 scale_global:4.116403 cca:25.277385 sdl:10.803720 proximal:0.000000 moon:0.000000
+[round 110] timing train=30.335s distribution=3.661s agg=0.235s eval=106.781s total=141.018s
+dataset: PhonemeSpectraround:111 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:6.916746654515692 total:6.916747 base:0.289753 structure:0.360296 joint:0.247535 scale:6.019162 scale_local:2.390020 scale_global:3.629143 cca:25.263297 sdl:10.766299 proximal:0.000000 moon:0.000000
+[round 111] timing train=32.085s distribution=3.666s agg=0.417s eval=106.772s total=142.945s
+dataset: PhonemeSpectraround:112 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:6.676694498613893 total:6.676694 base:0.266759 structure:0.358783 joint:0.239946 scale:5.811207 scale_local:2.264862 scale_global:3.546345 cca:25.248204 sdl:10.630061 proximal:0.000000 moon:0.000000
+[round 112] timing train=31.282s distribution=4.460s agg=0.437s eval=115.375s total=151.577s
+dataset: PhonemeSpectraround:113 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:7.103114633922693 total:7.103115 base:0.304457 structure:0.357394 joint:0.254586 scale:6.186677 scale_local:2.474347 scale_global:3.712330 cca:25.308826 sdl:10.430611 proximal:0.000000 moon:0.000000
+[round 113] timing train=34.938s distribution=4.833s agg=0.440s eval=116.085s total=156.303s
+dataset: PhonemeSpectraround:114 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:7.057842521887385 total:7.057843 base:0.302532 structure:0.356306 joint:0.250762 scale:6.148242 scale_local:2.473547 scale_global:3.674695 cca:25.295159 sdl:10.335466 proximal:0.000000 moon:0.000000
+[round 114] timing train=44.325s distribution=6.135s agg=0.519s eval=109.463s total=160.451s
+dataset: PhonemeSpectraround:115 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:7.2335648951074285 total:7.233565 base:0.315763 structure:0.356294 joint:0.255868 scale:6.305640 scale_local:2.565363 scale_global:3.740277 cca:25.308061 sdl:10.321369 proximal:0.000000 moon:0.000000
+[round 115] timing train=44.256s distribution=4.495s agg=0.455s eval=110.466s total=159.681s
+dataset: PhonemeSpectraround:116 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:6.91789369796761 total:6.917894 base:0.287614 structure:0.355784 joint:0.245227 scale:6.029269 scale_local:2.412500 scale_global:3.616770 cca:25.331413 sdl:10.246994 proximal:0.000000 moon:0.000000
+[round 116] timing train=41.303s distribution=4.768s agg=0.176s eval=108.863s total=155.120s
+dataset: PhonemeSpectraround:117 server aggregation  testACC:0.20608410378765285 trainACC:1.0 avg_loss:6.734373487423634 total:6.734373 base:0.272512 structure:0.354662 joint:0.237645 scale:5.869555 scale_local:2.322169 scale_global:3.547386 cca:25.358485 sdl:10.107701 proximal:0.000000 moon:0.000000
+[round 117] timing train=36.206s distribution=3.382s agg=0.333s eval=113.057s total=153.013s
+dataset: PhonemeSpectraround:118 server aggregation  testACC:0.20578586340590516 trainACC:1.0 avg_loss:7.13927125636004 total:7.139271 base:0.308693 structure:0.354183 joint:0.252676 scale:6.223720 scale_local:2.522365 scale_global:3.701355 cca:25.357191 sdl:10.061112 proximal:0.000000 moon:0.000000
+[round 118] timing train=34.793s distribution=3.577s agg=0.139s eval=108.812s total=147.332s
+dataset: PhonemeSpectraround:119 server aggregation  testACC:0.20668058455114824 trainACC:1.0 avg_loss:7.418584160623784 total:7.418584 base:0.325936 structure:0.353515 joint:0.262056 scale:6.477077 scale_local:2.651332 scale_global:3.825745 cca:25.335572 sdl:10.015928 proximal:0.000000 moon:0.000000
+[round 119] timing train=32.651s distribution=3.647s agg=0.088s eval=112.942s total=149.339s
+dataset: PhonemeSpectraround:120 server aggregation  testACC:0.2048911422606621 trainACC:1.0 avg_loss:7.1827170404683995 total:7.182717 base:0.312310 structure:0.352632 joint:0.253573 scale:6.264202 scale_local:2.551310 scale_global:3.712892 cca:25.324058 sdl:9.939141 proximal:0.000000 moon:0.000000
+[round 120] timing train=26.460s distribution=3.214s agg=0.169s eval=118.653s total=148.508s
+dataset: PhonemeSpectraround:121 server aggregation  testACC:0.2045929018789144 trainACC:1.0 avg_loss:6.421057455501036 total:6.421057 base:0.253425 structure:0.351792 joint:0.226958 scale:5.588882 scale_local:2.184011 scale_global:3.404871 cca:25.320265 sdl:9.858986 proximal:0.000000 moon:0.000000
+[round 121] timing train=29.658s distribution=3.771s agg=0.318s eval=113.430s total=147.194s
+dataset: PhonemeSpectraround:122 server aggregation  testACC:0.20250521920668058 trainACC:1.0 avg_loss:6.556741415024573 total:6.556741 base:0.267571 structure:0.351603 joint:0.231475 scale:5.706092 scale_local:2.261500 scale_global:3.444592 cca:25.393236 sdl:9.767106 proximal:0.000000 moon:0.000000
+[round 122] timing train=34.929s distribution=5.208s agg=0.411s eval=114.786s total=155.357s
+dataset: PhonemeSpectraround:123 server aggregation  testACC:0.2022069788249329 trainACC:1.0 avg_loss:6.842593488530325 total:6.842593 base:0.283644 structure:0.350018 joint:0.239897 scale:5.969035 scale_local:2.387389 scale_global:3.581646 cca:25.361970 sdl:9.639850 proximal:0.000000 moon:0.000000
+[round 123] timing train=41.064s distribution=4.155s agg=0.586s eval=115.938s total=161.754s
+dataset: PhonemeSpectraround:124 server aggregation  testACC:0.20339994035192366 trainACC:1.0 avg_loss:6.965621647102999 total:6.965622 base:0.296336 structure:0.350465 joint:0.244945 scale:6.073876 scale_local:2.455379 scale_global:3.618497 cca:25.425854 sdl:9.620606 proximal:0.000000 moon:0.000000
+[round 124] timing train=42.588s distribution=4.847s agg=0.433s eval=110.049s total=157.928s
+dataset: PhonemeSpectraround:125 server aggregation  testACC:0.20310169997017596 trainACC:1.0 avg_loss:6.677613255582354 total:6.677613 base:0.275982 structure:0.350005 joint:0.234293 scale:5.817333 scale_local:2.321742 scale_global:3.495591 cca:25.405289 sdl:9.595204 proximal:0.000000 moon:0.000000
+[round 125] timing train=38.576s distribution=3.911s agg=0.200s eval=97.658s total=140.357s
+dataset: PhonemeSpectraround:126 server aggregation  testACC:0.20339994035192366 trainACC:1.0 avg_loss:6.930899951977988 total:6.930900 base:0.292906 structure:0.348893 joint:0.242208 scale:6.046892 scale_local:2.446711 scale_global:3.600181 cca:25.413095 sdl:9.476231 proximal:0.000000 moon:0.000000
+[round 126] timing train=40.812s distribution=2.439s agg=0.134s eval=108.395s total=151.842s
+dataset: PhonemeSpectraround:127 server aggregation  testACC:0.20399642111541902 trainACC:1.0 avg_loss:7.040996109213046 total:7.040996 base:0.303191 structure:0.349003 joint:0.246475 scale:6.142327 scale_local:2.503561 scale_global:3.638766 cca:25.426107 sdl:9.474222 proximal:0.000000 moon:0.000000
+[round 127] timing train=37.236s distribution=1.489s agg=0.107s eval=105.822s total=144.688s
+dataset: PhonemeSpectraround:128 server aggregation  testACC:0.2045929018789144 trainACC:1.0 avg_loss:6.740686384699129 total:6.740686 base:0.279847 structure:0.348399 joint:0.236848 scale:5.875592 scale_local:2.364942 scale_global:3.510650 cca:25.418945 sdl:9.420991 proximal:0.000000 moon:0.000000
+[round 128] timing train=36.327s distribution=2.330s agg=0.112s eval=107.752s total=146.531s
+dataset: PhonemeSpectraround:129 server aggregation  testACC:0.20399642111541902 trainACC:1.0 avg_loss:6.700975635236253 total:6.700976 base:0.278153 structure:0.347894 joint:0.237056 scale:5.837873 scale_local:2.340118 scale_global:3.497754 cca:25.450650 sdl:9.338750 proximal:0.000000 moon:0.000000
+[round 129] timing train=39.676s distribution=3.095s agg=0.206s eval=107.856s total=150.842s
+dataset: PhonemeSpectraround:130 server aggregation  testACC:0.20578586340590516 trainACC:1.0 avg_loss:6.8842904694155695 total:6.884290 base:0.291914 structure:0.347550 joint:0.240458 scale:6.004368 scale_local:2.431658 scale_global:3.572711 cca:25.442040 sdl:9.312946 proximal:0.000000 moon:0.000000
+[round 130] timing train=32.448s distribution=3.329s agg=0.110s eval=105.126s total=141.025s
+dataset: PhonemeSpectraround:131 server aggregation  testACC:0.20638234416940054 trainACC:1.0 avg_loss:6.2702517550251535 total:6.270252 base:0.251134 structure:0.346432 joint:0.218818 scale:5.453868 scale_local:2.149340 scale_global:3.304527 cca:25.443822 sdl:9.199360 proximal:0.000000 moon:0.000000
+[round 131] timing train=34.933s distribution=3.465s agg=0.318s eval=110.206s total=148.931s
+dataset: PhonemeSpectraround:132 server aggregation  testACC:0.20668058455114824 trainACC:1.0 avg_loss:6.702315931797103 total:6.702316 base:0.279326 structure:0.345690 joint:0.233391 scale:5.843909 scale_local:2.350150 scale_global:3.493759 cca:25.430107 sdl:9.138923 proximal:0.000000 moon:0.000000
+[round 132] timing train=30.858s distribution=3.548s agg=0.210s eval=99.866s total=134.492s
+dataset: PhonemeSpectraround:133 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:6.900244454864733 total:6.900244 base:0.301093 structure:0.345828 joint:0.240382 scale:6.012941 scale_local:2.458474 scale_global:3.554468 cca:25.471105 sdl:9.111647 proximal:0.000000 moon:0.000000
+[round 133] timing train=30.828s distribution=3.396s agg=0.179s eval=100.471s total=134.916s
+dataset: PhonemeSpectraround:134 server aggregation  testACC:0.207873546078139 trainACC:1.0 avg_loss:6.338347549518135 total:6.338348 base:0.252059 structure:0.345463 joint:0.221300 scale:5.519525 scale_local:2.186485 scale_global:3.333039 cca:25.454649 sdl:9.091675 proximal:0.000000 moon:0.000000
+[round 134] timing train=24.886s distribution=3.470s agg=0.366s eval=104.946s total=133.690s
+dataset: PhonemeSpectraround:135 server aggregation  testACC:0.20936474798687743 trainACC:1.0 avg_loss:6.647716511983636 total:6.647717 base:0.276357 structure:0.344970 joint:0.232172 scale:5.794218 scale_local:2.338251 scale_global:3.455967 cca:25.470529 sdl:9.026450 proximal:0.000000 moon:0.000000
+[round 135] timing train=22.575s distribution=3.567s agg=0.069s eval=105.299s total=131.519s
+dataset: PhonemeSpectraround:136 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:6.475296441992789 total:6.475296 base:0.261918 structure:0.344638 joint:0.224599 scale:5.644141 scale_local:2.254169 scale_global:3.389972 cca:25.473667 sdl:8.990126 proximal:0.000000 moon:0.000000
+[round 136] timing train=21.496s distribution=1.475s agg=0.055s eval=102.570s total=125.601s
+dataset: PhonemeSpectraround:137 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:6.576784993101594 total:6.576785 base:0.274453 structure:0.344089 joint:0.228671 scale:5.729571 scale_local:2.310434 scale_global:3.419138 cca:25.483278 sdl:8.925603 proximal:0.000000 moon:0.000000
+[round 137] timing train=22.804s distribution=1.494s agg=0.098s eval=102.530s total=126.961s
+dataset: PhonemeSpectraround:138 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:6.602646295910993 total:6.602646 base:0.276414 structure:0.343871 joint:0.230562 scale:5.751800 scale_local:2.317617 scale_global:3.434183 cca:25.510769 sdl:8.876297 proximal:0.000000 moon:0.000000
+[round 138] timing train=24.626s distribution=1.560s agg=0.074s eval=108.986s total=135.263s
+dataset: PhonemeSpectraround:139 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:6.562710318819672 total:6.562710 base:0.270276 structure:0.343811 joint:0.225758 scale:5.722866 scale_local:2.310793 scale_global:3.412073 cca:25.527450 sdl:8.853604 proximal:0.000000 moon:0.000000
+[round 139] timing train=23.909s distribution=1.505s agg=0.067s eval=111.566s total=137.055s
+dataset: PhonemeSpectraround:140 server aggregation  testACC:0.2051893826424098 trainACC:1.0 avg_loss:6.848148349904308 total:6.848148 base:0.292195 structure:0.343638 joint:0.236262 scale:5.976054 scale_local:2.444304 scale_global:3.531750 cca:25.505442 sdl:8.858370 proximal:0.000000 moon:0.000000
+[round 140] timing train=21.974s distribution=2.291s agg=0.093s eval=111.713s total=136.101s
+dataset: PhonemeSpectraround:141 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:6.708152589904076 total:6.708153 base:0.282487 structure:0.343277 joint:0.234099 scale:5.848289 scale_local:2.372168 scale_global:3.476121 cca:25.523815 sdl:8.803871 proximal:0.000000 moon:0.000000
+[round 141] timing train=23.451s distribution=2.257s agg=0.087s eval=114.345s total=140.155s
+dataset: PhonemeSpectraround:142 server aggregation  testACC:0.20578586340590516 trainACC:1.0 avg_loss:6.952043830576102 total:6.952044 base:0.298295 structure:0.343157 joint:0.240424 scale:6.070167 scale_local:2.494209 scale_global:3.575958 cca:25.520589 sdl:8.795160 proximal:0.000000 moon:0.000000
+[round 142] timing train=25.167s distribution=2.023s agg=0.061s eval=110.492s total=137.753s
+dataset: PhonemeSpectraround:143 server aggregation  testACC:0.20876826722338204 trainACC:1.0 avg_loss:6.609929046562643 total:6.609929 base:0.273527 structure:0.342914 joint:0.228538 scale:5.764950 scale_local:2.325644 scale_global:3.439306 cca:25.519015 sdl:8.772354 proximal:0.000000 moon:0.000000
+[round 143] timing train=22.715s distribution=1.528s agg=0.093s eval=113.401s total=137.744s
+dataset: PhonemeSpectraround:144 server aggregation  testACC:0.20847002684163435 trainACC:1.0 avg_loss:6.779000673844028 total:6.779001 base:0.288931 structure:0.342174 joint:0.235641 scale:5.912255 scale_local:2.410045 scale_global:3.502210 cca:25.453608 sdl:8.763799 proximal:0.000000 moon:0.000000
+[round 144] timing train=22.067s distribution=2.369s agg=0.114s eval=103.049s total=127.608s
+dataset: PhonemeSpectraround:145 server aggregation  testACC:0.20876826722338204 trainACC:1.0 avg_loss:6.761667656438076 total:6.761668 base:0.285403 structure:0.342433 joint:0.232503 scale:5.901328 scale_local:2.409706 scale_global:3.491622 cca:25.513312 sdl:8.730035 proximal:0.000000 moon:0.000000
+[round 145] timing train=21.238s distribution=1.515s agg=0.089s eval=103.229s total=126.080s
+dataset: PhonemeSpectraround:146 server aggregation  testACC:0.20847002684163435 trainACC:1.0 avg_loss:6.7059845895632595 total:6.705985 base:0.283600 structure:0.341901 joint:0.232114 scale:5.848370 scale_local:2.374927 scale_global:3.473443 cca:25.509171 sdl:8.680950 proximal:0.000000 moon:0.000000
+[round 146] timing train=21.840s distribution=1.462s agg=0.087s eval=101.395s total=124.791s
+dataset: PhonemeSpectraround:147 server aggregation  testACC:0.20847002684163435 trainACC:1.0 avg_loss:6.693855031708457 total:6.693855 base:0.284264 structure:0.341790 joint:0.231322 scale:5.836479 scale_local:2.381291 scale_global:3.455188 cca:25.481687 sdl:8.697287 proximal:0.000000 moon:0.000000
+[round 147] timing train=24.098s distribution=1.500s agg=0.070s eval=104.314s total=129.991s
+dataset: PhonemeSpectraround:148 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:6.7294843911211455 total:6.729484 base:0.289823 structure:0.341643 joint:0.232381 scale:5.865637 scale_local:2.412014 scale_global:3.453623 cca:25.510957 sdl:8.653369 proximal:0.000000 moon:0.000000
+[round 148] timing train=27.109s distribution=1.528s agg=0.103s eval=101.791s total=130.553s
+dataset: PhonemeSpectraround:149 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:6.446976197872267 total:6.446976 base:0.263503 structure:0.341269 joint:0.222659 scale:5.619545 scale_local:2.263654 scale_global:3.355891 cca:25.524017 sdl:8.602931 proximal:0.000000 moon:0.000000
+[round 149] timing train=32.356s distribution=4.314s agg=0.243s eval=94.481s total=131.405s
+dataset: PhonemeSpectraround:150 server aggregation  testACC:0.2075753056963913 trainACC:1.0 avg_loss:6.68982576542821 total:6.689826 base:0.281977 structure:0.341347 joint:0.231105 scale:5.835396 scale_local:2.387229 scale_global:3.448167 cca:25.552483 sdl:8.582258 proximal:0.000000 moon:0.000000
+[round 150] timing train=27.728s distribution=3.281s agg=0.146s eval=93.236s total=124.400s
+dataset: PhonemeSpectraround:151 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:6.8534984073500596 total:6.853498 base:0.298597 structure:0.340997 joint:0.237186 scale:5.976718 scale_local:2.465259 scale_global:3.511459 cca:25.527240 sdl:8.572455 proximal:0.000000 moon:0.000000
+[round 151] timing train=19.365s distribution=2.481s agg=0.121s eval=102.516s total=124.491s
+dataset: PhonemeSpectraround:152 server aggregation  testACC:0.207873546078139 trainACC:1.0 avg_loss:6.815401779994786 total:6.815402 base:0.294685 structure:0.341159 joint:0.235086 scale:5.944471 scale_local:2.451347 scale_global:3.493124 cca:25.548379 sdl:8.567566 proximal:0.000000 moon:0.000000
+[round 152] timing train=22.126s distribution=1.482s agg=0.065s eval=95.964s total=119.645s
+dataset: PhonemeSpectraround:153 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:6.523845755751384 total:6.523846 base:0.271276 structure:0.340430 joint:0.225403 scale:5.686737 scale_local:2.310650 scale_global:3.376087 cca:25.491907 sdl:8.551098 proximal:0.000000 moon:0.000000
+[round 153] timing train=21.986s distribution=1.549s agg=0.133s eval=108.300s total=131.977s
+dataset: PhonemeSpectraround:154 server aggregation  testACC:0.20668058455114824 trainACC:1.0 avg_loss:6.656963367216482 total:6.656963 base:0.283711 structure:0.340479 joint:0.229453 scale:5.803321 scale_local:2.380367 scale_global:3.422954 cca:25.535855 sdl:8.512022 proximal:0.000000 moon:0.000000
+[round 154] timing train=22.042s distribution=1.488s agg=0.056s eval=108.118s total=131.713s
+dataset: PhonemeSpectraround:155 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:6.594229811506984 total:6.594230 base:0.278101 structure:0.340446 joint:0.227683 scale:5.748000 scale_local:2.345511 scale_global:3.402490 cca:25.546980 sdl:8.497634 proximal:0.000000 moon:0.000000
+[round 155] timing train=21.837s distribution=1.475s agg=0.051s eval=108.600s total=131.973s
+dataset: PhonemeSpectraround:156 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:6.492535995871492 total:6.492536 base:0.273410 structure:0.340315 joint:0.224889 scale:5.653922 scale_local:2.302355 scale_global:3.351567 cca:25.521029 sdl:8.510480 proximal:0.000000 moon:0.000000
+[round 156] timing train=22.859s distribution=1.470s agg=0.056s eval=103.963s total=128.388s
+dataset: PhonemeSpectraround:157 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:6.443255992092994 total:6.443256 base:0.267300 structure:0.339469 joint:0.222877 scale:5.613611 scale_local:2.268380 scale_global:3.345231 cca:25.488310 sdl:8.458556 proximal:0.000000 moon:0.000000
+[round 157] timing train=25.058s distribution=1.568s agg=0.086s eval=112.317s total=139.039s
+dataset: PhonemeSpectraround:158 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:6.541581602033972 total:6.541582 base:0.274099 structure:0.339825 joint:0.226019 scale:5.701639 scale_local:2.312790 scale_global:3.388849 cca:25.598997 sdl:8.383539 proximal:0.000000 moon:0.000000
+[round 158] timing train=21.586s distribution=2.237s agg=0.111s eval=105.408s total=129.375s
+dataset: PhonemeSpectraround:159 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:6.640293487345935 total:6.640293 base:0.280158 structure:0.339945 joint:0.227440 scale:5.792750 scale_local:2.372969 scale_global:3.419781 cca:25.612833 sdl:8.381688 proximal:0.000000 moon:0.000000
+[round 159] timing train=26.361s distribution=1.662s agg=0.089s eval=98.261s total=126.380s
+dataset: PhonemeSpectraround:160 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:6.598718527829638 total:6.598719 base:0.283765 structure:0.339758 joint:0.226653 scale:5.748542 scale_local:2.363309 scale_global:3.385233 cca:25.609013 sdl:8.366835 proximal:0.000000 moon:0.000000
+[round 160] timing train=32.103s distribution=2.644s agg=0.088s eval=109.283s total=144.126s
+dataset: PhonemeSpectraround:161 server aggregation  testACC:0.2072770653146436 trainACC:1.0 avg_loss:6.16886103980015 total:6.168861 base:0.248033 structure:0.339858 joint:0.212369 scale:5.368602 scale_local:2.143880 scale_global:3.224722 cca:25.618637 sdl:8.367155 proximal:0.000000 moon:0.000000
+[round 161] timing train=30.933s distribution=2.223s agg=0.071s eval=100.554s total=133.799s
+dataset: PhonemeSpectraround:162 server aggregation  testACC:0.20638234416940054 trainACC:1.0 avg_loss:6.559364290761834 total:6.559364 base:0.277297 structure:0.339312 joint:0.223567 scale:5.719189 scale_local:2.348923 scale_global:3.370266 cca:25.635013 sdl:8.296160 proximal:0.000000 moon:0.000000
+[round 162] timing train=32.118s distribution=3.932s agg=0.268s eval=113.311s total=149.636s
+dataset: PhonemeSpectraround:163 server aggregation  testACC:0.2069788249328959 trainACC:1.0 avg_loss:6.881551431758745 total:6.881551 base:0.298468 structure:0.339311 joint:0.235461 scale:6.008311 scale_local:2.494053 scale_global:3.514258 cca:25.607914 sdl:8.323196 proximal:0.000000 moon:0.000000
+[round 163] timing train=24.975s distribution=2.664s agg=0.081s eval=100.679s total=128.405s
+dataset: PhonemeSpectraround:164 server aggregation  testACC:0.207873546078139 trainACC:1.0 avg_loss:6.350784891968551 total:6.350785 base:0.262395 structure:0.338797 joint:0.218632 scale:5.530961 scale_local:2.241541 scale_global:3.289419 cca:25.595613 sdl:8.284115 proximal:0.000000 moon:0.000000
+[round 164] timing train=31.042s distribution=2.387s agg=0.256s eval=101.512s total=135.205s
+dataset: PhonemeSpectraround:165 server aggregation  testACC:0.20847002684163435 trainACC:1.0 avg_loss:6.299213076839518 total:6.299213 base:0.260562 structure:0.338584 joint:0.218670 scale:5.481397 scale_local:2.212215 scale_global:3.269181 cca:25.576856 sdl:8.281581 proximal:0.000000 moon:0.000000
+[round 165] timing train=27.304s distribution=3.307s agg=0.106s eval=105.273s total=135.998s
+dataset: PhonemeSpectraround:166 server aggregation  testACC:0.21025946913212049 trainACC:1.0 avg_loss:6.062123835681172 total:6.062124 base:0.242586 structure:0.338128 joint:0.208895 scale:5.272515 scale_local:2.108438 scale_global:3.164077 cca:25.612604 sdl:8.200217 proximal:0.000000 moon:0.000000
+[round 166] timing train=26.909s distribution=3.526s agg=0.134s eval=101.777s total=132.363s
+dataset: PhonemeSpectraround:167 server aggregation  testACC:0.20876826722338204 trainACC:1.0 avg_loss:5.914460701460936 total:5.914461 base:0.229161 structure:0.338021 joint:0.203104 scale:5.144174 scale_local:2.032902 scale_global:3.111272 cca:25.605304 sdl:8.196821 proximal:0.000000 moon:0.000000
+[round 167] timing train=24.521s distribution=2.252s agg=0.061s eval=107.547s total=134.387s
+dataset: PhonemeSpectraround:168 server aggregation  testACC:0.207873546078139 trainACC:1.0 avg_loss:6.4978405616333985 total:6.497841 base:0.268296 structure:0.337381 joint:0.220295 scale:5.671868 scale_local:2.316377 scale_global:3.355491 cca:25.648144 sdl:8.089974 proximal:0.000000 moon:0.000000
+[round 168] timing train=24.529s distribution=2.338s agg=0.080s eval=99.329s total=126.284s
+dataset: PhonemeSpectraround:169 server aggregation  testACC:0.207873546078139 trainACC:1.0 avg_loss:6.456299345629277 total:6.456299 base:0.268292 structure:0.337774 joint:0.218643 scale:5.631590 scale_local:2.310853 scale_global:3.320737 cca:25.637518 sdl:8.139893 proximal:0.000000 moon:0.000000
+[round 169] timing train=24.479s distribution=2.212s agg=0.050s eval=101.368s total=128.118s
+dataset: PhonemeSpectraround:170 server aggregation  testACC:0.20966298836862513 trainACC:1.0 avg_loss:6.494997474675365 total:6.494997 base:0.269782 structure:0.337779 joint:0.220123 scale:5.667314 scale_local:2.323420 scale_global:3.343895 cca:25.636288 sdl:8.141596 proximal:0.000000 moon:0.000000
+[round 170] timing train=24.831s distribution=2.191s agg=0.185s eval=103.713s total=130.925s
+dataset: PhonemeSpectraround:171 server aggregation  testACC:0.20906650760512974 trainACC:1.0 avg_loss:6.529731466052812 total:6.529731 base:0.275838 structure:0.337316 joint:0.223390 scale:5.693188 scale_local:2.335043 scale_global:3.358144 cca:25.630760 sdl:8.100804 proximal:0.000000 moon:0.000000
+[round 171] timing train=24.496s distribution=2.168s agg=0.057s eval=110.477s total=137.215s
+dataset: PhonemeSpectraround:172 server aggregation  testACC:0.20906650760512974 trainACC:1.0 avg_loss:6.35990189286969 total:6.359902 base:0.264812 structure:0.337779 joint:0.218867 scale:5.538444 scale_local:2.245266 scale_global:3.293178 cca:25.634533 sdl:8.143337 proximal:0.000000 moon:0.000000
+[round 172] timing train=25.420s distribution=2.675s agg=0.186s eval=112.319s total=140.611s
+dataset: PhonemeSpectraround:173 server aggregation  testACC:0.20876826722338204 trainACC:1.0 avg_loss:6.4667327448660545 total:6.466733 base:0.268253 structure:0.337820 joint:0.220452 scale:5.640209 scale_local:2.303038 scale_global:3.337171 cca:25.651524 sdl:8.130449 proximal:0.000000 moon:0.000000
+[round 173] timing train=27.099s distribution=2.295s agg=0.168s eval=109.344s total=138.913s
+dataset: PhonemeSpectraround:174 server aggregation  testACC:0.20906650760512974 trainACC:1.0 avg_loss:5.7992693398656705 total:5.799269 base:0.222845 structure:0.337594 joint:0.198988 scale:5.039843 scale_local:1.988828 scale_global:3.051015 cca:25.635335 sdl:8.124070 proximal:0.000000 moon:0.000000
+[round 174] timing train=25.695s distribution=2.116s agg=0.092s eval=112.396s total=140.306s
+dataset: PhonemeSpectraround:175 server aggregation  testACC:0.20936474798687743 trainACC:1.0 avg_loss:6.2006935236891785 total:6.200694 base:0.249246 structure:0.337069 joint:0.210850 scale:5.403528 scale_local:2.176822 scale_global:3.226706 cca:25.664706 sdl:8.042218 proximal:0.000000 moon:0.000000
+[round 175] timing train=26.209s distribution=2.600s agg=0.067s eval=111.831s total=140.719s
+dataset: PhonemeSpectraround:176 server aggregation  testACC:0.2099612287503728 trainACC:1.0 avg_loss:5.974807394931904 total:5.974807 base:0.234990 structure:0.337208 joint:0.201685 scale:5.200924 scale_local:2.081089 scale_global:3.119835 cca:25.667712 sdl:8.053112 proximal:0.000000 moon:0.000000
+[round 176] timing train=26.144s distribution=2.244s agg=0.088s eval=109.782s total=138.269s
+dataset: PhonemeSpectraround:177 server aggregation  testACC:0.21085594989561587 trainACC:1.0 avg_loss:6.404505822658884 total:6.404506 base:0.266468 structure:0.336532 joint:0.216995 scale:5.584511 scale_local:2.282539 scale_global:3.301972 cca:25.642815 sdl:8.010351 proximal:0.000000 moon:0.000000
+[round 177] timing train=24.171s distribution=2.223s agg=0.079s eval=108.556s total=135.037s
+dataset: PhonemeSpectraround:178 server aggregation  testACC:0.20936474798687743 trainACC:1.0 avg_loss:5.830231585526689 total:5.830232 base:0.220541 structure:0.336015 joint:0.194178 scale:5.079497 scale_local:2.012437 scale_global:3.067060 cca:25.643728 sdl:7.957758 proximal:0.000000 moon:0.000000
+[round 178] timing train=23.678s distribution=2.574s agg=0.070s eval=107.899s total=134.226s
+dataset: PhonemeSpectraround:179 server aggregation  testACC:0.20966298836862513 trainACC:1.0 avg_loss:6.137463103051337 total:6.137463 base:0.250809 structure:0.336110 joint:0.206378 scale:5.344167 scale_local:2.174318 scale_global:3.169849 cca:25.644403 sdl:7.966560 proximal:0.000000 moon:0.000000
+[round 179] timing train=24.949s distribution=1.502s agg=0.055s eval=104.987s total=131.498s
+dataset: PhonemeSpectraround:180 server aggregation  testACC:0.20906650760512974 trainACC:1.0 avg_loss:6.3224305631602356 total:6.322431 base:0.263533 structure:0.336251 joint:0.211404 scale:5.511242 scale_local:2.260683 scale_global:3.250559 cca:25.670396 sdl:7.954740 proximal:0.000000 moon:0.000000
+[round 180] timing train=25.511s distribution=1.515s agg=0.053s eval=106.560s total=133.653s
+dataset: PhonemeSpectraround:181 server aggregation  testACC:0.2099612287503728 trainACC:1.0 avg_loss:5.67235549867875 total:5.672355 base:0.219524 structure:0.335576 joint:0.190156 scale:4.927100 scale_local:1.958972 scale_global:2.968127 cca:25.623222 sdl:7.934363 proximal:0.000000 moon:0.000000
+[round 181] timing train=23.383s distribution=1.667s agg=0.139s eval=109.116s total=134.312s
+dataset: PhonemeSpectraround:182 server aggregation  testACC:0.21145243065911123 trainACC:1.0 avg_loss:6.024468064000359 total:6.024468 base:0.244758 structure:0.336012 joint:0.202844 scale:5.240854 scale_local:2.123724 scale_global:3.117130 cca:25.657487 sdl:7.943689 proximal:0.000000 moon:0.000000
+[round 182] timing train=23.102s distribution=1.663s agg=0.108s eval=103.264s total=128.145s
+dataset: PhonemeSpectraround:183 server aggregation  testACC:0.21234715180435432 trainACC:1.0 avg_loss:6.607966527632888 total:6.607967 base:0.280321 structure:0.336201 joint:0.220325 scale:5.771120 scale_local:2.395037 scale_global:3.376083 cca:25.691807 sdl:7.928274 proximal:0.000000 moon:0.000000
+[round 183] timing train=26.450s distribution=2.286s agg=0.108s eval=100.736s total=129.585s
+dataset: PhonemeSpectraround:184 server aggregation  testACC:0.2099612287503728 trainACC:1.0 avg_loss:6.704179298210139 total:6.704179 base:0.289839 structure:0.336491 joint:0.225605 scale:5.852243 scale_local:2.443566 scale_global:3.408677 cca:25.672550 sdl:7.976590 proximal:0.000000 moon:0.000000
+[round 184] timing train=26.858s distribution=3.203s agg=0.225s eval=108.205s total=138.500s
+dataset: PhonemeSpectraround:185 server aggregation  testACC:0.20966298836862513 trainACC:1.0 avg_loss:6.24088838746712 total:6.240888 base:0.253622 structure:0.335947 joint:0.210759 scale:5.440561 scale_local:2.216704 scale_global:3.223857 cca:25.638658 sdl:7.956021 proximal:0.000000 moon:0.000000
+[round 185] timing train=30.643s distribution=2.436s agg=0.068s eval=101.819s total=134.984s
+dataset: PhonemeSpectraround:186 server aggregation  testACC:0.20876826722338204 trainACC:1.0 avg_loss:6.10526869029067 total:6.105269 base:0.245832 structure:0.335878 joint:0.205041 scale:5.318517 scale_local:2.152322 scale_global:3.166195 cca:25.651337 sdl:7.936492 proximal:0.000000 moon:0.000000
+[round 186] timing train=27.611s distribution=2.271s agg=0.068s eval=98.549s total=128.505s
+dataset: PhonemeSpectraround:187 server aggregation  testACC:0.21025946913212049 trainACC:1.0 avg_loss:6.050626064341553 total:6.050626 base:0.244496 structure:0.335315 joint:0.204116 scale:5.266698 scale_local:2.126433 scale_global:3.140265 cca:25.619779 sdl:7.911727 proximal:0.000000 moon:0.000000
+[round 187] timing train=25.944s distribution=2.338s agg=0.086s eval=97.585s total=125.960s
+dataset: PhonemeSpectraround:188 server aggregation  testACC:0.21145243065911123 trainACC:1.0 avg_loss:5.896443998191893 total:5.896444 base:0.232626 structure:0.335256 joint:0.198184 scale:5.130378 scale_local:2.055667 scale_global:3.074711 cca:25.640221 sdl:7.885417 proximal:0.000000 moon:0.000000
+[round 188] timing train=26.111s distribution=2.290s agg=0.060s eval=110.521s total=138.990s
+dataset: PhonemeSpectraround:189 server aggregation  testACC:0.21175067104085893 trainACC:1.0 avg_loss:5.851212196972071 total:5.851212 base:0.229335 structure:0.334744 joint:0.195803 scale:5.091330 scale_local:2.044608 scale_global:3.046722 cca:25.678210 sdl:7.796235 proximal:0.000000 moon:0.000000
+[round 189] timing train=28.669s distribution=3.340s agg=0.153s eval=107.644s total=139.812s
+dataset: PhonemeSpectraround:190 server aggregation  testACC:0.2099612287503728 trainACC:1.0 avg_loss:5.947149034885744 total:5.947149 base:0.238571 structure:0.334725 joint:0.198979 scale:5.174873 scale_local:2.094218 scale_global:3.080655 cca:25.675545 sdl:7.797003 proximal:0.000000 moon:0.000000
+[round 190] timing train=24.147s distribution=2.131s agg=0.213s eval=96.345s total=122.845s
+dataset: PhonemeSpectraround:191 server aggregation  testACC:0.20936474798687743 trainACC:1.0 avg_loss:6.332779929273636 total:6.332780 base:0.263887 structure:0.334952 joint:0.211302 scale:5.522639 scale_local:2.276107 scale_global:3.246532 cca:25.672542 sdl:7.822677 proximal:0.000000 moon:0.000000
+[round 191] timing train=25.305s distribution=2.322s agg=0.053s eval=106.284s total=133.970s
+dataset: PhonemeSpectraround:192 server aggregation  testACC:0.20817178645988668 trainACC:1.0 avg_loss:5.990964120143779 total:5.990964 base:0.238560 structure:0.334944 joint:0.200100 scale:5.217360 scale_local:2.111654 scale_global:3.105705 cca:25.664763 sdl:7.829668 proximal:0.000000 moon:0.000000
+[round 192] timing train=24.572s distribution=1.540s agg=0.072s eval=100.174s total=126.393s
+dataset: PhonemeSpectraround:193 server aggregation  testACC:0.20936474798687743 trainACC:1.0 avg_loss:5.678741934715358 total:5.678742 base:0.220809 structure:0.334054 joint:0.191294 scale:4.932585 scale_local:1.963546 scale_global:2.969039 cca:25.605193 sdl:7.800240 proximal:0.000000 moon:0.000000
+[round 193] timing train=20.050s distribution=1.477s agg=0.052s eval=97.219s total=118.804s
+dataset: PhonemeSpectraround:194 server aggregation  testACC:0.20936474798687743 trainACC:1.0 avg_loss:5.848320248235756 total:5.848320 base:0.231533 structure:0.334241 joint:0.194487 scale:5.088059 scale_local:2.053905 scale_global:3.034154 cca:25.646968 sdl:7.777122 proximal:0.000000 moon:0.000000
+[round 194] timing train=18.975s distribution=1.469s agg=0.047s eval=93.004s total=113.518s
+dataset: PhonemeSpectraround:195 server aggregation  testACC:0.21025946913212049 trainACC:1.0 avg_loss:5.92460056570417 total:5.924601 base:0.232878 structure:0.334195 joint:0.195773 scale:5.161754 scale_local:2.087834 scale_global:3.073921 cca:25.652830 sdl:7.766702 proximal:0.000000 moon:0.000000
+[round 195] timing train=20.167s distribution=1.420s agg=0.046s eval=90.945s total=112.634s
+dataset: PhonemeSpectraround:196 server aggregation  testACC:0.20876826722338204 trainACC:1.0 avg_loss:6.350711525760926 total:6.350712 base:0.264269 structure:0.333659 joint:0.211585 scale:5.541198 scale_local:2.282453 scale_global:3.258746 cca:25.659351 sdl:7.706525 proximal:0.000000 moon:0.000000
+[round 196] timing train=20.255s distribution=1.452s agg=0.063s eval=83.073s total=104.865s
+dataset: PhonemeSpectraround:197 server aggregation  testACC:0.2099612287503728 trainACC:1.0 avg_loss:5.57625965045766 total:5.576260 base:0.214159 structure:0.333507 joint:0.184549 scale:4.844045 scale_local:1.936708 scale_global:2.907336 cca:25.637868 sdl:7.712857 proximal:0.000000 moon:0.000000
+[round 197] timing train=17.566s distribution=1.467s agg=0.048s eval=91.452s total=110.555s
+dataset: PhonemeSpectraround:198 server aggregation  testACC:0.20847002684163435 trainACC:1.0 avg_loss:5.715427121331949 total:5.715427 base:0.223982 structure:0.332725 joint:0.189939 scale:4.968782 scale_local:1.998481 scale_global:2.970301 cca:25.620768 sdl:7.651726 proximal:0.000000 moon:0.000000
+[round 198] timing train=19.632s distribution=1.503s agg=0.060s eval=83.345s total=104.561s
+dataset: PhonemeSpectraround:199 server aggregation  testACC:0.20966298836862513 trainACC:1.0 avg_loss:6.22324643783044 total:6.223246 base:0.258852 structure:0.333098 joint:0.205256 scale:5.426040 scale_local:2.246110 scale_global:3.179930 cca:25.637070 sdl:7.672706 proximal:0.000000 moon:0.000000
+[round 199] timing train=20.394s distribution=1.504s agg=0.122s eval=84.382s total=106.422s

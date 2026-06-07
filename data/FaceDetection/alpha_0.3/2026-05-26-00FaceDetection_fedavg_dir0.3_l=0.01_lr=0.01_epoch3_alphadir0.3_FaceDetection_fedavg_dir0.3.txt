@@ -1,0 +1,90 @@
+Details of Training:-----------------------
+dataset: FaceDetection
+local train epochs: 3
+round num: 200
+batch size: 32
+lr: 0.01
+use_client_selection: False
+server_device: cuda:0
+client_workers: 3
+client_worker_devices: ['cuda:0', 'cuda:0', 'cuda:0']
+client_groups: [[0, 3, 6, 9], [1, 4, 7], [2, 5, 8]]
+-------------------------------------------
+FaceDetection_fedavg_dir0.3
+PID: 2440677
+PPID: 1659864
+argv: FedCSL_All.py -dataset FaceDetection --config config/configAVG.yml --dirichlet-alpha 0.3 --seed 42 --description FaceDetection_fedavg_dir0.3 --num-client 10 --server-gpu 0 --client-gpus 0 --eval-protocol svm
+effective_dataset: FaceDetection
+effective_dirichlet_alpha: 0.3
+effective_eval_every_n_rounds: 1
+ablation:  UseACF: false  UseDistribution: false  UseJointCL: false  UseJointKD: false  UseMTLHomo: false  UseProdictor: false  UseScaleCL: false  UseScaleKD: falsealgo: fedavgdataset: FaceDetectiondescription: FaceDetection_fedavg_dir0.3evaluation:  linear_probe:    batch_size: 256    eval_interval: 1    lr: 0.001    max_epoch: 200    seed: 42    wd: 0.0001  protocol: svm  svm_c_grid:  - 0.0001  - 0.001  - 0.01  - 0.1  - 1.0  - 10.0  - 100.0  - 1000.0  - 10000.0federated:  auto_resume: false  checkpoint_every: 0  client_gpus:  - 0  client_selection_method: uniform  client_selection_ratio: 0.6  client_workers: 3  dirichlet_alpha: 0.3  ema_alpha: 0.3  min_selection_prob: 0.01  numClient: 10  numEpoch: 3  numRound: 200  server_gpu: 0  use_client_selection: falselogPath: ./result/model:  name: ''  params:    batch_size: 32    beta: 0.4    dist_measure: mix    gamma: 0.5    l: 0.01    lr: 0.01    ls: 1    wd: 0
+dataset: FaceDetectionround:0 server aggregation  testACC:0.5556186152099887 trainACC:1.0 avg_loss:1.0168031459152944 total:1.016803 base:0.424534 structure:0.592269 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:29.927202 sdl:29.299714 proximal:0.000000 moon:0.000000
+[round 0] timing train=520.156s distribution=52.621s agg=1.161s eval=351.177s total=925.142s
+dataset: FaceDetectionround:1 server aggregation  testACC:0.5635641316685585 trainACC:1.0 avg_loss:0.6938398188782631 total:0.693840 base:0.210902 structure:0.482938 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:27.860876 sdl:20.432878 proximal:0.000000 moon:0.000000
+[round 1] timing train=524.334s distribution=52.430s agg=0.737s eval=372.601s total=950.341s
+dataset: FaceDetectionround:2 server aggregation  testACC:0.561577752553916 trainACC:1.0 avg_loss:0.5772988055475305 total:0.577299 base:0.151597 structure:0.425702 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:26.199307 sdl:16.370899 proximal:0.000000 moon:0.000000
+[round 2] timing train=532.670s distribution=47.523s agg=0.458s eval=341.440s total=922.242s
+dataset: FaceDetectionround:3 server aggregation  testACC:0.568955732122588 trainACC:1.0 avg_loss:0.5115267465173398 total:0.511527 base:0.124440 structure:0.387087 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:24.745528 sdl:13.963132 proximal:0.000000 moon:0.000000
+[round 3] timing train=500.910s distribution=35.132s agg=0.521s eval=351.369s total=888.108s
+dataset: FaceDetectionround:4 server aggregation  testACC:0.5734960272417707 trainACC:1.0 avg_loss:0.46169497987920993 total:0.461695 base:0.103690 structure:0.358005 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:23.428370 sdl:12.372089 proximal:0.000000 moon:0.000000
+[round 4] timing train=441.527s distribution=34.598s agg=0.469s eval=384.604s total=861.389s
+dataset: FaceDetectionround:5 server aggregation  testACC:0.5587400681044268 trainACC:1.0 avg_loss:0.4301923601083976 total:0.430192 base:0.094728 structure:0.335465 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:22.325202 sdl:11.221281 proximal:0.000000 moon:0.000000
+[round 5] timing train=414.939s distribution=49.251s agg=0.991s eval=371.350s total=836.645s
+dataset: FaceDetectionround:6 server aggregation  testACC:0.5524971623155505 trainACC:1.0 avg_loss:0.39955295592823226 total:0.399553 base:0.081686 structure:0.317867 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:21.381125 sdl:10.405608 proximal:0.000000 moon:0.000000
+[round 6] timing train=444.904s distribution=36.238s agg=0.443s eval=381.539s total=863.218s
+dataset: FaceDetectionround:7 server aggregation  testACC:0.55788876276958 trainACC:1.0 avg_loss:0.3870906612123703 total:0.387091 base:0.082860 structure:0.304231 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:20.587604 sdl:9.835483 proximal:0.000000 moon:0.000000
+[round 7] timing train=382.006s distribution=39.705s agg=0.725s eval=377.692s total=800.142s
+dataset: FaceDetectionround:8 server aggregation  testACC:0.5527809307604994 trainACC:1.0 avg_loss:0.3655529186959252 total:0.365553 base:0.073977 structure:0.291576 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:19.831531 sdl:9.326055 proximal:0.000000 moon:0.000000
+[round 8] timing train=261.762s distribution=40.928s agg=1.562s eval=381.388s total=685.694s
+dataset: FaceDetectionround:9 server aggregation  testACC:0.5524971623155505 trainACC:1.0 avg_loss:0.3501743847885495 total:0.350174 base:0.068491 structure:0.281683 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:19.227289 sdl:8.941044 proximal:0.000000 moon:0.000000
+[round 9] timing train=186.738s distribution=10.917s agg=0.409s eval=326.056s total=524.145s
+dataset: FaceDetectionround:10 server aggregation  testACC:0.5513620885357549 trainACC:1.0 avg_loss:0.3395972037548618 total:0.339597 base:0.066842 structure:0.272755 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:18.657695 sdl:8.617813 proximal:0.000000 moon:0.000000
+[round 10] timing train=341.202s distribution=21.277s agg=1.238s eval=347.413s total=711.186s
+dataset: FaceDetectionround:11 server aggregation  testACC:0.550794551645857 trainACC:1.0 avg_loss:0.32742947842656633 total:0.327429 base:0.062362 structure:0.265067 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:18.185039 sdl:8.321665 proximal:0.000000 moon:0.000000
+[round 11] timing train=390.527s distribution=30.987s agg=1.471s eval=357.249s total=780.251s
+dataset: FaceDetectionround:12 server aggregation  testACC:0.5485244040862656 trainACC:1.0 avg_loss:0.32140837908298525 total:0.321408 base:0.063446 structure:0.257962 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:17.725431 sdl:8.070796 proximal:0.000000 moon:0.000000
+[round 12] timing train=366.199s distribution=36.341s agg=1.003s eval=377.552s total=781.121s
+dataset: FaceDetectionround:13 server aggregation  testACC:0.5428490351872872 trainACC:1.0 avg_loss:0.30486114242208057 total:0.304861 base:0.055009 structure:0.249852 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:17.145666 sdl:7.839502 proximal:0.000000 moon:0.000000
+[round 13] timing train=275.015s distribution=37.565s agg=1.010s eval=382.206s total=695.828s
+dataset: FaceDetectionround:14 server aggregation  testACC:0.5490919409761634 trainACC:1.0 avg_loss:0.30350294617173496 total:0.303503 base:0.059193 structure:0.244310 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:16.789198 sdl:7.641807 proximal:0.000000 moon:0.000000
+[round 14] timing train=146.840s distribution=23.096s agg=0.766s eval=358.414s total=529.131s
+dataset: FaceDetectionround:15 server aggregation  testACC:0.5445516458569807 trainACC:1.0 avg_loss:0.291483238283347 total:0.291483 base:0.053260 structure:0.238223 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:16.380239 sdl:7.442038 proximal:0.000000 moon:0.000000
+[round 15] timing train=299.193s distribution=21.823s agg=0.535s eval=351.710s total=673.280s
+dataset: FaceDetectionround:16 server aggregation  testACC:0.5462542565266743 trainACC:1.0 avg_loss:0.2867109386769666 total:0.286711 base:0.054545 structure:0.232166 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:15.948468 sdl:7.268175 proximal:0.000000 moon:0.000000
+[round 16] timing train=364.104s distribution=29.728s agg=1.337s eval=365.302s total=760.568s
+dataset: FaceDetectionround:17 server aggregation  testACC:0.5394438138479001 trainACC:1.0 avg_loss:0.27650236768724656 total:0.276502 base:0.050189 structure:0.226313 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:15.514610 sdl:7.116726 proximal:0.000000 moon:0.000000
+[round 17] timing train=311.556s distribution=26.954s agg=0.268s eval=384.321s total=723.129s
+dataset: FaceDetectionround:18 server aggregation  testACC:0.5414301929625426 trainACC:1.0 avg_loss:0.26893795152257227 total:0.268938 base:0.048156 structure:0.220782 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:15.107484 sdl:6.970719 proximal:0.000000 moon:0.000000
+[round 18] timing train=280.862s distribution=36.119s agg=0.763s eval=382.079s total=699.889s
+dataset: FaceDetectionround:19 server aggregation  testACC:0.5445516458569807 trainACC:1.0 avg_loss:0.26239038501088935 total:0.262390 base:0.046397 structure:0.215993 joint:0.000000 scale:0.000000 scale_local:0.000000 scale_global:0.000000 cca:14.776050 sdl:6.823246 proximal:0.000000 moon:0.000000
+[round 19] timing train=189.029s distribution=26.711s agg=0.216s eval=361.891s total=577.870s
+
+[ERROR] Unhandled exception -----------------------
+time: 2026-05-26 04:33:39
+type: OutOfMemoryError
+message: CUDA out of memory. Tried to allocate 228.00 MiB. GPU 0 has a total capacity of 23.69 GiB of which 105.00 MiB is free. Process 2440672 has 4.01 GiB memory in use. Including non-PyTorch memory, this process has 2.70 GiB memory in use. Process 2440682 has 4.45 GiB memory in use. Process 2440667 has 3.96 GiB memory in use. Process 2440687 has 3.87 GiB memory in use. Process 2440693 has 4.57 GiB memory in use. Of the allocated memory 1.59 GiB is allocated by PyTorch, and 786.14 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+Traceback (most recent call last):
+  File "FedCSL_All.py", line 1889, in <module>
+    train(dataset=args.dataset, seed=args.seed)
+  File "FedCSL_All.py", line 1637, in train
+    for result in future.result():
+  File "/mnt/data/user_liangzhiyu/envs/fedcsl/lib/python3.8/concurrent/futures/_base.py", line 437, in result
+    return self.__get_result()
+  File "/mnt/data/user_liangzhiyu/envs/fedcsl/lib/python3.8/concurrent/futures/_base.py", line 389, in __get_result
+    raise self._exception
+  File "/mnt/data/user_liangzhiyu/envs/fedcsl/lib/python3.8/concurrent/futures/thread.py", line 57, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "FedCSL_All.py", line 777, in _train_client_worker
+    losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size,
+  File "/data/user_lixiongfei/CSL-main/train.py", line 1026, in train
+    current_loss_ce, C_accu_q, c_normalising_factor_q, C_accu_k, c_normalising_factor_k = self.update_CL(x, C_accu_q, c_normalising_factor_q, C_accu_k,
+  File "/data/user_lixiongfei/CSL-main/train.py", line 883, in update_CL
+    loss.backward()
+  File "/home/liangzhiyu/.local/lib/python3.8/site-packages/torch/_tensor.py", line 521, in backward
+    torch.autograd.backward(
+  File "/home/liangzhiyu/.local/lib/python3.8/site-packages/torch/autograd/__init__.py", line 289, in backward
+    _engine_run_backward(
+  File "/home/liangzhiyu/.local/lib/python3.8/site-packages/torch/autograd/graph.py", line 769, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 228.00 MiB. GPU 0 has a total capacity of 23.69 GiB of which 105.00 MiB is free. Process 2440672 has 4.01 GiB memory in use. Including non-PyTorch memory, this process has 2.70 GiB memory in use. Process 2440682 has 4.45 GiB memory in use. Process 2440667 has 3.96 GiB memory in use. Process 2440687 has 3.87 GiB memory in use. Process 2440693 has 4.57 GiB memory in use. Of the allocated memory 1.59 GiB is allocated by PyTorch, and 786.14 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+-------------------------------------------

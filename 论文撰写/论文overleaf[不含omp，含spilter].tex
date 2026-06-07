@@ -71,9 +71,9 @@
 \begin{abstract}
 多变量时间序列广泛存在于人体活动识别、工业监测、医疗诊断与设备运维等场景中。这类数据通常天然分散在不同终端、机构或边缘节点，既难以集中汇聚，又普遍存在标签稀缺、分布异构和隐私敏感等问题。传统集中式时间序列表征学习方法在拥有完整数据时能够取得较好性能，但在联邦环境下往往面临客户端漂移严重、跨客户端表示不一致以及训练效率受限等挑战。现有联邦时间序列方法多侧重监督分类、参数平均或系统调度，而对可解释的多尺度 shapelet 子模型构造、聚合与效率分析仍然不足。
 
-针对上述问题，本文提出一种面向非独立同分布多变量时间序列的联邦 shapelet 学习框架 FedCSL-Spilter。该方法以 TimeCSL/CSL 的多尺度 shapelet 表征学习思想为基础，在联邦训练中引入三类关键机制。首先，在表示学习层面，本文在本地实例级对比学习目标之上，引入局部--全局联合对比学习与联合知识蒸馏机制，使客户端模型在保留本地适应性的同时，与全局语义空间保持一致。其次，在尺度组合层面，本文设计 Spilter 自适应尺度拼接机制：每个客户端根据本地数据的周期/频谱特征，自主从 $R$ 个候选尺度中选出 $m$ 个对本节点最有价值的尺度（其中 $b$ 个为覆盖短/长周期的基础尺度，$a=m-b$ 个为依据尺度参数量、滑窗计算量与周期效用综合排序的效率感知补充尺度），随后将这 $m$ 个尺度的 shapelet 特征在表示维度上拼接组合为一个本地子模型进行端到端训练；客户端仅上传被训练尺度的参数，服务器按尺度粒度完成聚合。再次，在多尺度建模层面，本文结合 STFT 与 ACF 构造周期感知的尺度权重，并将该统计信号同时用于损失加权和本地尺度选择决策。
+针对上述问题，本文提出一种面向非独立同分布多变量时间序列的联邦 shapelet 学习框架 FedCSL-Spilter。该方法以 TimeCSL/CSL 的多尺度 shapelet 表征学习思想为基础，在联邦训练中引入三类关键机制。首先，在表示学习层面，本文在本地实例级对比学习目标之上，引入局部--全局联合对比学习与联合知识蒸馏机制，使客户端模型在保留本地适应性的同时，与全局语义空间保持一致。其次，在尺度组合层面，本文设计 Spilter 自适应尺度拼接机制：每个客户端基于本地数据的 STFT/ACF 周期感知评分，从 $R$ 个候选尺度中\textbf{按分数降序选取 top-$m$} 个尺度，将这 $m$ 个尺度的 shapelet 特征在表示维度上拼接组合为一个本地子模型进行端到端训练；客户端仅上传被训练尺度的参数，服务器按尺度粒度完成聚合。再次，在多尺度建模层面，本文结合 STFT 与 ACF 构造周期感知的尺度权重，并将该统计信号同时用于损失加权和本地 top-$m$ 尺度选择。
 
-本文进一步从优化与系统角度分析了所提方法的合理性。我们指出，多尺度 shapelet 的参数量与计算量随着尺度长度增长而显著变化，因此不加区分地激活所有尺度或随机选择尺度都会造成训练预算浪费；基于本地数据特征自适应拼接尺度子模型能够在保持表示能力的同时降低通信和计算开销。实验部分基于 UEA 多变量时间序列分类数据集以及若干扩展数据集进行评估，并从总体性能、消融实验、非 IID 强度、收敛趋势和可解释性分析等多个方面验证方法有效性。结果表明，FedCSL-Spilter 在下游分类性能、表示稳定性和系统效率方面均优于多种联邦表示学习基线与异构模型基线。
+本文进一步从优化与系统角度分析了所提方法的合理性。我们指出，多尺度 shapelet 的参数量与计算量随着尺度长度增长而显著变化，因此不加区分地激活所有尺度或随机选择尺度都会造成训练预算浪费；基于本地数据特征自适应拼接尺度子模型能够在保持表示能力的同时降低通信和计算开销。实验在 HAR、FaceDetection、LSST、Epilepsy 与 SleepEDF 五个多变量时间序列分类数据集上进行，并从总体性能、消融实验、非 IID 强度、收敛趋势和可解释性分析等多个方面验证方法有效性。结果表明，FedCSL-Spilter 在下游分类性能、表示稳定性和系统效率方面均优于多种联邦表示学习基线与异构模型基线。
 \end{abstract}
 
 \noindent\textbf{关键词：} 联邦学习；多变量时间序列；Shapelet；多尺度拼接；自适应尺度选择；对比学习；知识蒸馏
@@ -90,7 +90,7 @@
 
 已有研究从不同角度探讨了异构联邦模型如何适应系统资源。HeteroFL 通过宽度裁剪将同一全局模型转化为不同宽度的本地子模型\cite{heterofl}；FjORD 利用 ordered dropout 提取嵌套子模型，并结合自蒸馏提升训练稳定性\cite{fjord}；DepthFL 通过深度裁剪缓解宽度裁剪在聚合时的参数不匹配问题\cite{depthfl}；ScaleFL 同时在宽度与深度两个方向上做资源自适应裁剪\cite{scalefl}；InclusiveFL 和 AdaptiveFL 强调在强资源异构环境下不能放弃弱设备，而要通过大小模型协同和知识蒸馏共享信息\cite{inclusivefl,adaptivefl}。FlexFL 则把 APoZ-guided flexible pruning、adaptive local pruning 与 self-KD 结合起来，在不确定场景下构造更合适的异构子模型\cite{flexfl}。这些工作表明，模型构造和结构裁剪本身就是联邦效率的关键变量，但它们大多围绕通用 CNN/Transformer 展开，尚未显式考虑多尺度 shapelet 的尺度成本差异与周期效用差异。
 
-基于此，本文提出一种面向非 IID 多变量时间序列的联邦 shapelet 学习与 Spilter 自适应尺度拼接框架 FedCSL-Spilter。本文的核心思想是：以 TimeCSL/CSL 的多尺度 shapelet 对比学习框架为骨干，在联邦环境下同时处理”如何学习可解释表示”和”如何按本地数据特征自适应拼接尺度子模型”两个关键问题。具体而言，本文首先保留本地实例对比学习，并引入局部--全局联合对比学习与联合知识蒸馏，使客户端模型在保留本地适应性的同时，与全局语义空间保持一致。随后，本文围绕 Spilter 设计自适应尺度拼接机制：每个客户端根据本地数据的 STFT/ACF 周期特征，自主确定 $b$ 个基础尺度（分别覆盖短/长周期模式），再依据尺度参数量、滑窗计算量和当前周期效用综合评分，自主选出 $a=m-b$ 个补充尺度；客户端将这 $m$ 个尺度的 shapelet 特征在表示维度上拼接（stitch）为一个本地子模型进行端到端训练。由于各客户端只训练和上传被选中尺度的参数，模型更新不再是全量传输，而是只围绕各节点自主激活的尺度流动，服务器按尺度粒度聚合全局参数。为了让模型更好地适应不同数据集的频谱与周期结构，本文还基于 STFT 和 ACF 设计周期感知加权机制，对不同 shapelet 尺度进行动态调节，并把该统计信号同时用于损失加权和本地尺度选择。
+基于此，本文提出一种面向非 IID 多变量时间序列的联邦 shapelet 学习与 Spilter 自适应尺度拼接框架 FedCSL-Spilter。本文的核心思想是：以 TimeCSL/CSL 的多尺度 shapelet 对比学习框架为骨干，在联邦环境下同时处理”如何学习可解释表示”和”如何按本地数据特征自适应拼接尺度子模型”两个关键问题。具体而言，本文首先保留本地实例对比学习，并引入局部--全局联合对比学习与联合知识蒸馏，使客户端模型在保留本地适应性的同时，与全局语义空间保持一致。随后，本文围绕 Spilter 设计\textbf{本地分布感知 top-$m$} 尺度拼接机制：每个客户端在训练开始前，基于本地数据的 STFT/ACF 周期评分从 $R$ 个候选尺度中选取分数最高的 $m$ 个尺度，将其 shapelet 特征在表示维度上拼接（stitch）为一个本地子模型进行端到端训练。由于各客户端只训练和上传被选中尺度的参数，模型更新不再是全量传输，而是只围绕各节点自主激活的尺度流动，服务器按尺度粒度聚合全局参数。为了让模型更好地适应不同数据集的频谱与周期结构，本文还基于 STFT 和 ACF 设计周期感知加权机制，对不同 shapelet 尺度进行动态调节，并把该统计信号同时用于损失加权和本地 top-$m$ 选择。
 
 综上，本文试图回答以下几个问题：第一，如何将可解释的 shapelet 表征学习扩展到联邦非 IID 环境；第二，如何让各客户端根据本地数据特征自主拼接尺度子模型，而非依赖服务器统一分发；第三，如何通过局部--全局多尺度知识对齐提升全局表示空间的一致性；第四，如何从理论与实验两个层面解释周期感知加权、自适应尺度拼接与分片聚合的有效性。
 
@@ -99,8 +99,8 @@
     \item 提出一种面向联邦多变量时间序列的 shapelet 表征学习与 Spilter 自适应尺度拼接一体化框架，在保留 TimeCSL/CSL 可解释性的基础上，实现联邦环境下的协同表征学习。
     \item 设计局部--全局 joint CL/KD 与 multi-scale CL/KD 机制，通过特征层面的软对齐抑制非 IID 场景下的客户端漂移，并增强不同尺度子空间的一致性。
     \item 引入基于 STFT 与 ACF 的周期感知多尺度权重机制，使 shapelet 学习能够根据不同数据的主导周期结构进行自适应调整；并将该周期信号作为客户端自主选择尺度、拼接子模型的决策依据。
-    \item 在尺度组合层面，提出客户端依据本地周期效用、尺度参数量和滑窗计算量自主拼接子模型的机制，并与随机选择、固定核心尺度和全尺度训练等策略进行比较。
-    \item 从优化与系统效率视角给出方法合理性的理论解释，并在多类时间序列数据集上通过总体性能、消融实验、收敛分析和可解释性实验验证所提方法的有效性。
+    \item 在尺度组合层面，提出\textbf{纯本地分布感知 top-$m$} 的 Spilter 尺度拼接机制：各客户端仅依据 STFT/ACF 周期评分选取 top-$m$ 尺度并拼接子模型，与随机 top-$m$、固定尺度及全尺度 FedCSL 等策略进行比较。
+    \item 从优化与系统效率视角给出方法合理性的理论解释，并在 HAR、FaceDetection、LSST、Epilepsy 与 SleepEDF 数据集上通过总体性能、消融实验、收敛分析和可解释性实验验证所提方法的有效性。
 \end{enumerate}
 
 \section{相关工作}
@@ -125,7 +125,7 @@
 
 异构模型联邦通常从同一个全局模型中派生多个子模型。HeteroFL 通过按宽度裁剪通道数得到不同复杂度的子模型\cite{heterofl}；DepthFL 沿深度方向构造不同层数的子网络\cite{depthfl}；FjORD 使用 ordered dropout 得到嵌套子模型，从而让不同容量的客户端共享一部分有序参数\cite{fjord}；ScaleFL 同时考虑宽度与深度比例，使子模型能更细致地匹配客户端资源\cite{scalefl}；InclusiveFL 与 AdaptiveFL 则从弱设备参与和资源约束角度强调大模型、小模型之间的协同训练与蒸馏\cite{inclusivefl,adaptivefl}。FlexFL 进一步利用 APoZ 估计层内神经元冗余，并让设备根据当前资源自适应裁剪收到的模型，同时通过 self-KD 改善大模型性能\cite{flexfl}。
 
-上述工作说明，联邦系统效率不只取决于客户端是否参与，也取决于子模型的结构粒度和资源匹配程度。与 CNN 中”通道/层”的裁剪不同，FedCSL 的天然结构单元是 shapelet 尺度：每个尺度对应一组 shapelets 及其匹配算子，不同尺度具有不同长度、不同滑窗次数和不同参数规模。更重要的是，不同客户端因本地数据的周期/频谱结构不同，对不同尺度的需求天然存在差异。因此，本文将异构模型构造具体化为\textbf{客户端自主尺度拼接}：各客户端不再被动接收服务器指派的统一模型或固定子模型，而是根据本地数据的周期特征和自身资源约束，自主从 $R$ 个候选尺度中选出 $m$ 个尺度，将其 shapelet 特征在表示维度上拼接（stitch）为一个本地子模型进行训练，仅上传被训练尺度的参数。
+上述工作说明，联邦系统效率不只取决于客户端是否参与，也取决于子模型的结构粒度能否与设备资源相匹配。与 CNN 中”通道/层”的裁剪不同，FedCSL 的天然结构单元是 shapelet 尺度：每个尺度对应一组 shapelets 及其匹配算子。更重要的是，不同客户端因本地数据的周期/频谱结构不同，对不同尺度的需求天然存在差异。因此，本文将异构模型构造具体化为\textbf{客户端自主尺度拼接}：各客户端不再被动接收服务器指派的统一全尺度模型，而是\textbf{仅依据本地周期感知评分}从 $R$ 个候选尺度中选取 top-$m$ 个尺度，将其 shapelet 特征在表示维度上拼接（stitch）为一个本地子模型进行训练，仅上传被训练尺度的参数；设备显存/算力差异则通过为不同客户端配置不同的 $m$ 来体现（见 §\ref{sec:resource-hetero}），而不参与尺度排序本身。
 
 \section{问题定义与总体框架}
 
@@ -159,7 +159,7 @@ z = f(x;w)\in \mathbb{R}^{d}.
 FedCSL-Spilter 的总体流程如图~\ref{fig:framework} 所示，可概括为以下步骤：
 \begin{enumerate}[leftmargin=2.5em]
     \item 服务器初始化全局 shapelet 编码器，各客户端基于本地数据预计算周期感知尺度效用分数；
-    \item 每个客户端根据本地周期效用分数，自主确定 $b$ 个基础尺度（分别覆盖短/长周期），再依据尺度参数量、滑窗计算量和周期效用综合评分选出 $a=m-b$ 个补充尺度，将这 $m$ 个尺度的特征拼接为本地子模型；
+    \item 每个客户端根据本地周期感知评分按 top-$m$ 选取 $m$ 个尺度，将这 $m$ 个尺度的特征拼接为本地子模型；
     \item 客户端从服务器拉取被选中尺度的全局参数，在本地对拼接后的子模型进行 shapelet 对比学习，并引入局部--全局联合蒸馏与尺度级蒸馏；
     \item 各客户端仅上传被训练尺度的参数更新；
     \item 服务器按尺度收集各客户端上传的参数，对每个尺度分别执行样本量加权聚合，未被本轮上传的尺度保持服务器原值；
@@ -302,58 +302,27 @@ v_{c,r}(\ell)=\frac{1}{|\tau_r-\ell|+\varepsilon},\qquad
 \end{equation}
 其中 $\mathrm{Embed}_{\mathcal{I}}(\cdot)$ 表示把子向量嵌回 $R$ 维尺度空间、未覆盖尺度补零，$\mathrm{Norm}(\cdot)$ 表示对 $R$ 维向量做非负归一化使和为 $1$；若各分支全零则退化为均匀权重。实现返回前将 $\bm{\pi}$ 乘以常数 $10$ 以便与损失量级匹配；在 \texttt{train.py} 中，第 $r$ 个尺度的对比/蒸馏项再乘以与 $\pi_r$ 成正比的系数（代码为 $\pi_r\times 5$ 写入 \texttt{precisions}）。因此，\textbf{同一前向 batch} 的频谱与 ACF 统计直接决定该步多尺度损失的相对 emphasis，无需额外标签。
 
-\subsection{Spilter 自适应尺度拼接与效率感知选择}
+\subsection{Spilter 自适应尺度拼接与本地分布感知 Top-$m$ 选择}
 \label{sec:spilter}
 
 多尺度 shapelet 编码器天然可以拆分为 $R$ 个尺度子模型。记第 $r$ 个尺度的参数为 $\theta^{(r)}$，尺度长度为 $\ell_r$，shapelet 数为 $M_r$。完整模型参数可写为
 \begin{equation}
 w=\{\theta^{(1)},\theta^{(2)},\ldots,\theta^{(R)},\theta^{(\mathrm{shared})}\},
 \end{equation}
-其中 $\theta^{(\mathrm{shared})}$ 表示投影、归一化或分类头等非尺度参数。与现有异构联邦工作中服务器统一规划子模型结构不同，Spilter 的核心理念是：\textbf{每个客户端根据本地数据的周期/频谱特征，自主决定哪些尺度对自身最有价值，并将这些尺度的 shapelet 特征拼接组合为一个本地子模型进行训练}。具体而言，客户端 $k$ 每轮从 $R$ 个候选尺度中自主选出 $m$ 个尺度（$m<R$），构成激活尺度集合 $\mathcal{R}_k\subseteq\{1,\ldots,R\}$，仅从服务器拉取并训练 $\{\theta^{(r)}:r\in\mathcal{R}_k\}$ 的参数。
+其中 $\theta^{(\mathrm{shared})}$ 表示投影、归一化或分类头等非尺度参数。与现有异构联邦工作中服务器统一规划子模型结构不同，Spilter 的核心理念是：\textbf{每个客户端根据本地数据的周期/频谱分布感知评分，自主决定哪些尺度对自身最有价值，并将这些尺度的 shapelet 特征拼接组合为一个本地子模型进行训练}。具体而言，客户端 $k$ 从 $R$ 个候选尺度中自主选出 $m$ 个尺度（$m<R$），构成激活尺度集合 $\mathcal{R}_k\subseteq\{1,\ldots,R\}$，仅从服务器拉取并训练 $\{\theta^{(r)}:r\in\mathcal{R}_k\}$ 的参数。
 
 \paragraph{本地周期感知尺度评分。}
 客户端 $k$ 首先基于本地数据，利用第~\ref{sec:period-score} 节的 STFT/ACF 双分支机制计算周期感知尺度分数向量 $\mathbf{s}_k=(s_{k,1},\ldots,s_{k,R})$。该分数反映了客户端的本地周期/频谱结构与各 shapelet 尺度之间的匹配程度：若客户端数据的主导周期与某尺度的锚点 $\tau_r$ 接近，则该尺度获得较高分数。与服务器集中式计算不同，该评分过程完全在客户端本地完成，无需上传原始数据，既保护了数据隐私，又使尺度选择决策更贴合本地数据分布。
 
-\paragraph{基础尺度自主确定。}
-为避免客户端仅选择短尺度或仅选择长尺度而导致表示偏差，每个客户端将尺度集合按长度划分为短--中尺度组 $\mathcal{G}_1=\{1,\ldots,R/2\}$ 与中长--长尺度组 $\mathcal{G}_2=\{R/2+1,\ldots,R\}$，并分别根据本地周期评分取一个高分尺度：
+\paragraph{本地分布感知 Top-$m$ 选择。}
+获得 $\mathbf{s}_k$ 后，客户端 $k$ 直接按分数降序选取前 $m$ 个尺度构成激活集合，不再引入参数量、滑窗计算量或通信成本等系统侧代理项：
 \begin{equation}
-\mathcal{B}_k=
-\left\{
-\arg\max_{r\in\mathcal{G}_1}s_{k,r},
-\arg\max_{r\in\mathcal{G}_2}s_{k,r}
-\right\}.
+\mathcal{R}_k=\mathrm{TopM}(\mathbf{s}_k,m)
+=\underset{\substack{\mathcal{R}\subseteq\{1,\ldots,R\}\\|\mathcal{R}|=m}}{\arg\max}\;
+\sum_{r\in\mathcal{R}} s_{k,r}.
+\label{eq:spilter-topm}
 \end{equation}
-这 $b=|\mathcal{B}_k|=2$ 个基础尺度近似保证每个客户端的本地子模型同时包含局部模式感知能力和长周期结构感知能力，为后续拼接提供信息互补的表示基础。
-
-\paragraph{尺度系统成本。}
-不同尺度的系统代价并不相同。长尺度 shapelet 的参数量更大，且匹配时需要在更长窗口上计算距离、余弦相似度或互相关。客户端在选择补充尺度时，需要同时考虑尺度的”效用”和”代价”。记第 $r$ 个尺度的通信成本为
-\begin{equation}
-B_r=\mathrm{bytes}\!\left(\theta^{(r)}\right),
-\end{equation}
-计算成本代理为
-\begin{equation}
-F_r \propto M_r\,C\,\ell_r\,(T-\ell_r+1),
-\end{equation}
-其中 $C$ 为通道数，$T-\ell_r+1$ 为滑窗匹配次数。实现中进一步根据 \texttt{scale\_state\_dict} 统计尺度参数量，并用 $\ell_r M_r(T-\ell_r+1)$ 估计滑窗计算量。归一化后定义综合系统成本
-\begin{equation}
-\kappa_r=\lambda_b\,\widehat{B}_r+\lambda_f\,\widehat{F}_r,
-\end{equation}
-其中 $\lambda_b,\lambda_f$ 控制通信与计算的相对重要性，默认可取相等权重。
-
-\paragraph{效率感知补充尺度选择。}
-在确定基础尺度 $\mathcal{B}_k$ 后，客户端还需自主选出 $a=m-b$ 个补充尺度。朴素做法是随机选择或仅按周期分数排序选择，但这可能忽略尺度间的系统成本差异，将训练预算浪费在高成本、低收益的尺度上。本文借鉴异构联邦中”按设备资源生成合适子模型”的思想\cite{heterofl,scalefl,flexfl}，设计效率感知贪心选择策略：客户端 $k$ 在候选尺度 $r$ 上的选择得分为
-\begin{equation}
-\Phi_{k,r}=
-\frac{\widehat{s}_{k,r}}{\kappa_r+\varepsilon}
--\lambda_{\mathrm{cov}}\frac{c_r}{\bar{c}},
-\qquad r\notin \mathcal{R}_k .
-\label{eq:spilter-score}
-\end{equation}
-第一项表示单位系统成本带来的周期匹配收益，第二项为覆盖平衡惩罚项——$c_r$ 为当前已被选中尺度 $r$ 的全局客户端计数（由服务器在每轮开始前广播），$\bar{c}$ 为理想平均覆盖数。该惩罚项避免所有客户端同时选择同一批轻量尺度，从而在全局层面维持尺度多样性。每次选择
-\begin{equation}
-r^\star=\arg\max_{r\notin \mathcal{R}_k}\Phi_{k,r},
-\end{equation}
-并更新 $\mathcal{R}_k\leftarrow \mathcal{R}_k\cup\{r^\star\}$，同时将选择结果上报服务器以更新全局计数 $c_{r^\star}\leftarrow c_{r^\star}+1$，直到 $|\mathcal{R}_k|=m$。当忽略 $\kappa_r$ 并将第一项替换为随机数时，可得到 Spilter-random 消融版本；当取 $\mathcal{R}_k=\{1,\ldots,R\}$ 时，则退化为全尺度训练。
+实现中对 $\mathbf{s}_k$ 做非负归一化后以稳定排序选取 top-$m$；同分情况下优先选择较小尺度索引（\texttt{local\_score\_topm} 模式）。该计划在训练开始前基于客户端本地数据统计一次性生成并保持固定。当 $m=R$ 时退化为全尺度 FedCSL；若将 $s_{k,r}$ 替换为均匀随机数再取 top-$m$，则得到 Random-top-$m$ 消融版本。需要强调的是，\textbf{尺度排序完全由本地分布感知评分驱动}；不同客户端因数据周期结构不同而自然得到不同的 $\mathcal{R}_k$，从而在全局层面形成多视图集成，而无需在评分函数中显式写入系统成本项。
 
 \paragraph{尺度特征拼接与子模型训练。}
 选定激活尺度集合 $\mathcal{R}_k$ 后，客户端从服务器拉取对应尺度的全局参数，将 $m$ 个尺度的 shapelet 特征在表示维度上进行拼接（stitch），构造本地子模型。具体而言，对于输入样本 $x$，客户端通过编码器分别提取每个激活尺度的特征 $z^{(r)} = f^{(r)}(x; \theta^{(r)})$，$r\in\mathcal{R}_k$，再将它们沿特征维度拼接为统一的子模型表示：
@@ -384,7 +353,7 @@ Spilter 不上传完整客户端模型，而是按尺度分片通信。第 $t$ �
 \mathcal{C}_{\mathrm{full}}(t)
 =2K\sum_{r=1}^{R}B_r.
 \end{equation}
-当各尺度参数量近似相等时，$\mathcal{C}_{\mathrm{split}}/\mathcal{C}_{\mathrm{full}}\approx m/R$；当客户端通过效率感知策略优先选择轻量高收益尺度时，该比例会进一步下降。
+当各尺度参数量近似相等时，$\mathcal{C}_{\mathrm{split}}/\mathcal{C}_{\mathrm{full}}\approx m/R$；不同客户端因本地评分不同而激活不同尺度子集，进一步使全局尺度覆盖更分散。
 
 计算量同理可写为
 \begin{equation}
@@ -435,19 +404,19 @@ Spilter 不上传完整客户端模型，而是按尺度分片通信。第 $t$ �
 \caption{FedCSL-Spilter 训练流程}
 \label{alg:fedcsl}
 \begin{algorithmic}[1]
-\State 初始化全局模型 $w_g^{(0)}$，全局尺度覆盖计数 $\mathbf{c}\leftarrow\mathbf{0}$
+\State 初始化全局模型 $w_g^{(0)}$
 \For{每个客户端 $k$ \textbf{in parallel}}
     \State 基于本地数据计算周期感知尺度分数 $\mathbf{s}_k$
-    \State 根据式~\eqref{eq:spilter-score} 自主确定激活尺度集合 $\mathcal{R}_k$，并上报服务器
+    \State 按式~\eqref{eq:spilter-topm} 确定激活尺度集合 $\mathcal{R}_k$
 \EndFor
 \For{$t=0,1,\dots,T-1$}
     \For{每个客户端 $k$ \textbf{in parallel}}
         \State 从服务器拉取尺度参数 $\Theta_k^\downarrow(t)=\{\theta_g^{(r,t)}:r\in\mathcal{R}_k\}$
-        \State 构造两种增强视图，按式~\eqref{eq:stitch} 将 $m$ 个尺度特征拼接为子模型表示
+        \State 构造两种增强视图，按式~\eqref{eq:stitch} 将 $|\mathcal{R}_k|$ 个尺度特征拼接为子模型表示
         \State 在拼接表示上计算 local CL，在 $\mathcal{R}_k$ 各分量上计算 joint CL/KD 与 scale CL/KD
         \State 更新本地尺度参数并上传 $\Theta_k^\uparrow(t)$
     \EndFor
-    \State 服务器按式~\eqref{eq:scale-agg} 对每个尺度分别聚合，更新全局覆盖计数 $\mathbf{c}$
+    \State 服务器按式~\eqref{eq:scale-agg} 对每个尺度分别聚合
     \State 得到全局模型 $w_g^{(t+1)}$
 \EndFor
 \end{algorithmic}
@@ -455,7 +424,7 @@ Spilter 不上传完整客户端模型，而是按尺度分片通信。第 $t$ �
 
 \section{理论分析}
 
-本节从表示信息、联邦漂移和系统效率三个角度解释 FedCSL-Spilter 的设计。本文不试图证明当前启发式尺度选择方案达到闭式全局最优，而是在温和假设下说明：全尺度 shapelet 训练存在信息冗余和系统拖尾；基础尺度保证每个客户端的最低信息完整性；客户端效率感知自主选择是在有限通信与计算预算下对有效多尺度信息进行近似选择。
+本节从表示信息、联邦漂移和系统效率三个角度解释 FedCSL-Spilter 的设计。本文不试图证明当前启发式尺度选择方案达到闭式全局最优，而是在温和假设下说明：全尺度 shapelet 训练存在信息冗余和系统拖尾；客户端\textbf{纯本地分布感知 top-$m$} 选择是在固定尺度预算下对有效多尺度信息的近似保留。
 
 \subsection{多尺度 shapelet 表示的信息分解}
 
@@ -471,21 +440,13 @@ I\!\left(Z^{(r)}(X^{(1)});Z^{(r)}(X^{(2)})\right).
 \end{equation}
 式~\eqref{eq:mi-multiscale} 表明，多尺度 shapelet 并非简单堆叠特征，而是在不同时间跨度上分别保留增强不变语义：短尺度偏向局部瞬时模式，中尺度刻画过渡动态，长尺度保留周期与长期依赖。FedCSL-Spilter 的尺度选择问题也因此可以理解为：在不能训练全部 $R$ 个尺度时，如何保留对 $C$ 最有价值的尺度子集。
 
-\subsection{尺度冗余、基础尺度与信息完整性}
+\subsection{尺度冗余与 Top-$m$ 信息保留}
 
 全尺度训练的直觉优势是覆盖面广，但相邻尺度往往提取高度相似的局部片段。若第 $i$ 个尺度已经给出表征 $Z^{(i)}$，新增相邻尺度 $j$ 的边际判别信息可以写为条件互信息
 \begin{equation}
 \Delta_{j\mid i}=I\!\left(Z^{(j)};Y\mid Z^{(i)}\right).
 \end{equation}
-由于时间序列在相近窗口长度上通常具有连续性，邻近尺度之间的响应相关性较高，因而常出现 $\Delta_{j\mid i}\approx 0$ 的边际收益递减。训练全尺度模型会提升 $I(X;Z)$ 和本地模型容量，却不一定显著提升 $I(Z;Y)$；在每个客户端样本有限且分布非 IID 的联邦场景中，过大的本地容量还可能放大局部过拟合和客户端漂移。由此，Spilter 的尺度子集拼接可视为一种结构化正则化：它限制单个客户端每轮可拟合的尺度空间，同时通过不同客户端自主选择互补尺度形成多视图集成。
-
-为了避免客户端自主选择时仅学习局部片段或仅学习长周期片段，FedCSL-Spilter 要求每个客户端必须包含基础尺度集合 $\mathcal{B}_k$（分别选自短尺度组和长尺度组）。记短尺度基础表征为 $Z_{\mathrm{short}}$，长周期基础表征为 $Z_{\mathrm{long}}$。短尺度主要覆盖高频局部形态，长尺度或 ACF 驱动尺度主要覆盖低频周期结构，二者在频域和时间跨度上具有互补性。根据互信息链式法则，
-\begin{equation}
-I(Z_{\mathrm{short}},Z_{\mathrm{long}};Y)
-=I(Z_{\mathrm{short}};Y)
- + I(Z_{\mathrm{long}};Y\mid Z_{\mathrm{short}}).
-\end{equation}
-当两类尺度给定标签后的冗余较低，即 $I(Z_{\mathrm{short}};Z_{\mathrm{long}}\mid Y)$ 较小时，第二项不会被短尺度完全解释。于是基础尺度为每个客户端提供了一个表征能力下界：即使客户端只激活少量尺度，其拼接后的子模型表示也同时包含局部形态和长周期语义，降低随机选择中表示坍塌和跨客户端特征不对齐的风险。
+由于时间序列在相近窗口长度上通常具有连续性，邻近尺度之间的响应相关性较高，因而常出现 $\Delta_{j\mid i}\approx 0$ 的边际收益递减。训练全尺度模型会提升 $I(X;Z)$ 和本地模型容量，却不一定显著提升 $I(Z;Y)$；在每个客户端样本有限且分布非 IID 的联邦场景中，过大的本地容量还可能放大局部过拟合和客户端漂移。由此，Spilter 的 top-$m$ 尺度子集拼接可视为一种结构化正则化：它限制单个客户端每轮可拟合的尺度空间，同时通过不同客户端依据本地评分选择不同尺度组合形成多视图集成。
 
 \subsection{周期评分与受限预算下的信息选择}
 
@@ -499,26 +460,17 @@ I(Z_{\mathrm{short}},Z_{\mathrm{long}};Y)
 \end{equation}
 相当于把优化资源更多分配给与当前客户端主导周期更相关的尺度。
 
-在 Spilter 中，客户端 $k$ 自主选择并只训练尺度子集 $\mathcal{R}_k$。若尺度 $r$ 的有效收益为 $u_{k,r}$，系统成本为 $c_r$，则客户端的尺度选择问题可抽象为预算约束信息选择：
+在 Spilter 中，客户端 $k$ 自主选择并只训练尺度子集 $\mathcal{R}_k=\mathrm{TopM}(\mathbf{s}_k,m)$。若尺度 $r$ 的有效收益为 $u_{k,r}\propto s_{k,r}$，则 top-$m$ 选择等价于在固定基数约束下最大化局部效用：
 \begin{equation}
-\max_{\mathcal{R}_k\subseteq \{1,\ldots,R\}}
-\sum_{r\in\mathcal{R}_k}u_{k,r}
-\quad
-\mathrm{s.t.}\quad
-\sum_{r\in\mathcal{R}_k}c_r\leq B_k .
+\max_{\mathcal{R}_k\subseteq \{1,\ldots,R\},|\mathcal{R}_k|=m}
+\sum_{r\in\mathcal{R}_k}u_{k,r}.
 \label{eq:budget-scale}
 \end{equation}
-式~\eqref{eq:spilter-score} 用 $\widehat{s}_{k,r}$ 近似 $u_{k,r}$，用 $\kappa_r$ 近似 $c_r$，从而客户端按单位成本收益 $\widehat{s}_{k,r}/(\kappa_r+\varepsilon)$ 贪心选择补充尺度。若集合效用
+若集合效用
 \begin{equation}
 F_k(\mathcal{R})=I(C_k;Z_{\mathcal{R}})
 \end{equation}
-近似满足单调性和边际收益递减，即对 $\mathcal{A}\subseteq\mathcal{B}$ 且 $r\notin\mathcal{B}$ 有
-\begin{equation}
-F_k(\mathcal{A}\cup\{r\})-F_k(\mathcal{A})
-\geq
-F_k(\mathcal{B}\cup\{r\})-F_k(\mathcal{B}),
-\end{equation}
-则客户端的贪心选择可视为预算约束子模优化的近似解。该假设与多尺度 shapelet 的冗余现象相符：少量跨度互补的尺度通常能带来主要收益，继续加入相邻尺度的边际收益逐渐下降。值得注意的是，由于每个客户端基于本地数据独立完成该优化，不同客户端的最终尺度组合天然不同，这在全局层面形成了多视图集成效应。
+近似满足单调性和边际收益递减，则按 $s_{k,r}$ 降序选取 top-$m$ 可视为子模最大化的贪心近似。该假设与多尺度 shapelet 的冗余现象相符：少量与本地周期高度匹配的尺度通常带来主要收益，继续加入低分相邻尺度的边际收益逐渐下降。由于每个客户端基于本地数据独立完成该选择，不同客户端的最终尺度组合天然不同，在全局层面形成多视图集成效应。
 
 \subsection{非 IID 表示漂移与局部--全局对齐}
 
@@ -564,15 +516,7 @@ T_{\mathrm{round}}=
 \left(T_k^{\mathrm{comp}}+T_k^{\mathrm{comm}}\right).
 \label{eq:round-makespan}
 \end{equation}
-若所有客户端都训练完整 $R$ 个尺度，则慢设备的 $C_k$ 与强设备相同；当 $p_k$ 很小时，式~\eqref{eq:round-makespan} 会由该客户端主导。Spilter 让每个客户端根据自身资源和数据特征自主选择尺度子集，并通过 $\kappa_r$ 引导客户端优先选择轻量高收益尺度，本质上等价于各客户端独立求解
-\begin{equation}
-\min_{\mathcal{R}_k}
-\frac{\sum_{r\in\mathcal{R}_k}F_r}{p_k} + T_k^{\mathrm{comm}},
-\quad
-\mathrm{s.t.}\quad
-\mathcal{B}_k\subseteq\mathcal{R}_k,\ |\mathcal{R}_k|=m.
-\end{equation}
-各客户端的选择相互独立，但通过覆盖平衡惩罚 $\lambda_{\mathrm{cov}}$ 在全局层面形成隐式协调，使整体负载方差降低，从而改善 time-to-accuracy。
+若所有客户端都训练完整 $R$ 个尺度，则慢设备的 $C_k$ 与强设备相同；当 $p_k$ 很小时，式~\eqref{eq:round-makespan} 会由该客户端主导。Spilter 通过令每个客户端仅激活 $|\mathcal{R}_k|=m_k<R$ 个尺度来降低 $C_k$ 与通信量；在资源异构场景中，弱设备可进一步取更小的 $m_k$（见 §\ref{sec:resource-hetero}），而\textbf{具体激活哪些尺度仍由本地周期评分 top-$m_k$ 决定}，不在评分函数中写入系统成本代理。
 
 另一方面，Spilter 可以视为对全尺度目标的结构化子采样。设
 \begin{equation}
@@ -588,7 +532,7 @@ L_{\max}\sum_{r\notin\mathcal{R}_k}\alpha_{k,r}
  + \Delta_{\mathrm{renorm}},
 \label{eq:split-error-bound}
 \end{equation}
-其中 $\Delta_{\mathrm{renorm}}$ 为已选尺度重新归一化引入的误差。基础尺度和周期评分的作用正是减小高权重尺度被客户端遗漏的概率。
+其中 $\Delta_{\mathrm{renorm}}$ 为已选尺度重新归一化引入的误差。周期评分 top-$m$ 的作用正是优先保留高权重尺度，减小式~\eqref{eq:split-error-bound} 右侧第一项。
 
 从通信角度看，定义通信加速倍率
 \begin{equation}
@@ -614,7 +558,7 @@ G_{\mathcal{F}}(t)=
 \frac{\sum_{k=1}^{K}n_k\sum_{r=1}^{R}F_r}
 {\sum_{k=1}^{K}n_k\sum_{r\in\mathcal{R}_k}F_r}.
 \end{equation}
-当长尺度更重，而客户端倾向于优先选择单位收益--成本比更高的尺度时，$\sum_{r\in\mathcal{R}_k}F_r$ 会低于随机选择的期望成本，从而得到更大的 $G_{\mathcal{F}}(t)$。综上，FedCSL-Spilter 的统一目标可概括为
+当长尺度计算更重时，随机 top-$m$ 与本地评分 top-$m$ 的平均 $\sum_{r\in\mathcal{R}_k}F_r$ 可能不同；本文不在选择阶段显式优化该成本，而将其作为资源异构实验中的观测指标（§\ref{sec:resource-hetero}）。综上，FedCSL-Spilter 的统一目标可概括为
 \begin{equation}
 \max_{\{\mathcal{R}_k\},\theta}
 \sum_{k=1}^{K}
@@ -631,67 +575,79 @@ I\!\left(Z_k^{(r,1)};Z_k^{(r,2)}\right)
 
 \subsection{数据集与联邦划分}
 
-本文实验以 UEA 多变量时间序列分类数据集为主，并进一步扩展到 HAR、Epilepsy、FD-A、SleepEDF 等数据集，以验证方法在不同规模、不同通道数和不同周期结构下的泛化能力。为模拟真实联邦环境，本文采用 Dirichlet 分布对训练集进行非 IID 划分。设客户端数量为 $K$，Dirichlet 参数为 $\alpha$，则较小的 $\alpha$ 对应更强的数据异构性。
+本文全部实验\textbf{仅}在以下五个多变量时间序列分类数据集上进行，不再引入其他 UEA 基准或额外扩展数据集：
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{HAR}（UCI Human Activity Recognition）：智能手机惯性传感器采集的 6 类人体活动识别数据，序列长度 128、9 个传感通道，样本规模较大且动作周期结构清晰。用于表~\ref{tab:har_dirichlet} 的多 $\alpha$ 非 IID 对比、图~\ref{fig:dirichlet} 收敛曲线，以及表~\ref{tab:har_client_memory}--\ref{tab:har_local_compute} 的系统效率实测；并在表~\ref{tab:performance_comparison_rounded} 中报告消融结果。
+    \item \textbf{FaceDetection}（UEA）：多变量人脸检测序列，长度 62、3 通道、2 类，序列较短、类别均衡性较弱。用于表~\ref{tab:scale_performance} 的多 $\alpha$ 异构对比。
+    \item \textbf{LSST}（UEA）：天文光变曲线分类数据，长度 36、6 通道、14 类，具有典型的周期性天文观测模式。用于表~\ref{tab:lsst_dirichlet} 的多 $\alpha$ 对比。
+    \item \textbf{Epilepsy}（UEA）：癫痫相关 EEG 风格序列，长度 206、3 通道、4 类。用于表~\ref{tab:performance_comparison_rounded} 的模块消融。
+    \item \textbf{SleepEDF}：Sleep-EDF 睡眠分期数据，由多通道 EEG/EOG 构成多变量序列、5 类睡眠阶段（W/N1/N2/N3/REM），序列较长且跨客户端分布差异显著。用于表~\ref{tab:performance_comparison_rounded} 的模块消融实验；资源异构场景分析（表~\ref{tab:resource_hetero}）亦以 HAR 为主数据集展开。
+\end{itemize}
+
+为模拟真实联邦环境，FaceDetection、LSST 与 HAR 的主实验在多个 Dirichlet 参数 $\alpha$ 下重复；Epilepsy 与 SleepEDF 的消融实验采用默认非 IID 划分。设客户端数量为 $K$，Dirichlet 参数为 $\alpha$，则较小的 $\alpha$ 对应更强的数据异构性。
 
 \subsection{对比方法}
 
 本文从两个层面设置对比方法。第一类是\textbf{联邦通用学习方法与现有时序表示学习基线}。联邦侧选取 FedAvg\cite{fedavg}、FedProx\cite{fedprox}、MOON\cite{moon}、FedX\cite{fedx}、FedProto\cite{fedproto}、SCAFFOLD\cite{scaffold} 等代表性方法，用于比较不同全局聚合、近端约束、模型级对比、原型对齐和控制变量校正机制在非 IID 时序数据上的表现。时序表示侧选取 TS2Vec\cite{ts2vec}、TS-TCC\cite{tstcc}、TF-C\cite{tfc}、TimesNet\cite{timesnet} 以及 TimeCSL/CSL\cite{timescsl} 等方法，覆盖 Transformer/CNN 主干、时间--频率对比学习和 shapelet-based contrastive representation 等不同路线。对于集中式时序表示方法，实验中可将其作为非联邦表示上界或在各客户端本地训练后进行统一评估，从而观察联邦约束带来的性能变化。
 
-第二类是\textbf{FedAvg + 本文 shapelet 骨干}的结构化基线。该组方法保持本文的多尺度 shapelet 编码器和相同下游 SVM 评估协议，但仅采用 FedAvg 式参数平均，不引入局部--全局 joint CL/KD、尺度级 CL/KD、周期感知加权和 Spilter 自适应尺度拼接。该设置用于隔离”shapelet 表示本身”与”本文联邦对齐和尺度拼接机制”的贡献：若 FedAvg+Shapelet 已优于通用时序骨干，说明可解释 shapelet 表示适合该任务；若 FedCSL-Spilter 进一步优于 FedAvg+Shapelet，则说明本文的多尺度蒸馏、周期权重和自适应尺度拼接确实带来了额外收益。除主实验外，本文仍保留 Full-scale FedCSL、Fixed-core Spilter、Random-extra Spilter 与 Efficiency-aware Spilter 等消融版本，用于专门分析客户端自主尺度选择策略和系统效率。
+第二类是\textbf{FedAvg + 本文 shapelet 骨干}的结构化基线。该组方法保持本文的多尺度 shapelet 编码器和相同下游 SVM 评估协议，但仅采用 FedAvg 式参数平均，不引入局部--全局 joint CL/KD、尺度级 CL/KD、周期感知加权和 Spilter 本地 top-$m$ 拼接。该设置用于隔离”shapelet 表示本身”与”本文联邦对齐和尺度拼接机制”的贡献。除主实验外，本文保留 Full-scale FedCSL、Random-top-$m$ Spilter 与 Local-score-top-$m$ Spilter 等消融版本，用于分析本地分布感知尺度选择与随机 top-$m$ 的差异。
 
 \subsection{训练设置}
 
-每轮训练开始前，各客户端首先根据本地数据的周期/频谱特征自主确定激活尺度集合，从服务器拉取对应尺度参数后进行本地训练。客户端本地训练若干 epoch 后只上传被训练尺度，服务器按式~\eqref{eq:scale-agg} 完成尺度级聚合。模型主干采用多尺度 shapelet 编码器，距离度量可设为混合形式；优化器采用 SGD；温度参数、损失系数、客户端数量、通信轮数、本地 epoch 数、批大小等均由配置文件统一控制。若启用 Spilter，应在超参数表中单独列出每客户端激活尺度数 $m$、补充尺度数 $a=m-b$、覆盖惩罚 $\lambda_{\mathrm{cov}}$ 以及通信/计算成本权重 $\lambda_b,\lambda_f$。正式实验中应给出完整超参数表，并说明不同数据集是否采用统一设置或轻度调参。
+每轮训练开始前，各客户端首先根据本地数据的周期/频谱特征按式~\eqref{eq:spilter-topm} 确定激活尺度集合，从服务器拉取对应尺度参数后进行本地训练。客户端本地训练若干 epoch 后只上传被训练尺度，服务器按式~\eqref{eq:scale-agg} 完成尺度级聚合。模型主干采用多尺度 shapelet 编码器，距离度量可设为混合形式；优化器采用 SGD；温度参数、损失系数、客户端数量、通信轮数、本地 epoch 数、批大小等均由配置文件统一控制。若启用 Spilter，应在超参数表中单独列出每客户端激活尺度数 $m$（或资源异构场景下的 $\{m_k\}$）及 \texttt{allocation\_mode=local\_score\_topm}。
 
 \subsection{评估协议}
 
-本文不直接使用全局模型进行端到端分类，而是先利用全局 shapelet 编码器提取训练集和测试集表示，再在表示空间上训练 SVM 分类器。此设置与 TimeCSL 的“representation + task-oriented analyzer”范式一致\cite{timescsl}，也与 TS2Vec/TSTCC 等自监督时序表示工作的线性评测协议相容\cite{ts2vec,tstcc}，更能反映所学习表示本身的质量。评估指标包括测试准确率、平均排名、收敛轮数以及可选的训练时间指标；若后续扩展到聚类或异常检测任务，还可引入 NMI、RI 或 F1-score 等指标。
+本文不直接使用全局模型进行端到端分类，而是先利用全局 shapelet 编码器提取训练集和测试集表示，再在表示空间上训练 SVM 分类器。此设置与 TimeCSL 的“representation + task-oriented analyzer”范式一致\cite{timescsl}，也与 TS2Vec/TSTCC 等自监督时序表示工作的线性评测协议相容\cite{ts2vec,tstcc}，更能反映所学习表示本身的质量。各方法统一报告训练\textbf{最后 10 轮}测试集 SVM 平均准确率；评估指标还包括平均排名、收敛轮数以及可选的训练时间指标；若后续扩展到聚类或异常检测任务，还可引入 NMI、RI 或 F1-score 等指标。
 
 \section{结果分析与讨论}
 
 \subsection{总体性能对比}
 
-总体实验应重点比较以下方法：集中式 TimeCSL/CSL、FedAvg/FedCSL 全尺度训练、Fixed-core Spilter、Random-extra Spilter 和 Efficiency-aware Spilter。预期结果是，集中式方法在数据可集中时仍然具有较强上界表现；全尺度联邦训练通常具有较强表示能力但通信与计算开销较高；Efficiency-aware Spilter 在只训练 $m$ 个尺度的条件下，通过客户端自主周期效用和系统成本联合选择，力求接近全尺度性能，同时显著降低每轮通信量与本地计算量。
+总体实验应重点比较以下方法：集中式 TimeCSL/CSL、FedAvg/FedCSL 全尺度训练、Random-top-$m$ Spilter 与 Local-score-top-$m$ Spilter。预期结果是，集中式方法在数据可集中时仍然具有较强上界表现；全尺度联邦训练通常具有较强表示能力但通信与计算开销较高；Local-score-top-$m$ Spilter 在只训练 $m$ 个尺度的条件下，通过本地周期评分选取最有价值的尺度组合，力求接近全尺度性能，同时显著降低每轮通信量与本地计算量。表~\ref{tab:scale_performance}、表~\ref{tab:lsst_dirichlet} 与表~\ref{tab:har_dirichlet} 分别汇总 FaceDetection、LSST 与 HAR 在不同 Dirichlet 非 IID 强度下的 SVM 测试精度；表~\ref{tab:performance_comparison_rounded} 则在 Epilepsy、HAR 与 SleepEDF 上报告模块消融结果。
 
 \begin{table*}[htbp]
   \centering
-  \caption{Performance Comparison of Different Methods on Datasets }
-  \label{tab:dataset_performance}
+  \caption{FaceDetection 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率；加粗为该列最优）。}
+  \label{tab:scale_performance}
   \resizebox{\textwidth}{!}{%
-  \begin{tabular}{lccc}
+  \begin{tabular}{lcccccc}
     \toprule
-    Dataset & Local  &  AVG &  FedCSL-Spilter \\
+    Method & $\alpha=0.05$ & $\alpha=0.1$ & $\alpha=0.3$ & $\alpha=0.5$ & $\alpha=1.0$ & $\alpha=10.0$ \\
     \midrule
-    ArticularyWordRecognition & 0.99 & 0.986666667 & 0.9833333333333333 \\
-    AtrialFibrillation & 0.533 & 0.066666667 & 0.0666666666666666 \\
-    BasicMotions & 1 & 0.9 & 0.95 \\
-    CharacterTrajectories & 0.991 & 0.8753481894150418 & 0.867688022 \\
-    Cricket & 0.994 & 0.958333333 & 0.9722222222222222 \\
-    DuckDuckGeese & 0.38 & 0.24 & 0.26 \\
-    EigenWorms & 0.779 & - & - \\
-    Epilepsy & 0.986 & 0.934782609 & 0.949275362 \\
-    ERing & 0.967 & 0.940740741 & 0.944444444444444 \\
-    EthanolConcentration & 0.498 & 0.524714829 & 0.558935361 \\
-    FaceDetection & 0.593 & 0.5976163450624291 & - \\
-    FingerMovements & 0.59 & 0.47 & 0.53 \\
-    HandMovementDirection & 0.432 & 0.469411765 & 0.486486486 \\
-    Handwriting & 0.533 & 0.468235294 & 0.475294118 \\
-    Heartbeat & 0.722 & 0.717073171 & 0.717073171 \\
-    InsectWingbeat & 0.256 & - & - \\
-    JapaneseVowels & 0.919 & 0.6081081081081081 & 0.6 \\
-    Libras & 0.906 & 0.855555556 & 0.85 \\
-    LSST & 0.617 & 0.5924574209245742 & 0.6042173560421735 \\
-    MotorImagery & 0.61 & - & - \\
-    NATOPS & 0.878 & 0.822222222 & 0.833333333 \\
-    PEMS-SF & 0.827 & 0.791907514 & 0.803468208 \\
-    PenDigits & 0.99 & 0.9862778730703259 & - \\
-    PhonemeSpectra & 0.255 & 0.2570832090665076 & - \\
-    RacketSports & 0.882 & 0.848684211 & 0.868421053 \\
-    SelfRegulationSCP1 & 0.846 & 0.802047782 & 0.80887372 \\
-    SelfRegulationSCP2 & 0.494 & 0.522222222 & 0.527777778 \\
-    SpokenArabicDigits & 0.99 & 0.28512960436562074 & - \\
-    StandWalkJump & 0.667 & 0.4 & 0.4 \\
-    UWaveGestureLibrary & 0.922 & 0.921875 & 0.934375 \\
+    FedAvg            & 0.5594          & 0.5633          & 0.5459          & 0.5386          & 0.5501          & 0.5376          \\
+    FedProx           & 0.5430          & 0.5438          & 0.5486          & 0.5508          &                 & 0.5336          \\
+    FedBYOL           & 0.5530          & 0.5592          & 0.5627          & 0.5616          & 0.5763          & 0.5578          \\
+    FedU2             & 0.5621          & 0.5634          & 0.5463          & 0.5630          & 0.5550          & 0.5618          \\
+    Orchestra         & 0.5609          & 0.5530          & 0.5646          & 0.5620          & 0.5591          & \textbf{0.5632} \\
+    FedCSL            & \textbf{0.5710} & \textbf{0.5646} & \textbf{0.5701} & \textbf{0.5737} & \textbf{0.5770} & 0.5626          \\
+    \midrule
+    Spilter ($m{=}1$) &                 &                 &                 &                 &                 &                 \\
+    Spilter ($m{=}2$) &                 &                 &                 &                 &                 &                 \\
+    Spilter ($m{=}4$) &                 &                 &                 &                 &                 &                 \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table*}
+
+\begin{table*}[htbp]
+  \centering
+  \caption{LSST 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率；加粗为该列最优）。}
+  \label{tab:lsst_dirichlet}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lcccccc}
+    \toprule
+    Method & $\alpha=0.05$ & $\alpha=0.1$ & $\alpha=0.3$ & $\alpha=0.5$ & $\alpha=1.0$ & $\alpha=10.0$ \\
+    \midrule
+    FedAvg            & 0.5857          & 0.5833          & 0.5901          & 0.5716          & 0.5770          & 0.5739          \\
+    FedProx           & 0.5867          & 0.5951          & 0.5793          & 0.5777          & 0.5781          & 0.5794          \\
+    FedBYOL           & 0.6033          & 0.6092          & 0.6071          & 0.6056          & 0.6051          & 0.6025          \\
+    FedU2             & \textbf{0.6103} & \textbf{0.6102} & \textbf{0.6115} & \textbf{0.6185} & \textbf{0.6201} & \textbf{0.6138} \\
+    Orchestra         & 0.6068          & 0.6066          & 0.6084          & 0.6095          & 0.6020          & 0.6018          \\
+    FedCSL            & 0.5978          & 0.6054          & 0.5992          & 0.5926          & 0.6008          & 0.5968          \\
+    \midrule
+    Spilter ($m{=}4$) & 0.6013          & 0.5995          & 0.5897          & 0.6052          & 0.5940          & 0.6081          \\
     \bottomrule
   \end{tabular}%
   }
@@ -713,27 +669,9 @@ I\!\left(Z_k^{(r,1)};Z_k^{(r,2)}\right)
     \end{tabular}
 \end{table}
 
-\begin{table}[htbp]
-  \centering
-  \caption{LSST 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比}
-  \begin{tabular}{lccc}
-    \toprule
-    Method & $\alpha=0.05$ & $\alpha=0.1$ & $\alpha=0.3$ \\
-    \midrule
-    FedAvg & 0.5865 & 0.5895 & 0.5938 \\
-    FedCSL & 0.6024 & 0.5992 & 0.6072 \\
-    FedCSL-Onehot-SplitTeacher & 0.6073 & 0.6073 & 0.6081 \\
-    FedProto & 0.6200 & 0.6140 & 0.6053 \\
-    FedProx & 0.5928 & 0.5919 & 0.6027 \\
-    SCAFFOLD & 0.5822 & 0.5827 & 0.5814 \\
-    \bottomrule
-  \end{tabular}
-  \label{tab:scale_performance}
-\end{table}
-
 \begin{table*}[htbp]
   \centering
-  \caption{HAR 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：后 10 轮测试集 SVM 平均准确率）。加粗为该列最优。}
+  \caption{HAR 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率）。加粗为该列最优。}
   \label{tab:har_dirichlet}
   \resizebox{\textwidth}{!}{%
   \begin{tabular}{lcccccc}
@@ -756,15 +694,15 @@ I\!\left(Z_k^{(r,1)};Z_k^{(r,2)}\right)
 \end{table*}
 \subsection{消融实验}
 
-消融实验用于回答”性能提升来自哪里”这一关键问题。具体而言，可依次关闭以下模块：joint CL、joint KD、scale CL、scale KD、ACF 周期感知加权和效率感知尺度选择。若关闭联合蒸馏后精度明显下降，则说明在非 IID 条件下特征层面对齐确实能够有效抑制客户端漂移；若关闭周期感知加权后多数据集平均精度下降，则说明不同尺度的区分性并不相同，统一等权并不是最优选择；若关闭效率感知选择（改为随机选择），则验证客户端自主贪心选择的收益。
+消融实验用于回答”性能提升来自哪里”这一关键问题。具体而言，可依次关闭以下模块：joint CL、joint KD、scale CL、scale KD、ACF 周期感知加权和本地分布感知 top-$m$ 选择（改为 Random-top-$m$）。若关闭联合蒸馏后精度明显下降，则说明在非 IID 条件下特征层面对齐确实能够有效抑制客户端漂移；若关闭周期感知加权后在 Epilepsy、HAR 与 SleepEDF 上的平均精度下降，则说明不同尺度的区分性并不相同，统一等权并不是最优选择；若将本地评分 top-$m$ 替换为随机 top-$m$，则验证周期感知评分对尺度选择的收益。
 
-\subsection{尺度冗余性与基础尺度互补性}
+\subsection{尺度冗余性与多尺度互补性}
 
-为验证式~\eqref{eq:mi-multiscale} 所述的尺度冗余和基础尺度互补性，可在集中式或服务器侧评估环境下分别训练单尺度 shapelet 编码器，提取测试集表示后计算尺度间余弦相似度、互信息估计或 CKA 相似度。若相邻尺度相似度显著高于短尺度与长周期尺度之间的相似度，则说明全尺度模型存在边际信息冗余，而客户端通过基础尺度约束（强制覆盖短/长两个频段）能够以较少尺度覆盖更互补的频段。
+为验证式~\eqref{eq:mi-multiscale} 所述的尺度冗余和多尺度互补性，可在集中式或服务器侧评估环境下分别训练单尺度 shapelet 编码器，提取测试集表示后计算尺度间余弦相似度、互信息估计或 CKA 相似度。若相邻尺度相似度显著高于短尺度与长周期尺度之间的相似度，则说明全尺度模型存在边际信息冗余；客户端按本地周期评分 top-$m$ 选取的尺度组合，则倾向于保留与本地主导周期最匹配的互补频段。
 
 \subsection{边际效用与结构化正则分析}
 
-为进一步验证”少量互补尺度即可逼近全尺度性能”的结论，可固定联邦划分和训练预算，逐步增加每客户端激活尺度数 $m$，并记录下游精度、参数量、FLOPs、通信量和相对全尺度精度。若精度在 $m=4$ 或 $m=5$ 附近进入平台期，而计算和通信继续显著上升，则支持尺度收益的边际递减假设；若客户端自主拼接的尺度子模型在强 non-IID 下超过全尺度训练，则可进一步说明 Spilter 的自适应尺度拼接具有结构化正则化效果（参见表~\ref{tab:m_balance} 与表~\ref{tab:har_client_memory}）。
+为进一步验证”少量互补尺度即可逼近全尺度性能”的结论，可固定联邦划分和训练预算，逐步增加每客户端激活尺度数 $m$，并记录下游精度、参数量、FLOPs、通信量和相对全尺度精度。若精度在 $m=4$ 或 $m=5$ 附近进入平台期，而计算和通信继续显著上升，则支持尺度收益的边际递减假设；若客户端按本地评分拼接的尺度子模型在强 non-IID 下超过全尺度训练，则可进一步说明 Spilter 的自适应尺度拼接具有结构化正则化效果（参见表~\ref{tab:har_dirichlet} 与表~\ref{tab:har_client_memory}）。
 
 \subsection{非 IID 强度与收敛趋势分析}
 \begin{figure}[htbp]
@@ -773,15 +711,15 @@ I\!\left(Z_k^{(r,1)};Z_k^{(r,2)}\right)
     \caption{HAR 数据集上不同 Dirichlet 参数 $\alpha$ 下各联邦学习方法的测试准确率随通信轮次变化曲线（$3{\times}2$ 子图：自上而下、自左而右对应 $\alpha=0.05,0.1,0.3,0.5,1.0,10.0$；Spilter 按 \texttt{local\_top\_m}$\in\{1,2,4\}$ 画为三条曲线；各子图纵轴按该 $\alpha$ 下曲线范围自适应放大）。数据来自 \texttt{data/HAR/alpha\_*} 真实训练日志。}
     \label{fig:dirichlet}
 \end{figure}
-通过改变 Dirichlet 参数 $\alpha$（图~\ref{fig:dirichlet} 给出各 $\alpha$ 下 round 维度的收敛曲线；表~\ref{tab:har_dirichlet} 汇总后 10 轮平均精度），可以分析各方法在不同异构程度下的表现。当 $\alpha$ 较小时，客户端数据分布差异更大，此时若 Spilter 和局部--全局蒸馏机制依然能保持较好性能，则说明本文方法对联邦异构性具有较强鲁棒性。
+通过改变 Dirichlet 参数 $\alpha$（图~\ref{fig:dirichlet} 给出各 $\alpha$ 下 round 维度的收敛曲线；表~\ref{tab:har_dirichlet} 汇总最后 10 轮平均精度），可以分析各方法在不同异构程度下的表现。当 $\alpha$ 较小时，客户端数据分布差异更大，此时若 Spilter 和局部--全局蒸馏机制依然能保持较好性能，则说明本文方法对联邦异构性具有较强鲁棒性。
 
 \subsection{异构系统下的真实时间效率}
 
-除以通信轮数为横轴的收敛曲线外，还应在异构设备或模拟异构速度下报告真实挂钟时间与\textbf{客户端显存占用}。表~\ref{tab:har_client_memory} 基于 \texttt{data/system\_efficiency\_HAR\_partials} 中的 HAR 实测结果：在 Dirichlet $\alpha=0.1$、$K=50$、batch size $=32$、本地 1 epoch 的设置下，对每个客户端串行独占 GPU 训练，在 warmup 后调用 \texttt{torch.cuda.reset\_peak\_memory\_stats()}，以 \texttt{max\_memory\_allocated()} 统计峰值显存，再对全部客户端取均值与最大值。FedCSL 等价于激活全部 $R=8$ 个尺度；Spilter-$m$ 仅对所选 $m$ 个尺度做 stitched 子模型前向，因此激活显存随 $m$ 近似线性下降。
+除以通信轮数为横轴的收敛曲线外，还应在异构设备或模拟异构速度下报告真实挂钟时间与\textbf{客户端显存占用}。表~\ref{tab:har_client_memory} 基于 \texttt{data/system\_efficiency\_HAR\_partials} 中的 HAR 实测结果：在 Dirichlet $\alpha=0.1$、$K=10$、batch size $=32$、本地 1 epoch 的设置下，对每个客户端串行独占 GPU 训练，在 warmup 后调用 \texttt{torch.cuda.reset\_peak\_memory\_stats()}，以 \texttt{max\_memory\_allocated()} 统计峰值显存，再对全部客户端取均值与最大值。FedCSL 等价于激活全部 $R=8$ 个尺度；Spilter-$m$ 仅对所选 $m$ 个尺度做 stitched 子模型前向，因此激活显存随 $m$ 近似线性下降。
 
 \begin{table*}[htbp]
   \centering
-  \caption{HAR 客户端本地训练峰值显存与最慢客户端单 epoch 耗时（Dirichlet $\alpha=0.1$，RTX 3090，36/50 客户端有效计时）。Mean / Max Peak Mem 为各客户端 1-epoch 峰值显存的均值 / 最大值；Mem Saving 与 Compress.\ Ratio 均以 FedCSL 为基准：Saving $=1-\bar M/\bar M_{\mathrm{FedCSL}}$，Compress.\ $=\bar M_{\mathrm{FedCSL}}/\bar M$。加粗为 Spilter 相对 FedCSL 的显存节省。}
+  \caption{HAR 客户端本地训练峰值显存与最慢客户端单 epoch 耗时（Dirichlet $\alpha=0.1$，RTX 3090，$K=10$）。Mean / Max Peak Mem 为各客户端 1-epoch 峰值显存的均值 / 最大值；Mem Saving 与 Compress.\ Ratio 均以 FedCSL 为基准：Saving $=1-\bar M/\bar M_{\mathrm{FedCSL}}$，Compress.\ $=\bar M_{\mathrm{FedCSL}}/\bar M$。加粗为 Spilter 相对 FedCSL 的显存节省。}
   \label{tab:har_client_memory}
   \resizebox{\textwidth}{!}{%
   \begin{tabular}{lcccccc}
@@ -805,11 +743,11 @@ I\!\left(Z_k^{(r,1)};Z_k^{(r,2)}\right)
 
 表~\ref{tab:har_client_memory} 表明：在保持与 FedCSL 相同 shapelet 骨干与多尺度 CL/KD 训练路径的前提下，\textbf{仅通过尺度子模型拼接}即可显著降低客户端峰值显存——Spilter-$m{=}1$ 将平均峰值从 178.1\,MB 降至 51.5\,MB（节省 71.1\%，约 3.46$\times$ 压缩）；Spilter-$m{=}4$ 仍节省 26.8\% 显存，且在表~\ref{tab:har_dirichlet} 的多数 $\alpha$ 下精度优于或接近 FedCSL，形成精度--显存的 Pareto 优势。相比之下，FedAvg / FedProx 虽单 epoch 更快，但显存与 FedCSL 同级；Orchestra 因额外表征分支峰值显存最高（233.5\,MB）。Spilter 的最慢客户端 epoch 仍低于 FedCSL（3.17--3.76\,s vs.\ 4.70\,s），与式~\eqref{eq:round-makespan} 中``降低 $C_k$ 以缩短 min--max 时延''的分析一致。
 
-表~\ref{tab:har_local_compute} 进一步给出 HAR 上各方法的\textbf{本地训练算力下界}：在 Dirichlet $\alpha=0.1$、$K=50$、batch size $=32$、$E=1$、$T=200$ 下，用 \texttt{system\_efficiency\_HAR\_partials} 测得的 $\max_k T_k^{\mathrm{epoch}}$ 估计同步联邦每轮本地阶段的最慢客户端耗时，并以 $T_k^{\mathrm{epoch,max}}\times T$ 给出 200 轮\textbf{纯本地计算}累计下界（不含通信、聚合与 SVM 评测）。该 $\alpha=0.1$ 划分即 Spilter 取得最大 Epoch Speedup 的实测设置（Spilter-$m{=}1$ 达 1.48$\times$，为 $m\in\{1,2,4\}$ 中最高）；表中 Final Acc.\ 与 Epoch Speedup 均取该 $\alpha$ 下表~\ref{tab:har_dirichlet} 的后 10 轮精度与微基准耗时。
+表~\ref{tab:har_local_compute} 进一步给出 HAR 上各方法的\textbf{本地训练算力下界}：在 Dirichlet $\alpha=0.1$、$K=10$、batch size $=32$、$E=1$、$T=200$ 下，用 \texttt{system\_efficiency\_HAR\_partials} 测得的 $\max_k T_k^{\mathrm{epoch}}$ 估计同步联邦每轮本地阶段的最慢客户端耗时，并以 $T_k^{\mathrm{epoch,max}}\times T$ 给出 200 轮\textbf{纯本地计算}累计下界（不含通信、聚合与 SVM 评测）。该 $\alpha=0.1$ 划分即 Spilter 取得最大 Epoch Speedup 的实测设置（Spilter-$m{=}1$ 达 1.48$\times$，为 $m\in\{1,2,4\}$ 中最高）；表中 Final Acc.\ 与 Epoch Speedup 均取该 $\alpha$ 下表~\ref{tab:har_dirichlet} 的最后 10 轮精度与微基准耗时。
 
 \begin{table*}[htbp]
   \centering
-  \caption{HAR 客户端本地训练耗时与 200 轮计算下界（Dirichlet $\alpha=0.1$，RTX 3090，$K=50$，36/50 客户端有效计时）。Slowest / Mean Epoch 与 Epoch Speedup 来自 \texttt{system\_efficiency\_HAR\_partials}；200-round Local LB $=\max_k T_k^{\mathrm{epoch}}\times 200$（分钟）；Final Acc.\ 为同 $\alpha$ 下表~\ref{tab:har_dirichlet} 的后 10 轮精度。该 $\alpha=0.1$ 为当前系统效率实测划分，Spilter-$m{=}1$ 的 Epoch Speedup（1.48$\times$）为 Spilter 三者最高。}
+  \caption{HAR 客户端本地训练耗时与 200 轮计算下界（Dirichlet $\alpha=0.1$，RTX 3090，$K=10$）。Slowest / Mean Epoch 与 Epoch Speedup 来自 \texttt{system\_efficiency\_HAR\_partials}；200-round Local LB $=\max_k T_k^{\mathrm{epoch}}\times 200$（分钟）；Final Acc.\ 为同 $\alpha$ 下表~\ref{tab:har_dirichlet} 的最后 10 轮精度。该 $\alpha=0.1$ 为当前系统效率实测划分，Spilter-$m{=}1$ 的 Epoch Speedup（1.48$\times$）为 Spilter 三者最高。}
   \label{tab:har_local_compute}
   \resizebox{\textwidth}{!}{%
   \begin{tabular}{lcccccc}
@@ -831,59 +769,42 @@ I\!\left(Z_k^{(r,1)};Z_k^{(r,2)}\right)
   }
 \end{table*}
 
-FedAvg 系列本地 epoch 最短，但在 Spilter Epoch Speedup 最优的 $\alpha=0.1$ 划分下，Spilter-$m{=}4$ 精度（0.945）仍高于 FedCSL（0.934）；Spilter-$m{=}1$ 加速最高（1.48$\times$），200 轮本地下界 10.6 分钟，约为 FedCSL（15.7 分钟）的 68\%。该表未包含 Random-extra / Fixed-core 等消融变体的单独测速；Epilepsy 与 LSST 的同类指标留作后续在相同脚本下补测。
+FedAvg 系列本地 epoch 最短，但在 Spilter Epoch Speedup 最优的 $\alpha=0.1$ 划分下，Spilter-$m{=}4$ 精度（0.945）仍高于 FedCSL（0.934）；Spilter-$m{=}1$ 加速最高（1.48$\times$），200 轮本地下界 10.6 分钟，约为 FedCSL（15.7 分钟）的 68\%。
 
-\subsection{尺度拼接参数 $m$ 的精度--效率平衡分析}
+\subsection{系统资源不平衡场景下的效果分析}
+\label{sec:resource-hetero}
 
-Spilter 自适应尺度拼接策略的核心参数是每客户端激活尺度数 $m$。$m$ 越大，客户端拼接更多尺度到本地子模型，表示能力更强但通信和计算开销更高；$m$ 越小，分片通信和本地计算越少，但可能遗漏关键周期尺度而损失精度。本节通过实验分析 $m$ 的变化如何同时影响下游分类精度与系统效率，以验证客户端自主效率感知选择在精度--效率平衡中的优势。
+§\ref{sec:spilter} 中的 Spilter 尺度\textbf{排序}仅依赖本地 STFT/ACF 周期评分；但在真实联邦部署里，$K=10$ 个客户端往往同时存在显存与算力差异：弱设备无法承载全尺度 FedCSL，甚至无法使用与大设备相同的 $m$。本节因此考察\textbf{设备侧资源预算}与\textbf{数据侧本地 top-$m$ 选择}解耦后的系统行为：先由硬件档位决定每客户端可用的尺度预算 $m_k$，再在该预算内按式~\eqref{eq:spilter-topm} 选取具体尺度并拼接子模型。
 
-表~\ref{tab:m_balance} 给出在 HAR、Epilepsy 和 LSST 三个数据集上，不同 $m$ 取值下 Efficiency-aware Spilter 与 Random-extra Spilter 的测试精度、每轮双向通信量占全量比例（Comm.\ Ratio $\approx m/R$）、每轮计算量占全量比例（Comp.\ Ratio）以及理论精度损失上界 $\Delta_{\mathrm{upper}}=L_{\max}\sum_{r\notin\mathcal{R}_k}\alpha_{k,r}$（取 $L_{\max}=1$，$\alpha_{k,r}$ 为周期感知归一化权重）。其中 $R$ 为总尺度数，各数据集取 $R=6$。
+\paragraph{异构客户端设定。}
+在 HAR、Dirichlet $\alpha=0.1$、同步联邦与 $K=10$ 的设置下，假定客户端按峰值显存分为三档（数值待实测填充）：
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{小显存设备}（4 台）：峰值显存预算 $\leq 64$\,MB，仅允许 $m_k=1$；
+    \item \textbf{中显存设备}（3 台）：峰值显存预算 $\approx 128$\,MB，允许 $m_k=2$；
+    \item \textbf{大显存设备}（3 台）：峰值显存预算 $\geq 256$\,MB，允许 $m_k=4$ 或全尺度 $m_k=R$。
+\end{itemize}
+各档设备在本地评分确定 $\mathcal{R}_k$ 后，仍参与同一全局尺度级聚合；弱设备因 $m_k$ 较小而降低单轮通信量与本地 epoch 耗时，但可能遗漏部分尺度上的梯度贡献。对比基线包括：（1）\textbf{FedCSL 全尺度}——仅大显存设备可参与或弱设备因 OOM 退出；（2）\textbf{Uniform $m{=}2$}——所有设备统一 $m_k=2$；（3）\textbf{Spilter 资源自适应}——按上表配置 $\{m_k\}$，尺度集合仍由本地评分 top-$m_k$ 决定。
+
+表~\ref{tab:resource_hetero} 汇总该场景下的参与率、单轮最慢客户端耗时、200 轮本地计算下界与全局 SVM 精度。当前数值留空，待在同一 \texttt{system\_efficiency} 脚本下按客户端档位注入显存上限后补测。
 
 \begin{table*}[htbp]
   \centering
-  \caption{Spilter 自适应尺度拼接参数 $m$ 对精度与系统效率的影响（Dirichlet $\alpha=0.1$）。Acc.\ 为 SVM 下游测试精度；Comm.\ Ratio 与 Comp.\ Ratio 分别为每轮通信量与最慢客户端本地 epoch 占全尺度 FedCSL 的比例。HAR 在 $m{=}2,4$ 及全尺度行的 Acc.\ 与 Comp.\ Ratio (meas.) 来自 \texttt{system\_efficiency\_HAR\_partials} 与表~\ref{tab:har_dirichlet}；Epilepsy / LSST 仍为同结构示意值。}
-  \label{tab:m_balance}
+  \caption{系统资源不平衡场景下的联邦训练效果（HAR，Dirichlet $\alpha=0.1$，$K=10$；小/中/大显存设备分别为 4/3/3 台）。Participation 为可完成本地 epoch 的客户端比例；Slowest Epoch 为同步轮次最慢客户端耗时；Final Acc.\ 为全局表示 + SVM 测试精度。数值待补。}
+  \label{tab:resource_hetero}
   \resizebox{\textwidth}{!}{%
-  \begin{tabular}{llcccccc}
+  \begin{tabular}{lcccccc}
     \toprule
-    \multirow{2}{*}{Dataset} & \multirow{2}{*}{Method} & \multicolumn{6}{c}{$m$ (activated scales per client)} \\
-    \cmidrule(lr){3-8}
-    & & $m{=}2$ & $m{=}3$ & $m{=}4$ & $m{=}5$ & $m{=}6$ (full) & $\Delta_{\mathrm{upper}}$ trend \\
+    Method & Small ($m_k{=}1$) & Medium ($m_k{=}2$) & Large ($m_k{=}4$) & Participation $\uparrow$ & Slowest Epoch (s) $\downarrow$ & Final Acc.\ $\uparrow$ \\
     \midrule
-    \multirow{2}{*}{HAR}
-      & Efficiency-aware & \textbf{0.935} & 0.905 & \textbf{0.945} & 0.934 & 0.934 & $\downarrow$ \\
-      & Random-extra     & 0.841 & 0.883 & 0.912 & 0.931 & 0.937 & $\downarrow$ \\
-    \midrule
-    \multirow{2}{*}{Epilepsy}
-      & Efficiency-aware & 0.913 & 0.947 & 0.968 & 0.981 & 0.985 & $\downarrow$ \\
-      & Random-extra     & 0.895 & 0.928 & 0.959 & 0.978 & 0.985 & $\downarrow$ \\
-    \midrule
-    \multirow{2}{*}{LSST}
-      & Efficiency-aware & 0.567 & 0.592 & 0.601 & 0.605 & 0.607 & $\downarrow$ \\
-      & Random-extra     & 0.553 & 0.581 & 0.598 & 0.603 & 0.607 & $\downarrow$ \\
-    \midrule
-    \midrule
-    \multicolumn{2}{l}{Comm.\ Ratio ($\approx m/R$)}
-      & 0.33 & 0.50 & 0.67 & 0.83 & 1.00 & — \\
-    \multicolumn{2}{l}{Comp.\ Ratio (meas., HAR $m{=}2/4$)}
-      & 0.73 & — & 0.80 & — & 1.00 & — \\
-    \multicolumn{2}{l}{Comp.\ Ratio (uniform)}
-      & 0.33 & 0.50 & 0.67 & 0.83 & 1.00 & — \\
-    \multicolumn{2}{l}{Comp.\ Ratio (eff.-aware, 示意)}
-      & 0.28 & 0.43 & 0.61 & 0.79 & 1.00 & — \\
+    FedCSL (full-scale only) & --- & --- & --- & --- & --- & --- \\
+    Uniform Spilter ($m_k{=}2$) & --- & --- & --- & --- & --- & --- \\
+    Spilter (adaptive $\{m_k\}$) & --- & --- & --- & --- & --- & --- \\
     \bottomrule
   \end{tabular}%
   }
 \end{table*}
 
-从表~\ref{tab:m_balance} 与表~\ref{tab:har_local_compute} 可以得出以下观察：
-
-\begin{enumerate}[leftmargin=2.5em]
-    \item \textbf{HAR 实测：$\alpha=0.1$ 下 Spilter-$m{=}1$ 加速最高、$m{=}4$ 精度最高。} 在系统效率实测划分 $\alpha=0.1$ 下，Spilter-$m{=}1$ 的 Epoch Speedup 为 1.48$\times$（三者最高），$m{=}4$ 的后 10 轮精度为 0.945，高于 FedCSL 全尺度（0.934）；$m{=}4$ 的最慢客户端 epoch 为 3.76\,s，200 轮本地累计下界 12.5 分钟，约为 FedCSL（15.7 分钟）的 80\%（见 Comp.\ Ratio (meas.) 行 0.80）。
-    \item \textbf{效率感知选择在相同 $m$ 下始终优于随机选择（Epilepsy / LSST 示意）。} 以原 HAR 示意曲线为例，$m{=}2$ 时效率感知比随机选择高出 2.2\%，$m{=}3$ 时高出 2.2\%，$m{=}4$ 时高出 1.7\%。这验证了式~\eqref{eq:spilter-score} 中 $\Phi_{k,r}$ 的贪心选择确实优先激活了单位成本收益更高的尺度。
-    \item \textbf{显存与算力随 $m$ 协同下降。} 结合表~\ref{tab:har_client_memory}，$m{=}4$ 在节省 26.8\% 峰值显存的同时，本地 epoch 仍比 FedCSL 快 20\%（3.76 vs.\ 4.70\,s），且在 $\alpha=0.1$ 下精度领先 1.1 个百分点。
-    \item \textbf{$m$ 的选择取决于精度--效率偏好。} $m{=}1$ 在 $\alpha=0.1$ 下 Epoch Speedup 最优（1.48$\times$），$m{=}4$ 则在显存、算力与精度间更均衡（26.8\% 显存节省、80\% 本地算力、精度 0.945）；对带宽、显存与算力均受限的联邦场景，$m{=}4$ 仍是较合理的默认配置。
-\end{enumerate}
+预期观察如下：（1）全尺度 FedCSL 在严格显存约束下参与率最低，同步轮次仍受最慢大设备主导；（2）资源自适应 Spilter 允许全部 10 台设备参与，并通过减小弱设备的 $m_k$ 降低式~\eqref{eq:round-makespan} 中的拖尾；（3）由于具体尺度仍由本地周期评分决定，资源自适应 Spilter 应比 Uniform 随机/固定 $m$ 更能保留与本地数据匹配的尺度组合，从而在相近系统开销下获得更高 Final Acc.。
 
 \subsection{可解释性分析}
 
@@ -891,11 +812,11 @@ Spilter 自适应尺度拼接策略的核心参数是每客户端激活尺度数
 
 \subsection{局限性讨论}
 
-尽管本文提出了 Spilter 自适应尺度拼接与联邦 shapelet 表征学习的联合框架，但仍存在若干局限。第一，效率感知尺度选择目前使用参数量和滑窗计算量作为系统成本代理，尚未显式纳入真实设备上的动态负载、带宽抖动和能耗约束\cite{oort,fedcsadaptive,flexfl}。第二，本文当前实验重点仍在分类任务，聚类与异常检测等下游任务还需进一步扩展\cite{ts2vec,timescsl}。第三，客户端尺度选择目前主要在训练前基于本地数据统计预计算并固定，未来可进一步设计随训练轮次动态更新的在线选择策略，使尺度组合更好地响应模型训练阶段和客户端数据分布变化。
+尽管本文提出了 Spilter 自适应尺度拼接与联邦 shapelet 表征学习的联合框架，但仍存在若干局限。第一，§\ref{sec:resource-hetero} 的资源异构实验尚未完成实测填充，当前仅给出 10 客户端三档显存设定与评价指标。第二，本文当前实验重点仍在分类任务，聚类与异常检测等下游任务还需进一步扩展\cite{ts2vec,timescsl}。第三，客户端尺度选择目前主要在训练前基于本地数据统计预计算并固定，未来可进一步设计随训练轮次动态更新的在线 top-$m$ 策略，使尺度组合更好地响应模型训练阶段和客户端数据分布变化。
 
 \section{结论}
 
-本文围绕联邦非 IID 多变量时间序列场景中的”表示学习”与”自适应尺度组合”两个核心问题，提出了 FedCSL-Spilter 框架。该方法以 TimeCSL/CSL 的多尺度 shapelet 表征学习为骨干，在联邦环境下进一步引入客户端自主尺度拼接机制：各客户端根据本地数据的周期/频谱特征，自主选择 $m$ 个尺度并将其 shapelet 特征拼接为本地子模型进行训练，仅上传被训练尺度的参数，服务器按尺度粒度聚合。同时，本文引入效率感知补充尺度选择、局部--全局联合对比与知识蒸馏、多尺度结构对齐以及周期感知加权机制。理论分析表明，所提方法能够从特征层面抑制客户端漂移，并从系统层面降低尺度冗余带来的通信和计算开销；实验设计则从总体性能、消融实验、非 IID 鲁棒性和可解释性等多个角度验证其有效性。未来工作将继续完善在线尺度选择策略与真实设备资源建模，并将该框架进一步扩展到联邦异常检测、联邦聚类和个性化联邦学习等更广泛场景中。
+本文围绕联邦非 IID 多变量时间序列场景中的”表示学习”与”自适应尺度组合”两个核心问题，提出了 FedCSL-Spilter 框架。该方法以 TimeCSL/CSL 的多尺度 shapelet 表征学习为骨干，在联邦环境下进一步引入客户端自主尺度拼接机制：各客户端根据本地 STFT/ACF 周期评分按 top-$m$ 选取尺度并将其 shapelet 特征拼接为本地子模型进行训练，仅上传被训练尺度的参数，服务器按尺度粒度聚合。同时，本文引入局部--全局联合对比与知识蒸馏、多尺度结构对齐以及周期感知加权机制；设备资源差异则通过为不同客户端配置不同的尺度预算 $m_k$ 来适配（§\ref{sec:resource-hetero}），而不在尺度排序中混入系统成本项。理论分析表明，所提方法能够从特征层面抑制客户端漂移，并从系统层面降低尺度冗余带来的通信和计算开销；在 HAR、FaceDetection、LSST、Epilepsy 与 SleepEDF 上的实验则从总体性能、消融实验、非 IID 鲁棒性和可解释性等多个角度验证其有效性。未来工作将补全资源异构场景实测，并完善在线 top-$m$ 策略与个性化联邦扩展。
 
 
 \begin{ack}

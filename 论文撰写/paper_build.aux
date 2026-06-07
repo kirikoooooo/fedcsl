@@ -94,45 +94,41 @@
 \@writefile{toc}{\contentsline {paragraph}{参考尺度与离散锚点。}{7}{section*.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{基于 STFT 的频域得分（短—中尺度分支）。}{7}{section*.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{基于 ACF 的时域滞后得分（中长—长尺度分支）。}{7}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{双分支融合与损失中的使用。}{7}{section*.4}\protected@file@percent }
+\newlabel{eq:period-fuse}{{19}{7}{双分支融合与损失中的使用。}{equation.19}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces 周期感知中 STFT 分支的频谱示意（HAR 真实样本：Walking \#2759 / total\_acc\_x）：左图为单通道 STFT 功率谱，白色等高线为 $95\%$ 高能量掩膜，黄色虚线为加权主频 $\bar  f_c$；右图将标量 $1/\bar  f_c$ 通过高斯核软对齐到 $R$ 个 shapelet 尺度锚点 $\tau _r$，其中 $\mathcal  {I}_{\mathrm  {ST}}$ 中的短--中尺度由 STFT 分支写入 $\mathbf  {S}^{\mathrm  {ST}}$，其余中长--长尺度由 ACF 分支接管。}}{8}{figure.2}\protected@file@percent }
 \newlabel{fig:period-stft}{{2}{8}{周期感知中 STFT 分支的频谱示意（HAR 真实样本：Walking \#2759 / total\_acc\_x）：左图为单通道 STFT 功率谱，白色等高线为 $95\%$ 高能量掩膜，黄色虚线为加权主频 $\bar f_c$；右图将标量 $1/\bar f_c$ 通过高斯核软对齐到 $R$ 个 shapelet 尺度锚点 $\tau _r$，其中 $\mathcal {I}_{\mathrm {ST}}$ 中的短--中尺度由 STFT 分支写入 $\mathbf {S}^{\mathrm {ST}}$，其余中长--长尺度由 ACF 分支接管。}{figure.2}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces 周期感知中 ACF 分支的滞后—投票示意：左图为样本自相关函数 $R_c(\ell )$ 随滞后 $\ell $ 的变化，红色虚线为阈值 $\theta _{\mathrm  {acf}}$，后半段（$\ell \ge \lfloor L/2\rfloor $）检出的峰值以圆点标记；右图将这些峰值按反距离投票软对齐到 $R$ 个 shapelet 尺度锚点 $\tau _r$，$\mathcal  {I}_{\mathrm  {ACF}}$ 中的中长--长尺度由 ACF 分支写入，并与 STFT 分支互补。}}{8}{figure.3}\protected@file@percent }
 \newlabel{fig:period-acf}{{3}{8}{周期感知中 ACF 分支的滞后—投票示意：左图为样本自相关函数 $R_c(\ell )$ 随滞后 $\ell $ 的变化，红色虚线为阈值 $\theta _{\mathrm {acf}}$，后半段（$\ell \ge \lfloor L/2\rfloor $）检出的峰值以圆点标记；右图将这些峰值按反距离投票软对齐到 $R$ 个 shapelet 尺度锚点 $\tau _r$，$\mathcal {I}_{\mathrm {ACF}}$ 中的中长--长尺度由 ACF 分支写入，并与 STFT 分支互补。}{figure.3}{}}
-\citation{heterofl,scalefl,flexfl}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {paragraph}{双分支融合与损失中的使用。}{9}{section*.4}\protected@file@percent }
-\newlabel{eq:period-fuse}{{19}{9}{双分支融合与损失中的使用。}{equation.19}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Spilter 自适应尺度拼接与效率感知选择}{9}{subsection.4.6}\protected@file@percent }
-\newlabel{sec:spilter}{{4.6}{9}{Spilter 自适应尺度拼接与效率感知选择}{subsection.4.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Spilter 自适应尺度拼接与本地分布感知 Top-$m$ 选择}{9}{subsection.4.6}\protected@file@percent }
+\newlabel{sec:spilter}{{4.6}{9}{Spilter 自适应尺度拼接与本地分布感知 Top-$m$ 选择}{subsection.4.6}{}}
 \@writefile{toc}{\contentsline {paragraph}{本地周期感知尺度评分。}{9}{section*.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{基础尺度自主确定。}{9}{section*.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{尺度系统成本。}{9}{section*.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{效率感知补充尺度选择。}{9}{section*.8}\protected@file@percent }
-\def\@LN@column{1}
-\newlabel{eq:spilter-score}{{25}{10}{效率感知补充尺度选择。}{equation.25}{}}
-\@writefile{toc}{\contentsline {paragraph}{尺度特征拼接与子模型训练。}{10}{section*.9}\protected@file@percent }
-\newlabel{eq:stitch}{{27}{10}{尺度特征拼接与子模型训练。}{equation.27}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.7}分片通信与尺度级聚合}{10}{subsection.4.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{本地分布感知 Top-$m$ 选择。}{9}{section*.6}\protected@file@percent }
+\newlabel{eq:spilter-topm}{{21}{9}{本地分布感知 Top-$m$ 选择。}{equation.21}{}}
+\@writefile{toc}{\contentsline {paragraph}{尺度特征拼接与子模型训练。}{9}{section*.7}\protected@file@percent }
+\newlabel{eq:stitch}{{22}{9}{尺度特征拼接与子模型训练。}{equation.22}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.7}分片通信与尺度级聚合}{9}{subsection.4.7}\protected@file@percent }
 \citation{heterofl,flexfl}
 \def\@LN@column{1}
-\newlabel{eq:scale-agg}{{34}{11}{分片通信与尺度级聚合}{equation.34}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.8}总体优化目标}{11}{subsection.4.8}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces FedCSL-Spilter 训练流程}}{11}{algorithm.1}\protected@file@percent }
-\newlabel{alg:fedcsl}{{1}{11}{总体优化目标}{algorithm.1}{}}
+\newlabel{eq:scale-agg}{{29}{10}{分片通信与尺度级聚合}{equation.29}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.8}总体优化目标}{10}{subsection.4.8}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces FedCSL-Spilter 训练流程}}{10}{algorithm.1}\protected@file@percent }
+\newlabel{alg:fedcsl}{{1}{10}{总体优化目标}{algorithm.1}{}}
+\def\@LN@column{1}
 \@writefile{toc}{\contentsline {section}{\numberline {5}理论分析}{11}{section.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.1}多尺度 shapelet 表示的信息分解}{11}{subsection.5.1}\protected@file@percent }
-\def\@LN@column{1}
-\newlabel{eq:mi-multiscale}{{37}{12}{多尺度 shapelet 表示的信息分解}{equation.37}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}尺度冗余、基础尺度与信息完整性}{12}{subsection.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}周期评分与受限预算下的信息选择}{12}{subsection.5.3}\protected@file@percent }
-\newlabel{eq:budget-scale}{{42}{12}{周期评分与受限预算下的信息选择}{equation.42}{}}
+\newlabel{eq:mi-multiscale}{{32}{11}{多尺度 shapelet 表示的信息分解}{equation.32}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}尺度冗余与 Top-$m$ 信息保留}{11}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}周期评分与受限预算下的信息选择}{11}{subsection.5.3}\protected@file@percent }
+\newlabel{eq:budget-scale}{{36}{11}{周期评分与受限预算下的信息选择}{equation.36}{}}
 \citation{fedprox,moon}
 \citation{fedu2,fedca}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}非 IID 表示漂移与局部--全局对齐}{13}{subsection.5.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}系统效率、min--max 时延与误差界}{13}{subsection.5.5}\protected@file@percent }
-\newlabel{eq:round-makespan}{{50}{13}{系统效率、min--max 时延与误差界}{equation.50}{}}
-\newlabel{eq:split-error-bound}{{53}{13}{系统效率、min--max 时延与误差界}{equation.53}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}非 IID 表示漂移与局部--全局对齐}{12}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}系统效率、min--max 时延与误差界}{12}{subsection.5.5}\protected@file@percent }
+\newlabel{eq:round-makespan}{{43}{12}{系统效率、min--max 时延与误差界}{equation.43}{}}
+\newlabel{eq:split-error-bound}{{45}{12}{系统效率、min--max 时延与误差界}{equation.45}{}}
 \citation{fedavg}
 \citation{fedprox}
 \citation{moon}
@@ -145,44 +141,48 @@
 \citation{timesnet}
 \citation{timescsl}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {section}{\numberline {6}实验设计}{14}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}数据集与联邦划分}{14}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}对比方法}{14}{subsection.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}训练设置}{14}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}实验设计}{13}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}数据集与联邦划分}{13}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}对比方法}{13}{subsection.6.2}\protected@file@percent }
 \citation{timescsl}
 \citation{ts2vec,tstcc}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}评估协议}{15}{subsection.6.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}结果分析与讨论}{15}{section.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}总体性能对比}{15}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}训练设置}{14}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}评估协议}{14}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}结果分析与讨论}{14}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}总体性能对比}{14}{subsection.7.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces FaceDetection 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率；加粗为该列最优）。}}{14}{table.1}\protected@file@percent }
+\newlabel{tab:scale_performance}{{1}{14}{FaceDetection 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率；加粗为该列最优）。}{table.1}{}}
+\def\@LN@column{1}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces LSST 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率；加粗为该列最优）。}}{15}{table.2}\protected@file@percent }
+\newlabel{tab:lsst_dirichlet}{{2}{15}{LSST 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率；加粗为该列最优）。}{table.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces 不同方法在各个数据集上的性能对比 (消融实验)}}{15}{table.3}\protected@file@percent }
+\newlabel{tab:performance_comparison_rounded}{{3}{15}{不同方法在各个数据集上的性能对比 (消融实验)}{table.3}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.2}消融实验}{15}{subsection.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}尺度冗余性与基础尺度互补性}{15}{subsection.7.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}边际效用与结构化正则分析}{15}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}非 IID 强度与收敛趋势分析}{15}{subsection.7.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Performance Comparison of Different Methods on Datasets }}{16}{table.1}\protected@file@percent }
-\newlabel{tab:dataset_performance}{{1}{16}{Performance Comparison of Different Methods on Datasets}{table.1}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces 不同方法在各个数据集上的性能对比 (消融实验)}}{16}{table.2}\protected@file@percent }
-\newlabel{tab:performance_comparison_rounded}{{2}{16}{不同方法在各个数据集上的性能对比 (消融实验)}{table.2}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces LSST 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比}}{16}{table.3}\protected@file@percent }
-\newlabel{tab:scale_performance}{{3}{16}{LSST 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比}{table.3}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces 不同 Dirichlet 参数 $\alpha $ 下各尺度选择策略的测试准确率随 round 变化曲线（4$\times $2 子图：自上而下、自左而右依次对应从强异构到弱异构的 $\alpha $ 取值）。}}{17}{figure.4}\protected@file@percent }
-\newlabel{fig:dirichlet}{{4}{17}{不同 Dirichlet 参数 $\alpha $ 下各尺度选择策略的测试准确率随 round 变化曲线（4$\times $2 子图：自上而下、自左而右依次对应从强异构到弱异构的 $\alpha $ 取值）。}{figure.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}尺度冗余性与多尺度互补性}{15}{subsection.7.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces HAR 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率）。加粗为该列最优。}}{15}{table.4}\protected@file@percent }
+\newlabel{tab:har_dirichlet}{{4}{15}{HAR 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：最后 10 轮测试集 SVM 平均准确率）。加粗为该列最优。}{table.4}{}}
 \def\@LN@column{1}
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces HAR 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：后 10 轮测试集 SVM 平均准确率）。加粗为该列最优。}}{18}{table.4}\protected@file@percent }
-\newlabel{tab:har_dirichlet}{{4}{18}{HAR 数据集在不同 Dirichlet 非 IID 强度下的算法准确率对比（评估指标：后 10 轮测试集 SVM 平均准确率）。加粗为该列最优。}{table.4}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces 预留实验：尺度冗余性与基础尺度互补性分析。CosSim/MI/CKA 可任选一种或多种相似度指标；Base Pair 对应 Spilter 默认基础尺度组合，Adjacent Avg. 表示相邻尺度平均相似度，Non-adjacent Avg. 表示非相邻尺度平均相似度。}}{18}{table.5}\protected@file@percent }
-\newlabel{tab:scale_redundancy_placeholder}{{5}{18}{预留实验：尺度冗余性与基础尺度互补性分析。CosSim/MI/CKA 可任选一种或多种相似度指标；Base Pair 对应 Spilter 默认基础尺度组合，Adjacent Avg. 表示相邻尺度平均相似度，Non-adjacent Avg. 表示非相邻尺度平均相似度。}{table.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}异构系统下的真实时间效率}{18}{subsection.7.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.7}尺度拼接参数 $m$ 的精度--效率平衡分析}{18}{subsection.7.7}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces 预留实验：尺度数量的边际效用分析。Rel.\ Acc. 表示相对全尺度训练的精度比例；FLOPs Ratio、Comm.\ Ratio 和 Param.\ Ratio 均以全尺度训练为 $1.00$。}}{18}{table.6}\protected@file@percent }
-\newlabel{tab:marginal_utility_placeholder}{{6}{18}{预留实验：尺度数量的边际效用分析。Rel.\ Acc. 表示相对全尺度训练的精度比例；FLOPs Ratio、Comm.\ Ratio 和 Param.\ Ratio 均以全尺度训练为 $1.00$。}{table.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}边际效用与结构化正则分析}{16}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}非 IID 强度与收敛趋势分析}{16}{subsection.7.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces HAR 数据集上不同 Dirichlet 参数 $\alpha $ 下各联邦学习方法的测试准确率随通信轮次变化曲线（$3{\times }2$ 子图：自上而下、自左而右对应 $\alpha =0.05,0.1,0.3,0.5,1.0,10.0$；Spilter 按 \texttt  {local\_top\_m}$\in \{1,2,4\}$ 画为三条曲线；各子图纵轴按该 $\alpha $ 下曲线范围自适应放大）。数据来自 \texttt  {data/HAR/alpha\_*} 真实训练日志。}}{16}{figure.4}\protected@file@percent }
+\newlabel{fig:dirichlet}{{4}{16}{HAR 数据集上不同 Dirichlet 参数 $\alpha $ 下各联邦学习方法的测试准确率随通信轮次变化曲线（$3{\times }2$ 子图：自上而下、自左而右对应 $\alpha =0.05,0.1,0.3,0.5,1.0,10.0$；Spilter 按 \texttt {local\_top\_m}$\in \{1,2,4\}$ 画为三条曲线；各子图纵轴按该 $\alpha $ 下曲线范围自适应放大）。数据来自 \texttt {data/HAR/alpha\_*} 真实训练日志。}{figure.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}异构系统下的真实时间效率}{16}{subsection.7.6}\protected@file@percent }
 \def\@LN@column{1}
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces 预留实验：异构系统下的 time-to-accuracy 与帕累托效率。Speed Profile 可设为真实设备、带宽日志或模拟速度分布；TTA 表示达到目标精度所需挂钟时间；Speedup 以 Full-scale FedCSL 为基准。}}{19}{table.7}\protected@file@percent }
-\newlabel{tab:wall_clock_placeholder}{{7}{19}{预留实验：异构系统下的 time-to-accuracy 与帕累托效率。Speed Profile 可设为真实设备、带宽日志或模拟速度分布；TTA 表示达到目标精度所需挂钟时间；Speedup 以 Full-scale FedCSL 为基准。}{table.7}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Spilter 自适应尺度拼接参数 $m$ 对精度与系统效率的影响（$R=6$，Dirichlet $\alpha =0.1$）。Acc.\ 为 SVM 下游测试精度；Comm.\ Ratio 与 Comp.\ Ratio 分别为每轮通信量和计算量占全尺度训练的比例；$\Delta _{\mathrm  {upper}}$ 为式~\eqref  {eq:split-error-bound} 对应的理论精度损失上界估计。}}{19}{table.8}\protected@file@percent }
-\newlabel{tab:m_balance}{{8}{19}{Spilter 自适应尺度拼接参数 $m$ 对精度与系统效率的影响（$R=6$，Dirichlet $\alpha =0.1$）。Acc.\ 为 SVM 下游测试精度；Comm.\ Ratio 与 Comp.\ Ratio 分别为每轮通信量和计算量占全尺度训练的比例；$\Delta _{\mathrm {upper}}$ 为式~\eqref {eq:split-error-bound} 对应的理论精度损失上界估计。}{table.8}{}}
-\citation{oort,fedcsadaptive,flexfl}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces HAR 客户端本地训练峰值显存与最慢客户端单 epoch 耗时（Dirichlet $\alpha =0.1$，RTX 3090，$K=10$）。Mean / Max Peak Mem 为各客户端 1-epoch 峰值显存的均值 / 最大值；Mem Saving 与 Compress.\ Ratio 均以 FedCSL 为基准：Saving $=1-\bar  M/\bar  M_{\mathrm  {FedCSL}}$，Compress.\ $=\bar  M_{\mathrm  {FedCSL}}/\bar  M$。加粗为 Spilter 相对 FedCSL 的显存节省。}}{17}{table.5}\protected@file@percent }
+\newlabel{tab:har_client_memory}{{5}{17}{HAR 客户端本地训练峰值显存与最慢客户端单 epoch 耗时（Dirichlet $\alpha =0.1$，RTX 3090，$K=10$）。Mean / Max Peak Mem 为各客户端 1-epoch 峰值显存的均值 / 最大值；Mem Saving 与 Compress.\ Ratio 均以 FedCSL 为基准：Saving $=1-\bar M/\bar M_{\mathrm {FedCSL}}$，Compress.\ $=\bar M_{\mathrm {FedCSL}}/\bar M$。加粗为 Spilter 相对 FedCSL 的显存节省。}{table.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces HAR 客户端本地训练耗时与 200 轮计算下界（Dirichlet $\alpha =0.1$，RTX 3090，$K=10$）。Slowest / Mean Epoch 与 Epoch Speedup 来自 \texttt  {system\_efficiency\_HAR\_partials}；200-round Local LB $=\max _k T_k^{\mathrm  {epoch}}\times 200$（分钟）；Final Acc.\ 为同 $\alpha $ 下表~\ref {tab:har_dirichlet} 的最后 10 轮精度。该 $\alpha =0.1$ 为当前系统效率实测划分，Spilter-$m{=}1$ 的 Epoch Speedup（1.48$\times $）为 Spilter 三者最高。}}{17}{table.6}\protected@file@percent }
+\newlabel{tab:har_local_compute}{{6}{17}{HAR 客户端本地训练耗时与 200 轮计算下界（Dirichlet $\alpha =0.1$，RTX 3090，$K=10$）。Slowest / Mean Epoch 与 Epoch Speedup 来自 \texttt {system\_efficiency\_HAR\_partials}；200-round Local LB $=\max _k T_k^{\mathrm {epoch}}\times 200$（分钟）；Final Acc.\ 为同 $\alpha $ 下表~\ref {tab:har_dirichlet} 的最后 10 轮精度。该 $\alpha =0.1$ 为当前系统效率实测划分，Spilter-$m{=}1$ 的 Epoch Speedup（1.48$\times $）为 Spilter 三者最高。}{table.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.7}系统资源不平衡场景下的效果分析}{17}{subsection.7.7}\protected@file@percent }
+\newlabel{sec:resource-hetero}{{7.7}{17}{系统资源不平衡场景下的效果分析}{subsection.7.7}{}}
 \citation{ts2vec,timescsl}
+\def\@LN@column{1}
+\@writefile{toc}{\contentsline {paragraph}{异构客户端设定。}{18}{section*.8}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces 系统资源不平衡场景下的联邦训练效果（HAR，Dirichlet $\alpha =0.1$，$K=10$；小/中/大显存设备分别为 4/3/3 台）。Participation 为可完成本地 epoch 的客户端比例；Slowest Epoch 为同步轮次最慢客户端耗时；Final Acc.\ 为全局表示 + SVM 测试精度。数值待补。}}{18}{table.7}\protected@file@percent }
+\newlabel{tab:resource_hetero}{{7}{18}{系统资源不平衡场景下的联邦训练效果（HAR，Dirichlet $\alpha =0.1$，$K=10$；小/中/大显存设备分别为 4/3/3 台）。Participation 为可完成本地 epoch 的客户端比例；Slowest Epoch 为同步轮次最慢客户端耗时；Final Acc.\ 为全局表示 + SVM 测试精度。数值待补。}{table.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.8}可解释性分析}{18}{subsection.7.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.9}局限性讨论}{18}{subsection.7.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}结论}{18}{section.8}\protected@file@percent }
 \bibstyle{unsrtnat}
 \bibdata{refs}
 \bibcite{ts2vec}{{1}{2022}{{Yue et~al.}}{{Yue, Wang, Duan, Yang, Huang, Tong, and Xu}}}
@@ -195,10 +195,6 @@
 \bibcite{interpgn}{{8}{2025}{{Anonymous}}{{}}}
 \bibcite{unishape}{{9}{2025}{{Liu et~al.}}{{Liu, Wang, Li, Zheng, Eldele, Wu, and Ma}}}
 \bibcite{fedavg}{{10}{2017}{{McMahan et~al.}}{{McMahan, Moore, Ramage, Hampson, and y~Arcas}}}
-\def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.8}可解释性分析}{20}{subsection.7.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.9}局限性讨论}{20}{subsection.7.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}结论}{20}{section.8}\protected@file@percent }
 \bibcite{fedprox}{{11}{2020}{{Li et~al.}}{{Li, Sahu, Zaheer, Sanjabi, Talwalkar, and Smith}}}
 \bibcite{moon}{{12}{2021}{{Li et~al.}}{{Li, He, and Song}}}
 \bibcite{fedst}{{13}{2024}{{Liang and Wang}}{{}}}
@@ -209,6 +205,7 @@
 \bibcite{scalefl}{{18}{2023}{{Ilhan et~al.}}{{Ilhan, Su, and Liu}}}
 \bibcite{inclusivefl}{{19}{2022}{{Liu et~al.}}{{Liu, Wu, Wu, Wang, Lyu, Chen, and Xie}}}
 \bibcite{adaptivefl}{{20}{2024}{{Jia et~al.}}{{Jia, Hu, Chen, Yang, Xie, Liu, and Chen}}}
+\def\@LN@column{1}
 \bibcite{flexfl}{{21}{2024}{{Chen et~al.}}{{Chen, Jia, Hu, Xie, Li, and Chen}}}
 \bibcite{fcnbaseline}{{22}{2017}{{Wang et~al.}}{{Wang, Yan, and Oates}}}
 \bibcite{timesnet}{{23}{2023{}}{{Wu et~al.}}{{Wu, Hu, Liu, Zhou, Wang, and Long}}}
@@ -218,7 +215,6 @@
 \bibcite{fedca}{{27}{2023}{{Zhang et~al.}}{{Zhang, Kuang, Chen, You, Shen, Xiao, Zhang, Wu, Wu, Zhuang, and Li}}}
 \bibcite{fedmoco}{{28}{2021}{{Dong and Voiculescu}}{{}}}
 \bibcite{fedu2}{{29}{2024}{{Liao et~al.}}{{Liao, Liu, Chen, Zhou, Yu, Zhu, Yao, Wang, Zheng, and Tan}}}
-\def\@LN@column{1}
 \bibcite{fedproc}{{30}{2021}{{Mu et~al.}}{{Mu, Shen, Cheng, Geng, Fu, Zhang, and Zhang}}}
 \bibcite{fedpcl}{{31}{2022{}}{{Tan et~al.}}{{Tan, Long, Ma, Liu, Zhou, and Jiang}}}
 \bibcite{fedcdl}{{32}{2024}{{Do et~al.}}{{Do, Nguyen, Tran, Nguyen, Tjiputra, Chiu, and Nguyen}}}
@@ -228,6 +224,7 @@
 \bibcite{fedrcil}{{36}{2023}{{Psaltis et~al.}}{{Psaltis, Chatzikonstantinou, Patrikakis, and Daras}}}
 \bibcite{fedcog}{{37}{2024}{{Ye et~al.}}{{Ye, Du, Ni, Wang, and Chen}}}
 \bibcite{mrtf}{{38}{2023}{{Li et~al.}}{{Li, Yang, and Zhan}}}
+\def\@LN@column{1}
 \bibcite{fediocd}{{39}{2024}{{Gong et~al.}}{{Gong, Li, Bao, Yao, Huang, Wu, Zhang, Zheng, and Doermann}}}
 \bibcite{fednoro}{{40}{2023{}}{{Wu et~al.}}{{Wu, Yu, Jiang, Cheng, and Yan}}}
 \bibcite{fedsmall}{{41}{2023}{{Kamp et~al.}}{{Kamp, Fischer, and Vreeken}}}
@@ -236,4 +233,4 @@
 \bibcite{fedproto}{{44}{2022{}}{{Tan et~al.}}{{Tan, Long, Liu, Zhou, Lu, Jiang, and Zhang}}}
 \bibcite{scaffold}{{45}{2020}{{Karimireddy et~al.}}{{Karimireddy, Kale, Mohri, Reddi, Stich, and Suresh}}}
 \def\@LN@column{1}
-\gdef \@abspage@last{22}
+\gdef \@abspage@last{21}

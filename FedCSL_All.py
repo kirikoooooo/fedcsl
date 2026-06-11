@@ -84,6 +84,7 @@ parser.add_argument('--ema-alpha', type=float, default=None, help='EMA smoothing
 parser.add_argument('--description', type=str, default=None, help='Experiment description (overrides config file)')
 parser.add_argument('--dirichlet-alpha', type=float, default=None, help='Dirichlet alpha for data heterogeneity (overrides config file)')
 parser.add_argument('--num-client', type=int, default=None, help='Number of federated clients (overrides config file)')
+parser.add_argument('--num-rounds', type=int, default=None, help='Number of federated rounds (overrides config file)')
 parser.add_argument('--server-gpu', type=int, default=None, help='GPU id used by the server/model evaluation thread')
 parser.add_argument('--client-gpus', type=str, default=None,
                     help='Comma-separated GPU ids for client worker threads, e.g. "0,1,2"')
@@ -1174,7 +1175,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     numClient = args.num_client if args.num_client is not None else fed_cfg['numClient']
     numClient = max(1, int(numClient))
-    numRound = fed_cfg['numRound']
+    numRound = args.num_rounds if args.num_rounds is not None else fed_cfg['numRound']
     numEpoch = fed_cfg['numEpoch']
     dirichlet_alpha = args.dirichlet_alpha if args.dirichlet_alpha is not None else fed_cfg['dirichlet_alpha']
     algo = config.get('algo', 'fedcsl')

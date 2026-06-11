@@ -225,12 +225,13 @@ def write_markdown(
     g0 = model["g0_mb"]
     g_r = model["g_r_mb"]
     R = len(g_r)
+    ds_name = meta.get("dataset", "?")
     lines: List[str] = []
-    lines.append("# HAR 尺度显存标定与背包选择（§7.7 支撑）")
+    lines.append(f"# {ds_name} 尺度显存标定与背包选择（§7.7 支撑）")
     lines.append("")
     lines.append("## 测量设置")
     lines.append("")
-    lines.append(f"- 数据集 HAR，K={meta.get('num_clients_total','?')}，"
+    lines.append(f"- 数据集 {ds_name}，K={meta.get('num_clients_total','?')}，"
                  f"alpha={meta.get('alpha','?')}，batch={meta.get('batch_size','?')}")
     lines.append(f"- GPU: {meta.get('gpu_name') or meta.get('device','?')}")
     lines.append(f"- 尺度数 R={R}，scale_aux={meta.get('scale_aux','?')}")
@@ -294,9 +295,18 @@ def write_markdown(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default="HAR",
+        help="数据集名，用于在缺省 --partial/--out-* 时自动定位路径。"
+             "与 measure_scale_memory.py 的 --dataset 一致。",
+    )
+    parser.add_argument(
         "--partial",
         type=str,
-        default="data/scale_memory_HAR_partials/per_scale.json",
+        default="",
+        help="标定结果 json。缺省时按 --dataset 自动定位 "
+             "data/scale_memory_<dataset>_partials/per_scale.json。",
     )
     parser.add_argument(
         "--budgets",
@@ -311,11 +321,16 @@ def main() -> int:
         help="可选：逗号分隔的 R 个占位评分 s_r；缺省用单尺度峰值的反序做演示评分。",
     )
     parser.add_argument("--topm", type=int, default=4, help="对照的固定 top-m 的 m。")
-    parser.add_argument("--out-json", type=str, default="data/scale_memory_HAR.json")
-    parser.add_argument("--out-md", type=str, default="data/scale_memory_HAR.md")
+    parser.add_argument("--out-json", type=str, default="", help="缺省按 --dataset 自动命名。")
+    parser.add_argument("--out-md", type=str, default="", help="缺省按 --dataset 自动命名。")
     args = parser.parse_args()
 
-    partial_path = Path(args.partial)
+    dataset_tag = (args.dataset or "HAR").strip().replace("/", "_").replace(" ", "_").replace("-", "_") or "unknown"
+    partial_str = args.partial.strip() or f"data/scale_memory_{dataset_tag}_partials/per_scale.json"
+    out_json_str = args.out_json.strip() or f"data/scale_memory_{dataset_tag}.json"
+    out_md_str = args.out_md.strip() or f"data/scale_memory_{dataset_tag}.md"
+
+    partial_path = Path(partial_str)
     if not partial_path.is_file():
         print(f"[err] 找不到标定结果 {partial_path}；请先运行 measure_scale_memory.py", file=sys.stderr)
         return 1
@@ -371,7 +386,7 @@ def main() -> int:
             flush=True,
         )
 
-    out_json = Path(args.out_json)
+    out_json = Path(out_json_str)
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps({
         "model": model,
@@ -386,7 +401,7 @@ def main() -> int:
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     write_markdown(
-        Path(args.out_md),
+        Path(out_md_str),
         model=model,
         scale_lengths=scale_lengths,
         add_report=add_report,
@@ -397,7 +412,7 @@ def main() -> int:
 
     print(f"\n[ok] 拟合 + 背包 DP 完成")
     print(f"     json -> {out_json}")
-    print(f"     md   -> {args.out_md}")
+    print(f"     md   -> {out_md_str}")
     if add_report and add_report.get("mae_mb") is not None:
         print(f"     可加性 MAE = {add_report['mae_mb']:.2f} MB, "
               f"max rel err = {_fmt(add_report.get('max_rel_err'),3)}")

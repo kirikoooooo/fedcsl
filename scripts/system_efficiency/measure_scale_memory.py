@@ -50,7 +50,39 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-from dataset_utils import LoadDataset_HAR  # noqa: E402
+from dataset_utils import (  # noqa: E402
+    LoadDataset_HAR,
+    LoadDataset_Epilepsy,
+    LoadDataset_SleepEDF,
+    LoadDataset_FDA,
+    LoadDataset_UEA,
+)
+
+
+def load_dataset(dataset: str, num_clients: int, alpha: float):
+    """按数据集名加载联邦划分，复刻 FedCSL_All.py 的分发逻辑。
+
+    返回 (X_all, y_all, X_fed, y_fed)。其中 X_fed/y_fed 为按 Dirichlet 划分的
+    客户端本地数据列表。dataset 取值与主流程一致：
+      HAR / Epilepsy-TSTCC / SleepEDF / FD-A / <任意 UEA 数据集名>。
+    """
+    name = (dataset or "").strip()
+    if name == "HAR":
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_HAR(num_clients, alpha)
+    elif name == "Epilepsy-TSTCC":
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_Epilepsy(num_clients, alpha)
+    elif name == "SleepEDF":
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_SleepEDF(num_clients, alpha)
+    elif name == "FD-A":
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_FDA(num_clients, alpha)
+    elif name != "":
+        X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_UEA(
+            name, num_clients, dirchlet_alpha=alpha
+        )
+    else:
+        raise ValueError("dataset 为空；请用 --dataset 指定 HAR / Epilepsy-TSTCC / "
+                         "SleepEDF / FD-A / <UEA 数据集名>")
+    return X_all, y_all, X_fed, y_fed
 
 
 def _cuda_sync(device: torch.device) -> None:
@@ -217,6 +249,13 @@ def _aggregate(mems: List[float]) -> Dict[str, float]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="HAR",
+        help="数据集名（与主流程一致）：HAR / Epilepsy-TSTCC / SleepEDF / FD-A / "
+             "<任意 UEA 数据集名，如 FaceDetection、LSST>。",
+    )
     parser.add_argument("--num-clients", type=int, default=10)
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -247,12 +286,21 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=str,
-        default="data/scale_memory_HAR_partials/per_scale.json",
+        default="",
+        help="输出 json 路径。缺省时按数据集名自动生成 "
+             "data/scale_memory_<dataset>_partials/per_scale.json。",
     )
     args = parser.parse_args()
     scale_aux = not args.no_scale_aux
 
-    output_path = Path(args.output)
+    dataset = args.dataset.strip()
+    # 数据集名可能含 '/' 或空格（UEA），做成安全的文件名片段
+    dataset_tag = dataset.replace("/", "_").replace(" ", "_").replace("-", "_") or "unknown"
+
+    if args.output.strip():
+        output_path = Path(args.output)
+    else:
+        output_path = Path(f"data/scale_memory_{dataset_tag}_partials/per_scale.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not torch.cuda.is_available():
@@ -271,11 +319,11 @@ def main() -> int:
     if device.type == "cuda":
         torch.cuda.manual_seed_all(args.seed)
 
-    print(f"[info] 逐尺度显存标定 | num_clients={args.num_clients} | alpha={args.alpha}", flush=True)
+    print(f"[info] 逐尺度显存标定 | dataset={dataset} | num_clients={args.num_clients} | alpha={args.alpha}", flush=True)
     print(f"[info] device={device} | CUDA_VISIBLE_DEVICES={visible!r} | gpu={gpu_name}", flush=True)
-    print(f"[info] batch_size={args.batch_size} | scale_aux={scale_aux}", flush=True)
+    print(f"[info] batch_size={args.batch_size} | scale_aux={scale_aux} | output={output_path}", flush=True)
 
-    X_all, y_all, X_test, y_test, X_fed, y_fed = LoadDataset_HAR(args.num_clients, args.alpha)
+    X_all, y_all, X_fed, y_fed = load_dataset(dataset, args.num_clients, args.alpha)
     if isinstance(X_all, torch.Tensor):
         X_all = X_all.numpy()
     n_ts, in_channels, len_ts = X_all.shape
@@ -363,7 +411,7 @@ def main() -> int:
 
     summary: Dict[str, Any] = {
         "task": "scale_memory_calibration",
-        "dataset": "HAR",
+        "dataset": dataset,
         "num_clients_total": int(args.num_clients),
         "clients_used": client_ids,
         "alpha": float(args.alpha),

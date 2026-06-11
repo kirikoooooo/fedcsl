@@ -137,8 +137,12 @@ SCALE_AUX=0 bash scripts/system_efficiency/run_har_efficiency.sh
 ## 用法
 
 ```bash
-# 一键：标定 + 拟合 + DP（默认 GPU 0、K=10、batch=32、预算档 64/128/256 MB）
+# 一键：标定 + 拟合 + DP（默认 HAR、GPU 0、K=10、batch=32、预算档 64/128/256 MB）
 bash scripts/system_efficiency/run_scale_memory.sh
+
+# 换数据集（与主流程一致：HAR / Epilepsy-TSTCC / SleepEDF / FD-A / 任意 UEA 名）
+DATASET=FaceDetection bash scripts/system_efficiency/run_scale_memory.sh
+DATASET=Epilepsy-TSTCC GPU=1 bash scripts/system_efficiency/run_scale_memory.sh
 
 # 带可加性验证（实测 3 个组合与可加预测对比）
 VERIFY_SUBSETS="0,1;2,4,6;0,3,7" bash scripts/system_efficiency/run_scale_memory.sh
@@ -147,9 +151,16 @@ VERIFY_SUBSETS="0,1;2,4,6;0,3,7" bash scripts/system_efficiency/run_scale_memory
 BUDGETS="48,96,192" TOPM=4 GPU=1 bash scripts/system_efficiency/run_scale_memory.sh
 ```
 
+产物按数据集命名（`/ 空格 -` → `_`）：
+`data/scale_memory_<数据集>_partials/per_scale.json`、`data/scale_memory_<数据集>.{json,md}`，
+不同数据集互不覆盖。
+
 单独重跑拟合（已有标定 json 时，不必再占 GPU）：
 
 ```bash
+python scripts/system_efficiency/fit_scale_memory.py --dataset FaceDetection \
+  --budgets 64,128,256 --topm 4
+# 或显式指定路径：
 python scripts/system_efficiency/fit_scale_memory.py \
   --partial data/scale_memory_HAR_partials/per_scale.json \
   --budgets 64,128,256 --topm 4
@@ -159,10 +170,13 @@ python scripts/system_efficiency/fit_scale_memory.py \
 
 ## dashboard 端
 
-- 入口脚本 `scripts/system_efficiency/run_scale_memory.sh` 自动出现在「脚本」面板；
-- `GET /api/scale-memory/status` — 产物是否就绪；
-- `GET /api/scale-memory/report.md` — 可读 markdown（可加模型 + DP 选择表）；
-- `GET /api/scale-memory/result` — 机读 JSON（$g_0$、$g_r$、可加性误差、DP 结果）。
+- 入口脚本 `scripts/system_efficiency/run_scale_memory.sh` 自动出现在「脚本」面板（环境变量里可加 `DATASET=...`）；
+- `GET /api/scale-memory/datasets` — 列出已有标定产物的数据集；
+- `GET /api/scale-memory/status?dataset=HAR` — 该数据集产物是否就绪；
+- `GET /api/scale-memory/report.md?dataset=HAR` — 可读 markdown（可加模型 + DP 选择表）；
+- `GET /api/scale-memory/result?dataset=HAR` — 机读 JSON（$g_0$、$g_r$、可加性误差、DP 结果）。
+
+`dataset` 查询参数缺省为 `HAR`，并做了目录穿越防御（拒绝含 `/ \ ..` 的名字）。
 
 ## 对已有实验的影响
 

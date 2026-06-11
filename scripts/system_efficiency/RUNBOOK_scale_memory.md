@@ -47,6 +47,16 @@ VERIFY_SUBSETS="0,1;2,4,6;0,3,7" \
 bash scripts/system_efficiency/run_scale_memory.sh
 ```
 
+> **换数据集**：默认 `DATASET=HAR`。要测其它数据集，加 `DATASET=` 即可，
+> 取值与主流程一致：`HAR` / `Epilepsy-TSTCC` / `SleepEDF` / `FD-A` /
+> 任意 UEA 数据集名（如 `FaceDetection`、`LSST`）。例如：
+> ```bash
+> DATASET=FaceDetection GPU=0 bash scripts/system_efficiency/run_scale_memory.sh
+> ```
+> 产物会按数据集自动命名：`data/scale_memory_<数据集>_partials/per_scale.json`、
+> `data/scale_memory_<数据集>.{json,md}`（名字里的 `/ 空格 -` 会换成 `_`，
+> 如 `FD-A` → `scale_memory_FD_A.md`）。不同数据集的产物互不覆盖。
+
 这一条命令会**自动跑完两步**（标定 + 拟合 DP）。下面分别讲两步各自的预期。
 
 ### 标定阶段预期输出
@@ -176,6 +186,7 @@ python -m dashboard.app          # 启动后端（需要 psutil/fastapi/uvicorn�
 
 | 变量 | 默认 | 含义 |
 |---|---|---|
+| `DATASET` | HAR | 数据集名：HAR / Epilepsy-TSTCC / SleepEDF / FD-A / 任意 UEA 名 |
 | `GPU` | 0 | 用哪张卡 |
 | `NUM_CLIENTS` | 10 | 客户端数（标定 $g_r$ 用少量即可） |
 | `ALPHA` | 0.1 | Dirichlet 异质度 |

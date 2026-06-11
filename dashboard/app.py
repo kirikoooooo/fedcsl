@@ -873,44 +873,71 @@ def api_spilter_memory_result() -> Dict[str, Any]:
 
 # ---- 尺度显存标定 + 背包 DP（§7.7 支撑，独立 partial 数据源）---------------
 # 实验入口脚本：scripts/system_efficiency/run_scale_memory.sh（dashboard 自动扫描可见）
-# 产物：data/scale_memory_HAR.{json,md}，data/scale_memory_HAR_partials/per_scale.json
-_SCALE_MEM_MD = "scale_memory_HAR.md"
-_SCALE_MEM_JSON = "scale_memory_HAR.json"
+# 产物随数据集命名：data/scale_memory_<DATASET_TAG>.{json,md}，
+#                   data/scale_memory_<DATASET_TAG>_partials/per_scale.json
+# 各 API 通过 ?dataset=HAR 查询参数选择数据集，缺省 HAR。
+
+
+def _scale_mem_tag(dataset: str) -> str:
+    """数据集名 -> 安全文件名片段（与 run_scale_memory.sh / py 脚本规则一致）。"""
+    raw = (dataset or "HAR").strip()
+    # 先拒绝路径分隔符与父目录引用，杜绝目录穿越（合法数据集名不含这些）
+    if not raw or "/" in raw or "\\" in raw or ".." in raw:
+        raise HTTPException(400, f"invalid dataset name: {dataset!r}")
+    tag = raw.replace(" ", "_").replace("-", "_")
+    # 仅允许字母数字下划线
+    if not all(c.isalnum() or c == "_" for c in tag):
+        raise HTTPException(400, f"invalid dataset name: {dataset!r}")
+    return tag
 
 
 @app.get("/api/scale-memory/status")
-def api_scale_memory_status() -> Dict[str, Any]:
-    """标定/拟合产物是否就绪、最近生成时间。"""
-    info: Dict[str, Any] = {"present": {}, "mtime": {}}
-    for kind, name in (("md", _SCALE_MEM_MD), ("json", _SCALE_MEM_JSON)):
+def api_scale_memory_status(dataset: str = "HAR") -> Dict[str, Any]:
+    """标定/拟合产物是否就绪、最近生成时间。?dataset= 选择数据集。"""
+    tag = _scale_mem_tag(dataset)
+    info: Dict[str, Any] = {"dataset": dataset, "present": {}, "mtime": {}}
+    for kind, name in (("md", f"scale_memory_{tag}.md"), ("json", f"scale_memory_{tag}.json")):
         p = _SYS_EFF_DIR / name
         info["present"][kind] = p.is_file()
         info["mtime"][kind] = p.stat().st_mtime if p.is_file() else None
-    partials = _SYS_EFF_DIR / "scale_memory_HAR_partials" / "per_scale.json"
+    partials = _SYS_EFF_DIR / f"scale_memory_{tag}_partials" / "per_scale.json"
     info["per_scale_present"] = partials.is_file()
     return info
 
 
+@app.get("/api/scale-memory/datasets")
+def api_scale_memory_datasets() -> Dict[str, Any]:
+    """列出已有标定产物的数据集（扫描 data/scale_memory_*.json）。"""
+    found = []
+    for p in sorted(_SYS_EFF_DIR.glob("scale_memory_*.json")):
+        tag = p.stem[len("scale_memory_"):]
+        if tag:
+            found.append({"tag": tag, "mtime": p.stat().st_mtime})
+    return {"datasets": found}
+
+
 @app.get("/api/scale-memory/report.md", response_class=PlainTextResponse)
-def api_scale_memory_md() -> str:
-    """data/scale_memory_HAR.md 的 markdown 文本（可加模型 + 背包 DP 选择表）。"""
-    p = _SYS_EFF_DIR / _SCALE_MEM_MD
+def api_scale_memory_md(dataset: str = "HAR") -> str:
+    """data/scale_memory_<dataset>.md 的 markdown 文本（可加模型 + 背包 DP 选择表）。"""
+    tag = _scale_mem_tag(dataset)
+    p = _SYS_EFF_DIR / f"scale_memory_{tag}.md"
     if not p.is_file():
         raise HTTPException(
             404,
-            "scale memory report not generated yet; "
-            "run scripts/system_efficiency/run_scale_memory.sh first",
+            f"scale memory report for dataset={dataset!r} not generated yet; "
+            f"run: DATASET={dataset} bash scripts/system_efficiency/run_scale_memory.sh",
         )
     return p.read_text(encoding="utf-8")
 
 
 @app.get("/api/scale-memory/result")
-def api_scale_memory_result() -> Dict[str, Any]:
-    """返回 data/scale_memory_HAR.json（可加模型系数、可加性误差、DP 结果）。"""
-    p = _SYS_EFF_DIR / _SCALE_MEM_JSON
+def api_scale_memory_result(dataset: str = "HAR") -> Dict[str, Any]:
+    """返回 data/scale_memory_<dataset>.json（可加模型系数、可加性误差、DP 结果）。"""
+    tag = _scale_mem_tag(dataset)
+    p = _SYS_EFF_DIR / f"scale_memory_{tag}.json"
     if not p.is_file():
-        raise HTTPException(404, "scale memory json not generated yet; "
-                                 "run scripts/system_efficiency/run_scale_memory.sh first")
+        raise HTTPException(404, f"scale memory json for dataset={dataset!r} not generated yet; "
+                                 f"run: DATASET={dataset} bash scripts/system_efficiency/run_scale_memory.sh")
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:

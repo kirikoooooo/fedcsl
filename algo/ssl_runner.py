@@ -4,11 +4,10 @@
 - BYOL
 - Orchestra
 - FedU2
+- PatchTST (masked patch reconstruction + FedAvg)
 
 共同特点：
-- 复用当前项目的 shapelet encoder；
-- 复用当前项目的 tsaug 双视图增强；
-- 训练仍走 FedAvg 式联邦聚合；
+- 训练走 FedAvg 式联邦聚合（FedU2 除外，使用 EUA）；
 - 评估仍使用全局 encoder + SVM / TSTCC 协议，便于与 FedCSL 直接对比。
 """
 
@@ -28,6 +27,7 @@ except Exception:  # pragma: no cover
 
 from .flbench_compat import AttrDict, FedAvgClient, FedAvgServer, SequentialTrainer, TensorBaseDataset
 from .fedu2_utils import eua_aggregate_state_dicts, fur_uot_loss
+from .patchtst_model import PatchTSTSSLModel
 from .ssl_model import OrchestraShapeletModel, ShapeletSSLModel
 
 
@@ -103,6 +103,16 @@ def _build_args(
             "fur_num_steps": int(ssl_cfg.get("fur_num_steps", 5)),
             "server_lr": float(ssl_cfg.get("server_lr", 0.1)),
             "sharpen_ratio": float(ssl_cfg.get("sharpen_ratio", 0.1)),
+            "patch_len": int(ssl_cfg.get("patch_len", 16)),
+            "stride": int(ssl_cfg.get("stride", 8)),
+            "d_model": int(ssl_cfg.get("d_model", 128)),
+            "n_heads": int(ssl_cfg.get("n_heads", 4)),
+            "n_layers": int(ssl_cfg.get("n_layers", 3)),
+            "d_ff": int(ssl_cfg.get("d_ff", 256)),
+            "dropout": float(ssl_cfg.get("dropout", 0.1)),
+            "attn_dropout": float(ssl_cfg.get("attn_dropout", 0.0)),
+            "head_dropout": float(ssl_cfg.get("head_dropout", 0.1)),
+            "mask_ratio": float(ssl_cfg.get("mask_ratio", 0.4)),
         }),
     })
 
@@ -325,6 +335,11 @@ class BYOLClient(SSLClient):
         )
 
 
+class PatchTSTClient(SSLClient):
+    def _compute_loss(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model.masked_reconstruction_loss(x)
+
+
 class FedU2Client(SSLClient):
     def set_parameters(self, package: dict[str, Any]) -> None:
         super().set_parameters(package)
@@ -453,6 +468,42 @@ class OrchestraServer(FedAvgServer):
         return client_packages
 
 
+def _infer_seq_len(X_fed) -> int:
+    for x in X_fed:
+        arr = np.asarray(x)
+        if arr.size == 0:
+            continue
+        if arr.ndim == 3:
+            return int(arr.shape[-1])
+        if arr.ndim == 2:
+            return int(arr.shape[-1])
+    raise ValueError("ssl_runner: cannot infer sequence length from X_fed")
+
+
+def _mk_patchtst_model(
+    *,
+    ssl_cfg,
+    in_channels: int,
+    seq_len: int,
+    to_cuda: bool,
+) -> PatchTSTSSLModel:
+    return PatchTSTSSLModel(
+        in_channels=int(in_channels),
+        seq_len=int(seq_len),
+        patch_len=int(ssl_cfg.patch_len),
+        stride=int(ssl_cfg.stride),
+        d_model=int(ssl_cfg.d_model),
+        n_heads=int(ssl_cfg.n_heads),
+        n_layers=int(ssl_cfg.n_layers),
+        d_ff=int(ssl_cfg.d_ff),
+        dropout=float(ssl_cfg.dropout),
+        attn_dropout=float(ssl_cfg.attn_dropout),
+        head_dropout=float(ssl_cfg.head_dropout),
+        mask_ratio=float(ssl_cfg.mask_ratio),
+        to_cuda=to_cuda,
+    )
+
+
 def run_ssl_baseline(
     *,
     algo: str,
@@ -488,11 +539,14 @@ def run_ssl_baseline(
     algo = str(algo).lower()
     if algo == "fedu2-byol":
         algo = "fedu2"
-    if algo not in {"byol", "orchestra", "fedu2"}:
+    if algo not in {"byol", "orchestra", "fedu2", "patchtst", "fedpatchtst"}:
         raise ValueError(f"unsupported ssl algo: {algo}")
+    if algo == "fedpatchtst":
+        algo = "patchtst"
 
     device = torch.device("cuda") if (to_cuda and torch.cuda.is_available()) else torch.device("cpu")
     num_clients = len(X_fed)
+    seq_len = _infer_seq_len(X_fed)
     dataset_obj, data_indices = _build_data_indices(X_fed, y_fed)
     seed_i = int(seed) if seed is not None else 42
     args = _build_args(
@@ -509,6 +563,13 @@ def run_ssl_baseline(
     ssl_cfg = args.ssl
 
     def _mk_model():
+        if algo == "patchtst":
+            return _mk_patchtst_model(
+                ssl_cfg=ssl_cfg,
+                in_channels=n_channels,
+                seq_len=seq_len,
+                to_cuda=to_cuda,
+            )
         if algo == "orchestra":
             return OrchestraShapeletModel(
                 shapelets_size_and_len=shapelets_size_and_len,
@@ -573,6 +634,7 @@ def run_ssl_baseline(
         "byol": BYOLClient,
         "orchestra": OrchestraClient,
         "fedu2": FedU2Client,
+        "patchtst": PatchTSTClient,
     }[algo]
     clients = []
     for _cid in range(num_clients):

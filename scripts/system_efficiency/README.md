@@ -108,3 +108,65 @@ dashboard 端：
 ```bash
 SCALE_AUX=0 bash scripts/system_efficiency/run_har_efficiency.sh
 ```
+
+---
+
+# 尺度显存标定 + 背包 DP 选择（§7.7 支撑实验）
+
+为论文 §7.7「系统资源不平衡场景」提供**显存约束尺度选择**的实测输入。
+与上面的系统效率实验**完全独立**（不同脚本、不同 partial 目录、不同产物），
+但共用 `LearningShapeletsCL` 客户端与同一套显存测量口径，结果可直接对比。
+
+## 动机
+
+§7.7 把弱设备的尺度选择建模为 0-1 背包：在显存预算 $G_k$ 下，
+最大化本地周期评分 $\sum_{r\in\mathcal{R}} s_r$，约束 $g_0+\sum_{r\in\mathcal{R}} g_r \le G_k$。
+其中每个尺度的显存增量 $g_r$ **并非随尺度长度单调**（中等尺度因滑窗数 $W_r=L-\ell_r+1$
+与长度 $\ell_r$ 的乘积最大而显存最高），因此需要先**实测标定** $g_r$，
+再对每种组合用可加模型预测显存，最后用 DP 求最优组合。
+
+## 两步流程
+
+1. **标定** `measure_scale_memory.py`：逐个测单尺度子模型 1-epoch 训练峰值显存，
+   得到每个 $g_r$；可选 `--verify-subsets` 实测若干组合验证可加性。
+   产物：`data/scale_memory_HAR_partials/per_scale.json`。
+2. **拟合 + DP** `fit_scale_memory.py`：拟合 $\widehat{\mathrm{Mem}}(\mathcal{R})=g_0+\sum_{r\in\mathcal{R}} g_r$，
+   报告可加性误差（MAE / 最大相对误差），在各显存预算档位下用背包 DP（`O(R\cdot G)` 精确解）
+   求最优尺度组合并与纯 top-m 对照。产物：`data/scale_memory_HAR.{json,md}`。
+
+## 用法
+
+```bash
+# 一键：标定 + 拟合 + DP（默认 GPU 0、K=10、batch=32、预算档 64/128/256 MB）
+bash scripts/system_efficiency/run_scale_memory.sh
+
+# 带可加性验证（实测 3 个组合与可加预测对比）
+VERIFY_SUBSETS="0,1;2,4,6;0,3,7" bash scripts/system_efficiency/run_scale_memory.sh
+
+# 自定义预算档位与对照 top-m
+BUDGETS="48,96,192" TOPM=4 GPU=1 bash scripts/system_efficiency/run_scale_memory.sh
+```
+
+单独重跑拟合（已有标定 json 时，不必再占 GPU）：
+
+```bash
+python scripts/system_efficiency/fit_scale_memory.py \
+  --partial data/scale_memory_HAR_partials/per_scale.json \
+  --budgets 64,128,256 --topm 4
+```
+
+注入真实评分（缺省用占位评分演示管线）：`--scores` 传 R 个本地周期评分。
+
+## dashboard 端
+
+- 入口脚本 `scripts/system_efficiency/run_scale_memory.sh` 自动出现在「脚本」面板；
+- `GET /api/scale-memory/status` — 产物是否就绪；
+- `GET /api/scale-memory/report.md` — 可读 markdown（可加模型 + DP 选择表）；
+- `GET /api/scale-memory/result` — 机读 JSON（$g_0$、$g_r$、可加性误差、DP 结果）。
+
+## 对已有实验的影响
+
+无。新增脚本均为新文件，partial 写入独立的 `data/scale_memory_HAR_partials/`，
+产物为新的 `data/scale_memory_HAR.*`，不读写也不覆盖 `system_efficiency_HAR.*`。
+`measure_har_epoch.py` / `aggregate_results.py` / `run_har_efficiency.sh` 未改动。
+

@@ -12,7 +12,7 @@ wall-clock 时间，取最慢客户端的耗时作为该算法的系统效率指
 
 支持的算法（与 HAR_results.md 对齐）：
   fedavg, fedprox, fedcsl, spilter-m1, spilter-m2, spilter-m4,
-  byol, fedu2, orchestra
+  byol, fedu2, orchestra, patchtst
 """
 
 from __future__ import annotations
@@ -149,6 +149,16 @@ def _ssl_args(algo_name: str, batch_size: int, lr: float, wd: float, num_epoch: 
             "fur_num_steps": 5,
             "server_lr": 0.1,
             "sharpen_ratio": 0.1,
+            "patch_len": 16,
+            "stride": 8,
+            "d_model": 128,
+            "n_heads": 4,
+            "n_layers": 3,
+            "d_ff": 256,
+            "dropout": 0.1,
+            "attn_dropout": 0.0,
+            "head_dropout": 0.1,
+            "mask_ratio": 0.4,
         }),
     })
 
@@ -272,11 +282,19 @@ def _time_ssl_client_one_epoch(
     """返回 (epoch_sec, peak_mem_mb)。"""
     from algo.flbench_compat import SequentialTrainer, TensorBaseDataset
     from algo.ssl_model import OrchestraShapeletModel, ShapeletSSLModel
-    from algo.ssl_runner import BYOLClient, FedU2Client, OrchestraClient
+    from algo.ssl_runner import BYOLClient, FedU2Client, OrchestraClient, PatchTSTClient, _mk_patchtst_model
 
     args = _ssl_args(algo_name, batch_size, lr, wd, num_epoch)
 
     def _mk_model():
+        if algo_name == "patchtst":
+            seq_len = int(np.asarray(X_client).shape[-1])
+            return _mk_patchtst_model(
+                ssl_cfg=args.ssl,
+                in_channels=in_channels,
+                seq_len=seq_len,
+                to_cuda=(device.type == "cuda"),
+            )
         if algo_name == "orchestra":
             ssl_cfg = args.ssl
             return OrchestraShapeletModel(
@@ -318,7 +336,12 @@ def _time_ssl_client_one_epoch(
             )
         return _cls
 
-    client_cls = {"byol": BYOLClient, "fedu2": FedU2Client, "orchestra": OrchestraClient}[algo_name]
+    client_cls = {
+        "byol": BYOLClient,
+        "fedu2": FedU2Client,
+        "orchestra": OrchestraClient,
+        "patchtst": PatchTSTClient,
+    }[algo_name]
     client = client_cls(
         model=_mk_model(),
         optimizer_cls=_make_optimizer_cls(),
@@ -364,7 +387,7 @@ def _time_ssl_client_one_epoch(
 
 
 _CSL_ALGOS = {"fedavg", "fedprox", "fedcsl", "spilter-m1", "spilter-m2", "spilter-m4"}
-_SSL_ALGOS = {"byol", "fedu2", "orchestra"}
+_SSL_ALGOS = {"byol", "fedu2", "orchestra", "patchtst"}
 
 
 def main() -> int:

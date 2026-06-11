@@ -36,7 +36,7 @@ BATCH_SIZE="${BATCH_SIZE:-32}"
 LR="${LR:-0.01}"
 NUM_EPOCH="${NUM_EPOCH:-1}"
 WARMUP_BATCHES="${WARMUP_BATCHES:-1}"
-DEFAULT_ALGOS="fedavg fedprox byol fedu2 orchestra fedcsl spilter-m1 spilter-m2 spilter-m4"
+DEFAULT_ALGOS="fedavg fedprox byol fedu2 orchestra patchtst fedcsl spilter-m1 spilter-m2 spilter-m4"
 ALGOS="${ALGOS:-$DEFAULT_ALGOS}"
 
 # SCALE_AUX=0 关闭 UseScaleCL/UseScaleKD 的 per-scale 辅助 loss。

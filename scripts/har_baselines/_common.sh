@@ -62,6 +62,7 @@ BASELINES=(
   "byol:configBYOL.yml"
   "orchestra:configOrchestra.yml"
   "fedu2:configFedU2.yml"
+  "patchtst:configPatchTST.yml"
   "fedcsl:configACF.yml"
   "spilter:configSpilter.yml"
 )

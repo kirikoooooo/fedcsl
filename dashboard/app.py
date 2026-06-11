@@ -871,6 +871,52 @@ def api_spilter_memory_result() -> Dict[str, Any]:
     return {"baseline_fedcsl_mb": baseline, "results": out}
 
 
+# ---- 尺度显存标定 + 背包 DP（§7.7 支撑，独立 partial 数据源）---------------
+# 实验入口脚本：scripts/system_efficiency/run_scale_memory.sh（dashboard 自动扫描可见）
+# 产物：data/scale_memory_HAR.{json,md}，data/scale_memory_HAR_partials/per_scale.json
+_SCALE_MEM_MD = "scale_memory_HAR.md"
+_SCALE_MEM_JSON = "scale_memory_HAR.json"
+
+
+@app.get("/api/scale-memory/status")
+def api_scale_memory_status() -> Dict[str, Any]:
+    """标定/拟合产物是否就绪、最近生成时间。"""
+    info: Dict[str, Any] = {"present": {}, "mtime": {}}
+    for kind, name in (("md", _SCALE_MEM_MD), ("json", _SCALE_MEM_JSON)):
+        p = _SYS_EFF_DIR / name
+        info["present"][kind] = p.is_file()
+        info["mtime"][kind] = p.stat().st_mtime if p.is_file() else None
+    partials = _SYS_EFF_DIR / "scale_memory_HAR_partials" / "per_scale.json"
+    info["per_scale_present"] = partials.is_file()
+    return info
+
+
+@app.get("/api/scale-memory/report.md", response_class=PlainTextResponse)
+def api_scale_memory_md() -> str:
+    """data/scale_memory_HAR.md 的 markdown 文本（可加模型 + 背包 DP 选择表）。"""
+    p = _SYS_EFF_DIR / _SCALE_MEM_MD
+    if not p.is_file():
+        raise HTTPException(
+            404,
+            "scale memory report not generated yet; "
+            "run scripts/system_efficiency/run_scale_memory.sh first",
+        )
+    return p.read_text(encoding="utf-8")
+
+
+@app.get("/api/scale-memory/result")
+def api_scale_memory_result() -> Dict[str, Any]:
+    """返回 data/scale_memory_HAR.json（可加模型系数、可加性误差、DP 结果）。"""
+    p = _SYS_EFF_DIR / _SCALE_MEM_JSON
+    if not p.is_file():
+        raise HTTPException(404, "scale memory json not generated yet; "
+                                 "run scripts/system_efficiency/run_scale_memory.sh first")
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"invalid json: {e}")
+
+
 # 静态前端
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

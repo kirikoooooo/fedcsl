@@ -5,18 +5,45 @@ description: Compile the FedCSL Chinese NeurIPS LaTeX paper under 论文撰写 t
 
 # FedCSL LaTeX PDF Export
 
-Use this skill when the user wants to export the FedCSL paper
-`论文撰写/论文overleaf[不含omp，含spilter].tex` to PDF from this project.
+Use this skill when the user wants to export the FedCSL paper to PDF from this project.
+
+| File | Language |
+|------|----------|
+| `论文撰写/论文overleaf[不含omp，含spilter].tex` | Chinese (main) |
+| `论文撰写/paper_fedcsl_spilter_en.tex` | English (full translation) |
 
 ## Proven Command Flow
 
-Run from the repository root:
+Preferred: use the project export scripts under `论文撰写/`:
+
+```powershell
+# Windows PowerShell
+cd 论文撰写
+.\build_pdf.ps1
+# or double-click build_pdf.cmd
+# .\build_pdf.ps1 -Target "论文overleaf.tex"
+```
 
 ```bash
-cd "/Users/lixiongfei/Nutstore Files/我的坚果云/Golang ReStudy/论文/draw/fedcsl/论文撰写"
+# Git Bash / macOS / Linux
+cd 论文撰写
+./build_pdf.sh
+# ./build_pdf.sh '论文overleaf.tex'
+```
+
+Scripts automatically:
+
+- locate `tectonic` (Codex bundled path, `%LOCALAPPDATA%\Programs\tectonic`, or `PATH`)
+- auto-pick `*spilter*.tex`, else `论文overleaf.tex`, when `-Target` is omitted
+- sync `fedcsl/figs/har_mem_mean_epoch_bar.*` to `draw/figs/` before compile
+- run `tectonic --keep-intermediates --keep-logs` on the target `.tex`
+
+Manual equivalent:
+
+```bash
+cd 论文撰写
 tectonic --keep-intermediates --keep-logs '论文overleaf[不含omp，含spilter].tex'
 ls -lh '论文overleaf[不含omp，含spilter].pdf' '论文overleaf[不含omp，含spilter].log'
-file '论文overleaf[不含omp，含spilter].pdf'
 ```
 
 Expected PDF:

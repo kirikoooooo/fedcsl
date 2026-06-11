@@ -1373,8 +1373,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         )
         return
 
-    # 无监督联邦表征基线：BYOL / Orchestra / FedU2 复用当前 shapelet backbone 与 SVM 评估。
-    if algo.lower() in ('byol', 'orchestra', 'fedu2', 'fedu2-byol'):
+    # 无监督联邦表征基线：BYOL / Orchestra / FedU2 / PatchTST 复用 SVM 评估协议。
+    if algo.lower() in ('byol', 'orchestra', 'fedu2', 'fedu2-byol', 'patchtst', 'fedpatchtst'):
         from algo.ssl_runner import run_ssl_baseline
         run_ssl_baseline(
             algo=algo.lower(),

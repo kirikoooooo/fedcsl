@@ -1,0 +1,55 @@
+model:
+  name: ""
+  params:
+    dist_measure: "mix"
+    lr: 0.001
+    batch_size: 32
+    wd: 0.0001
+    momentum: 0.9
+    ls: 1
+    l: 0.01
+    beta: 0.4
+    gamma: 0.5
+dataset: "CharacterTrajectories"
+algo: "patchtst"
+federated:
+  numClient: 50
+  numRound: 200
+  numEpoch: 1
+  dirichlet_alpha: 1
+  use_client_selection: False
+  client_selection_ratio: 0.6
+ablation:
+  UseJointKD: False
+  UseJointCL: False
+  UseScaleKD: False
+  UseScaleCL: False
+  UseProdictor: False
+  UseMTLHomo: False
+  UseACF: False
+  UseDistribution: False
+ssl:
+  # PatchTST self-supervised pretraining (masked patch reconstruction)
+  patch_len: 16
+  stride: 8
+  d_model: 128
+  n_heads: 4
+  n_layers: 3
+  d_ff: 256
+  dropout: 0.1
+  attn_dropout: 0.0
+  head_dropout: 0.1
+  mask_ratio: 0.4
+logPath: "./result/"
+description: "patchtst"
+
+evaluation:
+  protocol: "svm"
+  svm_c_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+  linear_probe:
+    lr: 0.001
+    wd: 0.0001
+    batch_size: 256
+    max_epoch: 200
+    eval_interval: 1
+    seed: 42

@@ -30,10 +30,9 @@
 #   DATASET=Epilepsy-TSTCC VERIFY_SUBSETS="0,1;2,4,6;0,3,7" bash scripts/system_efficiency/run_scale_memory.sh
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-cd "$PROJECT_ROOT"
-
+# ---- 命令行参数解析（优先级高于环境变量）--------------------------------
+# 注：dashboard 的通用启动弹窗会附加 --eval-protocol / --server-gpu / --client-gpus
+# 等与 FedCSL_All.py 相关的参数，本脚本不识别的一律忽略。
 DATASET="${DATASET:-HAR}"
 GPU="${GPU:-0}"
 NUM_CLIENTS="${NUM_CLIENTS:-10}"
@@ -44,6 +43,36 @@ VERIFY_SUBSETS="${VERIFY_SUBSETS:-}"
 BUDGETS="${BUDGETS:-64,128,256}"
 TOPM="${TOPM:-4}"
 SCALE_AUX="${SCALE_AUX:-1}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dataset)       DATASET="${2:-}";       if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --dataset=*)     DATASET="${1#*=}";      shift   ;;
+    --num-clients|--num-client)
+                     NUM_CLIENTS="${2:-}";   if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --num-clients=*|--num-client=*)
+                     NUM_CLIENTS="${1#*=}";  shift ;;
+    --alpha)         ALPHA="${2:-}";         if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --alpha=*)       ALPHA="${1#*=}";        shift   ;;
+    --batch-size)    BATCH_SIZE="${2:-}";    if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --batch-size=*)  BATCH_SIZE="${1#*=}";   shift ;;
+    --gpu)           GPU="${2:-}";           if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --gpu=*)         GPU="${1#*=}";          shift   ;;
+    --budgets)       BUDGETS="${2:-}";       if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --budgets=*)     BUDGETS="${1#*=}";      shift   ;;
+    --topm)          TOPM="${2:-}";          if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --topm=*)        TOPM="${1#*=}";         shift   ;;
+    --scale-aux)     SCALE_AUX="${2:-}";     if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --scale-aux=*)   SCALE_AUX="${1#*=}";    shift ;;
+    --max-clients)   MAX_CLIENTS="${2:-}";   if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --max-clients=*) MAX_CLIENTS="${1#*=}";  shift ;;
+    *) shift ;;  # 忽略不认识的参数（如 --eval-protocol / --server-gpu 等）
+  esac
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
 
 NO_SCALE_AUX_FLAG=""
 if [[ "$SCALE_AUX" == "0" ]]; then

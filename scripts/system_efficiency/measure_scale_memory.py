@@ -235,18 +235,6 @@ def _measure_subset_one_client(
     return float(peak_mb)
 
 
-def _aggregate(mems: List[float]) -> Dict[str, float]:
-    arr = np.asarray(mems, dtype=np.float64)
-    return {
-        "mean": float(arr.mean()),
-        "max": float(arr.max()),
-        "median": float(np.median(arr)),
-        "min": float(arr.min()),
-        "std": float(arr.std()),
-        "n": int(arr.size),
-    }
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -356,64 +344,56 @@ def main() -> int:
     gc.collect()
     _empty_cache(device)
 
-    # 选客户端：样本数 >= batch_size 的前若干个
-    client_ids: List[int] = []
+    # 选单个客户端：取样本数 >= batch_size 且样本最多者（测显存不需要多个客户端求平均）
+    best_cid: int = -1
+    best_n: int = 0
     for cid in range(args.num_clients):
         Xc = np.asarray(X_fed[cid]) if not isinstance(X_fed[cid], np.ndarray) else X_fed[cid]
-        if int(Xc.shape[0]) >= max(2, args.batch_size):
-            client_ids.append(cid)
-    if args.max_clients_per_scale > 0:
-        client_ids = client_ids[: args.max_clients_per_scale]
-    print(f"[info] 参与标定的客户端: {client_ids}", flush=True)
+        n = int(Xc.shape[0])
+        if n >= max(2, args.batch_size) and n > best_n:
+            best_n = n
+            best_cid = cid
+    if best_cid < 0:
+        print("[err] 没有任何客户端样本数 >= batch_size，无法标定", file=sys.stderr)
+        return 1
+    client_id: int = best_cid
+    print(f"[info] 标定客户端: {client_id} (样本数={best_n})", flush=True)
+    X_client: np.ndarray = np.asarray(X_fed[client_id]) if not isinstance(X_fed[client_id], np.ndarray) else X_fed[client_id]
 
-    def _client_X(cid: int) -> np.ndarray:
-        Xc = X_fed[cid]
-        return np.asarray(Xc) if not isinstance(Xc, np.ndarray) else Xc
-
-    def _measure_subset(scales: Sequence[int]) -> Dict[str, Any]:
-        mems: List[float] = []
-        for cid in client_ids:
-            try:
-                m = _measure_subset_one_client(
-                    selected_scales=scales,
-                    X_client=_client_X(cid),
-                    shapelets_size_and_len=shapelets_size_and_len,
-                    in_channels=in_channels,
-                    num_classes=num_classes,
-                    batch_size=args.batch_size,
-                    lr=args.lr,
-                    wd=args.wd,
-                    device=device,
-                    teacher_state=teacher_state,
-                    warmup_batches=args.warmup_batches,
-                    scale_aux=scale_aux,
-                )
-                mems.append(m)
-            except Exception as exc:
-                traceback.print_exc()
-                print(f"  [err] scales={list(scales)} client {cid}: {exc}", flush=True)
-        if not mems:
-            return {"scales": list(scales), "error": "all clients failed"}
-        agg = _aggregate(mems)
-        return {"scales": list(int(s) for s in scales), "peak_mem_mb": agg}
+    def _measure_subset(scales: Sequence[int]) -> float:
+        """在单个客户端上测指定尺度子集的峰值显存，返回 MB 值。"""
+        return _measure_subset_one_client(
+            selected_scales=scales,
+            X_client=X_client,
+            shapelets_size_and_len=shapelets_size_and_len,
+            in_channels=in_channels,
+            num_classes=num_classes,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            wd=args.wd,
+            device=device,
+            teacher_state=teacher_state,
+            warmup_batches=args.warmup_batches,
+            scale_aux=scale_aux,
+        )
 
     # ---- 1) 逐单尺度测 g_r ----
     per_scale: List[Dict[str, Any]] = []
     for r in range(R):
-        res = _measure_subset([r])
-        mb = res.get("peak_mem_mb", {})
+        peak_mb = _measure_subset([r])
         print(
             f"  [scale {r}] len={scale_lengths[r]:4d}  "
-            f"mean={mb.get('mean', float('nan')):.1f}MB  max={mb.get('max', float('nan')):.1f}MB",
+            f"peak={peak_mb:.1f}MB",
             flush=True,
         )
-        per_scale.append(res)
+        per_scale.append({"scale": r, "peak_mem_mb": float(peak_mb)})
 
     summary: Dict[str, Any] = {
         "task": "scale_memory_calibration",
         "dataset": dataset,
         "num_clients_total": int(args.num_clients),
-        "clients_used": client_ids,
+        "client_used": int(client_id),
+        "client_samples": int(best_n),
         "alpha": float(args.alpha),
         "batch_size": int(args.batch_size),
         "device": str(device),
@@ -429,9 +409,7 @@ def main() -> int:
     # ---- 2) 可选：验证可加性（实测组合 vs 单尺度之和）----
     verify_results: List[Dict[str, Any]] = []
     if args.verify_subsets.strip():
-        single_means = [
-            (s.get("peak_mem_mb", {}) or {}).get("mean") for s in per_scale
-        ]
+        single_peaks = [float(s["peak_mem_mb"]) for s in per_scale]
         for token in args.verify_subsets.split(";"):
             token = token.strip()
             if not token:
@@ -441,23 +419,19 @@ def main() -> int:
             except ValueError:
                 print(f"  [warn] 跳过非法子集 '{token}'", flush=True)
                 continue
-            res = _measure_subset(scales)
-            measured = (res.get("peak_mem_mb", {}) or {}).get("mean")
+            measured = _measure_subset(scales)
             # 朴素可加预测（不含 g0 修正，仅看趋势；真正拟合在 fit_scale_memory.py）
-            additive = None
-            if all(single_means[s] is not None for s in scales):
-                additive = float(sum(single_means[s] for s in scales))
+            additive = float(sum(single_peaks[s] for s in scales))
             entry = {
                 "scales": scales,
-                "measured_mean_mb": measured,
+                "measured_mb": measured,
                 "naive_sum_of_singles_mb": additive,
+                "abs_err_mb": abs(measured - additive),
+                "rel_err": abs(measured - additive) / measured if measured else None,
             }
-            if measured is not None and additive:
-                entry["abs_err_mb"] = abs(measured - additive)
-                entry["rel_err"] = abs(measured - additive) / measured if measured else None
             verify_results.append(entry)
             print(
-                f"  [verify {scales}] measured={measured}  naive_sum={additive}",
+                f"  [verify {scales}] measured={measured:.1f}MB  naive_sum={additive:.1f}MB",
                 flush=True,
             )
         summary["verify_subsets"] = verify_results

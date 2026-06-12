@@ -68,7 +68,7 @@ def fit_additive_model(
         xs, ys = [], []
         for v in verify:
             scales = v.get("scales", [])
-            measured = v.get("measured_mean_mb")
+            measured = v.get("measured_mb") if "measured_mb" in v else v.get("measured_mean_mb")
             if measured is None or len(scales) < 1:
                 continue
             if any(s < 0 or s >= R for s in scales):
@@ -113,7 +113,7 @@ def additivity_report(model: Dict[str, Any], verify: List[Dict[str, Any]]) -> Di
     abs_errs, rel_errs = [], []
     for v in verify:
         scales = v.get("scales", [])
-        measured = v.get("measured_mean_mb")
+        measured = v.get("measured_mb") if "measured_mb" in v else v.get("measured_mean_mb")
         if measured is None:
             continue
         pred = predict_mem(model, scales)
@@ -235,7 +235,7 @@ def write_markdown(
                  f"alpha={meta.get('alpha','?')}，batch={meta.get('batch_size','?')}")
     lines.append(f"- GPU: {meta.get('gpu_name') or meta.get('device','?')}")
     lines.append(f"- 尺度数 R={R}，scale_aux={meta.get('scale_aux','?')}")
-    lines.append(f"- 标定客户端: {meta.get('clients_used', [])}")
+    lines.append(f"- 标定客户端: {meta.get('client_used') or meta.get('clients_used', '?')}")
     lines.append("")
     lines.append("## 可加显存模型")
     lines.append("")
@@ -341,7 +341,13 @@ def main() -> int:
     scale_lengths = data.get("scale_lengths", list(range(R)))
     single_means = []
     for s in per_scale:
-        mb = (s.get("peak_mem_mb", {}) or {}).get("mean")
+        mb = s.get("peak_mem_mb")
+        if isinstance(mb, dict):
+            # 旧格式：{"mean": ..., "max": ...}
+            mb = mb.get("mean")
+        elif isinstance(mb, (int, float)):
+            # 新格式：直接是一个浮点数
+            pass
         single_means.append(float(mb) if mb is not None else float("nan"))
     if any(np.isnan(single_means)):
         print("[err] 存在缺失的单尺度峰值，无法拟合", file=sys.stderr)

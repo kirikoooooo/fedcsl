@@ -406,11 +406,27 @@ def main() -> int:
         "timestamp": time.time(),
     }
 
-    # ---- 2) 可选：验证可加性（实测组合 vs 单尺度之和）----
+    # ---- 2) 验证可加性：默认自动测若干多尺度组合以供最小二乘解 g_0 ----
+    verify_subsets_str = args.verify_subsets.strip()
+    if not verify_subsets_str:
+        # 自动生成默认组合：覆盖不同 |R| 规模，给最小二乘回归提供多样本点
+        default_subsets = []
+        half = R // 2
+        if R >= 2:
+            default_subsets.append("0,1")
+        if R >= 4:
+            default_subsets.append(f"{half-2},{half-1}")
+            default_subsets.append(",".join(str(i) for i in range(half)))
+        if R >= 6:
+            default_subsets.append(",".join(str(i) for i in range(half, R)))
+        verify_subsets_str = ";".join(default_subsets)
+        print(f"[info] 未指定 --verify-subsets，自动使用默认组合: {verify_subsets_str}",
+              flush=True)
+
     verify_results: List[Dict[str, Any]] = []
-    if args.verify_subsets.strip():
+    if verify_subsets_str:
         single_peaks = [float(s["peak_mem_mb"]) for s in per_scale]
-        for token in args.verify_subsets.split(";"):
+        for token in verify_subsets_str.split(";"):
             token = token.strip()
             if not token:
                 continue

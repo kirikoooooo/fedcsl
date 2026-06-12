@@ -66,6 +66,8 @@ while [[ $# -gt 0 ]]; do
     --scale-aux=*)   SCALE_AUX="${1#*=}";    shift ;;
     --max-clients)   MAX_CLIENTS="${2:-}";   if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
     --max-clients=*) MAX_CLIENTS="${1#*=}";  shift ;;
+    --verify-subsets)   VERIFY_SUBSETS="${2:-}";   if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+    --verify-subsets=*) VERIFY_SUBSETS="${1#*=}";  shift ;;
     *) shift ;;  # 忽略不认识的参数（如 --eval-protocol / --server-gpu 等）
   esac
 done

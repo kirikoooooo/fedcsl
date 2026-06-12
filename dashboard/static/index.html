@@ -548,8 +548,24 @@ function appendEvalLaunchArgs(args, evalInterval) {
 function supportsAlphaChoice(scriptPath) {
   return alphaScriptPrefixes.includes(scriptPath);
 }
+const datasetScripts = [
+  // all HAR baseline scripts support DATASET env var
+  'scripts/fedavg_har.sh',
+  'scripts/fedprox_har.sh',
+  'scripts/moon_har.sh',
+  'scripts/scaffold_har.sh',
+  'scripts/fedproto_har.sh',
+  'scripts/byol_har.sh',
+  'scripts/orchestra_har.sh',
+  'scripts/fedu2_har.sh',
+  'scripts/patchtst_har.sh',
+  'scripts/fedcsl_har.sh',
+  'scripts/spilter_har.sh',
+  // system_efficiency scripts support DATASET env var
+  'scripts/system_efficiency/run_scale_memory.sh',
+];
 function supportsDatasetChoice(scriptPath) {
-  return false;
+  return datasetScripts.includes(scriptPath);
 }
 function scriptTag(scriptPath) {
   const item = harBaselines.find(x => x.script === scriptPath);

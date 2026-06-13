@@ -191,6 +191,13 @@
           <div>
             <div class="muted">算法 tags</div>
             <div id="baseline-tags" class="tag-grid"><span class="muted">加载中…</span></div>
+            <div style="margin-top:6px; font-size:12px; color:var(--muted);">Spilter 选项</div>
+            <div class="tag-grid" style="margin-bottom:8px">
+              <label class="tag-check">
+                <input type="checkbox" id="spilter-random-toggle" onchange="updateBaselineSummary()" />
+                <span>Random scales（随机选尺度，非 top-m）</span>
+              </label>
+            </div>
             <div class="form-row">
               <label>DIR_ALPHA</label>
               <select id="baseline-alpha" class="control" onchange="updateBaselineSummary()">
@@ -522,6 +529,7 @@ const harBaselines = [
   {tag: 'PatchTST', script: 'scripts/patchtst_har.sh'},
   {tag: 'FedCSL', script: 'scripts/fedcsl_har.sh'},
   {tag: 'Spilter', script: 'scripts/spilter_har.sh'},
+  {tag: 'Spilter-Mixed', script: 'scripts/spilter_mixed_har.sh'},
 ];
 const alphaScriptPrefixes = [
   'scripts/fedavg_har.sh',
@@ -535,6 +543,7 @@ const alphaScriptPrefixes = [
   'scripts/patchtst_har.sh',
   'scripts/fedcsl_har.sh',
   'scripts/spilter_har.sh',
+  'scripts/spilter_mixed_har.sh',
 ];
 function normalizedEvalInterval(raw) {
   const n = parseInt(String(raw ?? '1'), 10);
@@ -561,6 +570,7 @@ const datasetScripts = [
   'scripts/patchtst_har.sh',
   'scripts/fedcsl_har.sh',
   'scripts/spilter_har.sh',
+  'scripts/spilter_mixed_har.sh',
   // system_efficiency scripts support DATASET env var
   'scripts/system_efficiency/run_scale_memory.sh',
 ];
@@ -634,9 +644,11 @@ function updateBaselineSummary() {
   const evalInterval = normalizedEvalInterval(document.getElementById('baseline-eval-interval')?.value);
   const evalText = evalProtocol === 'linear_probe' ? 'Linear Probe' : 'SVM';
   const evalIntervalText = evalInterval === 1 ? '每轮' : `每 ${evalInterval} 轮`;
+  const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
+  const randomText = randomChecked ? ' · Random scales ✓' : '';
   const el = document.getElementById('baseline-summary');
   if (el) {
-    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}`;
+    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}${randomText}`;
   }
 }
 function selectAllBaselines(checked) {
@@ -691,6 +703,9 @@ function runBadges(r) {
   if (evalEvery && String(evalEvery) !== '1') {
     badges.push(`<span class="tag">EVAL_EVERY=${escapeHtml(String(evalEvery))}r</span>`);
   }
+  if (env.SPILTER_RANDOM === '1') {
+    badges.push(`<span class="tag" style="background:rgba(210,153,34,.18); color:#ffd98a; border-color:var(--warn);">RANDOM</span>`);
+  }
   return badges.join(' ');
 }
 async function launchSelectedBaselines() {
@@ -703,11 +718,17 @@ async function launchSelectedBaselines() {
   const evalProtocol = document.getElementById('baseline-eval-protocol').value.trim() || 'svm';
   const evalInterval = normalizedEvalInterval(document.getElementById('baseline-eval-interval').value);
   const extraArgs = shellWords(document.getElementById('baseline-extra-args').value);
+  const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
   const started = [];
   try {
     for (const script of scripts) {
       for (const alpha of alphas) {
-        const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs});
+        const envBase = {};
+        // 仅对 Spilter-Mixed 脚本生效随机选尺度选项
+        if (script === 'scripts/spilter_mixed_har.sh' && randomChecked) {
+          envBase.SPILTER_RANDOM = '1';
+        }
+        const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs, envBase});
         const run = await api('/runs', {
           method: 'POST',
           headers: {'content-type':'application/json'},

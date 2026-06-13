@@ -1,0 +1,69 @@
+model:
+  name: ""
+  params:
+    dist_measure: "mix"
+    lr: 0.01
+    batch_size: 32
+    wd: 0.0001
+    momentum: 0.9
+    ls: 1
+    l: 0.01
+    beta: 0.4
+    gamma: 0.7
+dataset: "AtrialFibrillation"
+algo: "spilter"
+federated:
+  numClient: 10
+  numRound: 200
+  numEpoch: 1
+  dirichlet_alpha: 1
+  use_client_selection: False
+  client_selection_ratio: 0.6
+  checkpoint_every: 0
+  auto_resume: false
+
+spilter:
+  # Mixed-m experiment: 10 clients, each with a different number of selected scales.
+  #   client 0-2: m=4
+  #   client 3-6: m=2
+  #   client 7-9: m=1
+  #
+  # Supported allocation_mode values:
+  #   local_score_topm         — select top-m scales from each client's local period-score distribution.
+  #   local_score_random_topm  — randomly select m scales per client (non-topM, uniform distribution).
+  #   uniform_single           — client_id round-robin, one scale per client.
+  #   global_score_random_single — sample one scale from the global period-score distribution.
+  #   efficiency_aware         — period-aware seed scales plus system-efficiency extras.
+  allocation_mode: "local_score_topm"
+  local_top_m: [4, 4, 4, 2, 2, 2, 2, 1, 1, 1]
+  # stitched: concatenate selected scales into one local submodel representation.
+  selected_scale_training: "stitched"
+  system_extra_scale_count: 2
+  # stitched：selected_scales_only（默认）= encode_mix_forward_selected_scales（FedCSL forward 同源管线，仅所选尺度）；
+  # forward_slices = 全尺度 forward 后切片（与 FedCSL 表征对照）；subset_ln_forward_scale = 旧版辅助项二次 encode_scale。
+  stitched_feature_source: "selected_scales_only"
+
+ablation:
+  UseJointKD: True
+  UseJointCL: True
+  UseScaleKD: True
+  UseScaleCL: True
+  UseProdictor: False
+  UseMTLHomo: False
+  UseACF: True
+  UseDistribution: False
+
+logPath: "./result/"
+description: "spilter-mixed-m"
+
+evaluation:
+  protocol: "svm"  # options: svm | linear_probe
+  round_eval_interval: 1  # downstream eval every N federated rounds (always eval round 0 and final round)
+  svm_c_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+  linear_probe:
+    lr: 0.001
+    wd: 0.0001
+    batch_size: 256
+    max_epoch: 200
+    eval_interval: 1
+    seed: 42

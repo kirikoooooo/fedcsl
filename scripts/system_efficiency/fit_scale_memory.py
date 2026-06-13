@@ -83,13 +83,21 @@ def fit_additive_model(
             denom = float((xs_a * xs_a).sum())
             if denom > 0:
                 g0_ls = float((xs_a * ys_a).sum() / denom)
-                # g0 物理上应 >= 0 且 <= min single
-                g0_est = max(0.0, min(g0_ls, float(singles.min())))
+                # g0 物理上应 >= 0（不设上界：可加模型本身有近似误差，
+                # 若 g0 > min(singles) 则意味着部分 g_r 为负，反映模型偏差而非代码错误）
+                g0_est = max(0.0, g0_ls)
                 method = "least_squares_on_verify"
                 # 残差诊断
                 pred = g0_est * xs_a
                 fit_diag["ls_residual_mae"] = float(np.mean(np.abs(pred - ys_a)))
+                fit_diag["ls_residual_mae_mb"] = fit_diag["ls_residual_mae"]
                 fit_diag["ls_n_equations"] = int(xs_a.size)
+                # 若 g0 超出 min(singles)，标记为模型可加性偏差
+                if g0_est > float(singles.min()):
+                    fit_diag["note"] = (
+                        f"g0({g0_est:.1f}MB) > min_single({singles.min():.1f}MB)，"
+                        "部分 g_r 为负，说明可加模型对此数据集存在近似误差"
+                    )
 
     g_r = (singles - g0_est).tolist()
     return {
@@ -241,13 +249,21 @@ def write_markdown(
     lines.append("")
     lines.append(r"$$\widehat{\mathrm{Mem}}(\mathcal{R}) = g_0 + \sum_{r\in\mathcal{R}} g_r$$")
     lines.append("")
+    diag = model.get("diag", {})
     lines.append(f"- 固定开销 $g_0$ = **{_fmt(g0)} MB**（拟合方法: {model.get('method')}）")
+    if diag.get("note"):
+        lines.append(f"  - ⚠️ {diag['note']}")
+    if diag.get("ls_residual_mae") is not None:
+        lines.append(f"  - 最小二乘残差 MAE = {_fmt(diag['ls_residual_mae'])} MB·scales")
     lines.append("")
     lines.append("| Scale $r$ | " + " | ".join(str(i) for i in range(R)) + " |")
     lines.append("|" + "---|" * (R + 1))
     lines.append("| $\\ell_r$ | " + " | ".join(str(scale_lengths[i]) for i in range(R)) + " |")
     lines.append("| 单尺度峰值 (MB) | " + " | ".join(_fmt(model["single_means_mb"][i]) for i in range(R)) + " |")
     lines.append("| 边际 $g_r$ (MB) | " + " | ".join(_fmt(g_r[i]) for i in range(R)) + " |")
+    # 标记为负的边际
+    neg_flags = " | ".join("⚠️" if g_r[i] < 0 else "" for i in range(R))
+    lines.append(f"|   | {neg_flags} |")
     lines.append("")
 
     if add_report and add_report.get("rows"):

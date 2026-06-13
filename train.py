@@ -391,6 +391,11 @@ class LearningShapeletsCL:
             "local_period_topm",
             "period_topm",
             "period-aware-topm",
+            "local_score_random_topm",
+            "local_random_topm",
+            "random_topm",
+            "local-random-topm",
+            "random-local-topm",
         ):
             return "stitched"
         mode = str(spilter_cfg.get("selected_scale_training", "per_scale")).strip().lower()

@@ -94,6 +94,8 @@ parser.add_argument('--eval-protocol', type=str, default=None, choices=['svm', '
                     help='Override downstream evaluation protocol: svm or linear_probe')
 parser.add_argument('--eval-every-n-rounds', type=int, default=None,
                     help='Run downstream SVM/linear-probe eval every N federated rounds (default: evaluation.round_eval_interval or 1)')
+parser.add_argument('--spilter-random', action='store_true', default=False,
+                    help='Use random (non-topM) scale selection for spilter allocation (overrides config allocation_mode to local_score_random_topm)')
 
 args = parser.parse_args()
 
@@ -554,30 +556,79 @@ def _plan_global_score_random_single_client_scales(client_scores, y_fed, seed=No
 
 def _plan_local_score_topm_client_scales(client_scores, top_m=4):
     """每个 client 按自己的周期评分选择 top-m 尺度，作为拼接子模型训练。
+
     严格按 top-m 选择，不做未覆盖尺度的兜底补分配。
+
+    top_m 可以是 int（所有 client 相同）或 list（per-client m 值）。
     """
     num_clients = len(client_scores)
     num_scales = len(client_scores[0]) if num_clients > 0 else 0
     if num_scales <= 0:
         return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64)
 
-    top_m = max(1, min(int(top_m), num_scales))
+    if isinstance(top_m, (list, tuple)):
+        top_ms = [max(1, min(int(m), num_scales)) for m in top_m]
+        # Pad or truncate to match num_clients
+        if len(top_ms) < num_clients:
+            top_ms.extend([max(1, min(int(top_m[0]) if len(top_m) > 0 else 4, num_scales))]
+                          * (num_clients - len(top_ms)))
+        top_ms = top_ms[:num_clients]
+    else:
+        m_val = max(1, min(int(top_m), num_scales))
+        top_ms = [m_val] * num_clients
+
     client_selected = []
     scale_counts = np.zeros(num_scales, dtype=np.int64)
     normalized_scores = []
 
-    for scores in client_scores:
+    for cid, scores in enumerate(client_scores):
         scores = _normalize_scale_scores(scores, num_scales)
         normalized_scores.append(scores)
+        m_c = top_ms[cid]
         if np.any(scores > 0):
             # Stable tie-breaker: higher score first, then lower scale index.
             order = np.lexsort((np.arange(num_scales), -scores))
         else:
             order = np.arange(num_scales)
-        selected = [int(scale_idx) for scale_idx in order[:top_m]]
+        selected = [int(scale_idx) for scale_idx in order[:m_c]]
         client_selected.append(selected)
         for scale_idx in selected:
             scale_counts[scale_idx] += 1
+
+    return client_selected, scale_counts
+
+
+def _plan_local_score_random_topm_client_scales(client_scores, top_m=4, seed=None):
+    """每个 client 随机选 m 个尺度（非 top-m，均匀分布），不按周期评分排序。
+
+    top_m 可以是 int（所有 client 相同）或 list（per-client m 值）。
+    """
+    num_clients = len(client_scores)
+    num_scales = len(client_scores[0]) if num_clients > 0 else 0
+    if num_scales <= 0:
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64)
+
+    if isinstance(top_m, (list, tuple)):
+        top_ms = [max(1, min(int(m), num_scales)) for m in top_m]
+        if len(top_ms) < num_clients:
+            top_ms.extend([max(1, min(int(top_m[0]) if len(top_m) > 0 else 4, num_scales))]
+                          * (num_clients - len(top_ms)))
+        top_ms = top_ms[:num_clients]
+    else:
+        m_val = max(1, min(int(top_m), num_scales))
+        top_ms = [m_val] * num_clients
+
+    rng = np.random.default_rng(seed)
+    client_selected = []
+    scale_counts = np.zeros(num_scales, dtype=np.int64)
+    all_scales = np.arange(num_scales)
+
+    for cid in range(num_clients):
+        m_c = top_ms[cid]
+        selected = [int(s) for s in rng.choice(all_scales, size=m_c, replace=False)]
+        client_selected.append(selected)
+        for s in selected:
+            scale_counts[s] += 1
 
     return client_selected, scale_counts
 
@@ -602,6 +653,10 @@ def _spilter_allocation_mode(config):
         "local_period_topm": "local_score_topm",
         "period_topm": "local_score_topm",
         "period-aware-topm": "local_score_topm",
+        "local_random_topm": "local_score_random_topm",
+        "random_topm": "local_score_random_topm",
+        "local-random-topm": "local_score_random_topm",
+        "random-local-topm": "local_score_random_topm",
         "efficiency": "efficiency_aware",
         "efficiency-aware": "efficiency_aware",
     }
@@ -609,10 +664,14 @@ def _spilter_allocation_mode(config):
 
 
 def _spilter_local_top_m(config, default=4):
+    """读取 Spilter 的 local_top_m 参数，支持 int 或 list（per-client m 值）。"""
     spilter_cfg = config.get("spilter", {}) or {}
     for key in ("local_top_m", "top_m", "num_selected_scales"):
         if key in spilter_cfg:
-            return max(1, int(spilter_cfg[key]))
+            val = spilter_cfg[key]
+            if isinstance(val, (list, tuple)):
+                return [max(1, int(v)) for v in val]
+            return max(1, int(val))
     return max(1, int(default))
 
 
@@ -1524,6 +1583,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     cached_global_scale_probs = None
     scale_score_prep_sec = 0.0
     spilter_allocation_mode = _spilter_allocation_mode(config) if _uses_scale_split_algo(algo) else None
+    if spilter_allocation_mode and args.spilter_random:
+        spilter_allocation_mode = "local_score_random_topm"
+        if args.description:
+            config['description'] = args.description + "_random"
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
         if _uses_scale_split_algo(algo) and spilter_allocation_mode == "uniform_single":
@@ -1553,10 +1616,18 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     cached_client_scale_scores,
                     top_m=local_top_m,
                 )
+            elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_random_topm":
+                local_top_m = _spilter_local_top_m(config, default=4)
+                cached_client_scale_plans, cached_scale_hist = _plan_local_score_random_topm_client_scales(
+                    cached_client_scale_scores,
+                    top_m=local_top_m,
+                    seed=original_seed or 42,
+                )
         if _uses_scale_split_algo(algo) and spilter_allocation_mode not in (
             "uniform_single",
             "global_score_random_single",
             "local_score_topm",
+            "local_score_random_topm",
         ):
             system_extra_scale_count = _spilter_system_extra_scale_count(config, default=2)
             cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
@@ -1571,6 +1642,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             prep_msg = f"[spilter] planned global-score random single-scale clients in {scale_score_prep_sec:.3f}s"
         elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_topm":
             prep_msg = f"[spilter] planned local-score top-m stitched clients in {scale_score_prep_sec:.3f}s"
+        elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_random_topm":
+            prep_msg = f"[spilter] planned local-score RANDOM top-m stitched clients in {scale_score_prep_sec:.3f}s"
         else:
             prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
         if cached_scale_hist is not None:
@@ -1579,9 +1652,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 "uniform_single",
                 "global_score_random_single",
                 "local_score_topm",
+                "local_score_random_topm",
             ):
                 prep_msg += f"; system_extra_scale_count={system_extra_scale_count}"
-            if spilter_allocation_mode == "local_score_topm":
+            if spilter_allocation_mode in ("local_score_topm", "local_score_random_topm"):
                 prep_msg += f"; local_top_m={local_top_m}"
             if cached_global_scale_probs is not None:
                 prep_msg += f"; global_scale_probs={np.round(cached_global_scale_probs, 4).tolist()}"

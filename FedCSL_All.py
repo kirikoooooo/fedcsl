@@ -2002,7 +2002,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     f" costs={ki.get('_costs_source', '?')}"
                     f" g_r={g_r_str}{'MB' if ki.get('_costs_source') == 'config' else ''}"
                     f" g_0={ki.get('_base_memory_mb', 0):.1f}MB"
-                    f" budget={ki.get('_budget_mb', '?'):.1f}MB"
+                    f" budget={f'{ki_budget:.1f}MB' if (ki_budget := ki.get('_budget_mb')) is not None else 'unconstrained'}"
                     f" budgets_src={ki.get('_budgets_source', '?')}"
                     f" scales_per_client=[{ki.get('_min_scales_per_client', '?')}"
                     f",{ki.get('_avg_scales_per_client', 0):.1f}"

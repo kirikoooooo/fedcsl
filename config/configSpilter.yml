@@ -41,39 +41,69 @@ spilter:
   # forward_slices = 全尺度 forward 后切片（与 FedCSL 表征对照）；subset_ln_forward_scale = 旧版辅助项二次 encode_scale。
   stitched_feature_source: "selected_scales_only"
 
-  # === Knapsack Lagrangian parameters (used when allocation_mode = "knapsack_lagrangian") ===
-  # These define a per-client 0-1 knapsack with global coverage constraints relaxed via Lagrange multipliers.
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Knapsack-Lagrangian Scale Allocation (§7.7)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Used when allocation_mode = "knapsack_lagrangian".
   #
-  # Formulation:
+  # ── Problem formulation ──────────────────────────────────────────────────
+  # Each client k runs a 0-1 knapsack to select scales under a memory budget,
+  # while the server ensures global coverage of all R=8 scales via Lagrange
+  # relaxation:
+  #
   #   max  Σ_k Σ_r  period_score_{k,r} · x_{k,r}
-  #   s.t. g_0 + Σ_r g_r · x_{k,r} ≤ B_k   ∀k  (memory / OOM constraint)
-  #        Σ_k x_{k,r} ≥ C_min              ∀r  (global coverage constraint)
+  #   s.t. g_0 + Σ_r g_r · x_{k,r} ≤ B_k   ∀k  (memory / OOM)
+  #        Σ_k x_{k,r} ≥ C_min              ∀r  (global coverage)
   #
-  # memory_budget_mb: per-client memory budget in MB.
+  #   → Decomposed into K independent knapsacks:
+  #     max  Σ_r (period_score_{k,r} + λ_r) · x_{k,r}
+  #     s.t. g_0 + Σ_r g_r · x_{k,r} ≤ B_k
+  #
+  #   → λ_r updated via subgradient (coverage deficit → λ_r ↑):
+  #     λ_r ← max(0, λ_r + η/√t · (C_min − Σ_k x_{k,r}))
+  #
+  # ── Memory costs (g_r) — how to get them ─────────────────────────────────
+  # Three options, in priority order:
+  #   1. Set scale_memory_costs_mb in this config (real GPU-profiled values).
+  #      Example below is HAR on RTX 3090, batch_size=32, mix distance:
+  #      scale_memory_costs_mb: [45.5, 65.0, 79.7, 88.7, 92.4, 90.4, 80.6, 67.9]
+  #      base_memory_mb: 25.9   # g_0 = min(g_r) * 0.5 (conservative estimate)
+  #
+  #   2. **Auto-calibrate** (default): omit scale_memory_costs_mb.  On first
+  #      run, the code creates a LearningShapeletsCL client per scale, trains
+  #      1 epoch with SGD+momentum, and measures peak CUDA memory (same
+  #      protocol as scripts/system_efficiency/measure_scale_memory.py).
+  #      Results are cached to data/knapsack_calibration/<dataset>_scale_memory.json
+  #      and reused on subsequent runs.
+  #
+  #   3. System proxy fallback (CPU-only): uses _scale_system_costs as
+  #      unitless relative weights.  Budget is then also unitless.
+  #
+  # ── Parameters ───────────────────────────────────────────────────────────
+  # memory_budget_mb: per-client GPU memory budget in MB.
   #   - float (e.g. 128): same budget for all clients
-  #   - list of floats: per-client budgets (must match numClient)
-  #   - omitted: unconstrained (all scales fit; knapsack reduces to coverage-aware top-m)
+  #   - list of floats [K]: per-client budgets
+  #   - CLI override: --spilter-memory-budget 128
+  #   - omitted: auto-set to 60% of total g_r (fits ~5-6 of 8 scales)
   # memory_budget_mb: 128
   #
-  # scale_memory_costs_mb: per-scale marginal memory g_r, length R=8.
-  #   - list of floats: e.g. [5.2, 8.1, 12.3, 17.8, 24.6, 32.9, 42.7, 53.4]
-  #   - omitted: system-cost proxy from _scale_system_costs (parameter count + compute)
-  # scale_memory_costs_mb: [5.2, 8.1, 12.3, 17.8, 24.6, 32.9, 42.7, 53.4]
+  # scale_memory_costs_mb: per-scale marginal memory g_r, length R=8 (MB).
+  #   - omitted: auto-calibrate on GPU (cached), or system_proxy on CPU
   #
-  # base_memory_mb: fixed overhead g_0 (model + optimizer + activations excluding scale branches).
-  # base_memory_mb: 0.0
+  # base_memory_mb: fixed overhead g_0 (model + optimizer excl. scale branches).
+  #   - omitted: auto-estimated from calibration or 0
   #
   # knapsack_lagrangian:
-  #   coverage_min: minimum number of clients that must cover each scale (C_min).
-  #     - int: same for all scales (default: ceil(numClient / numScales))
-  #     - list of ints: per-scale minimums
+  #   coverage_min: minimum clients that must cover each scale (C_min).
+  #     - int: same for all scales (default: ceil(K / R))
   #   coverage_min: 6
   #
-  #   lambda_lr: subgradient step size η for updating Lagrange multipliers.
-  #     Larger → faster convergence but may oscillate. Default 0.1.
+  #   lambda_lr: initial subgradient step size η (decays as 1/√t).
+  #     Larger → faster convergence but may oscillate.  Default 0.1.
   #   lambda_lr: 0.1
   #
   #   max_iter: maximum Lagrange iterations (default 50).
+  #     Early-stops on convergence or plateau.
   #   max_iter: 50
 
 ablation:

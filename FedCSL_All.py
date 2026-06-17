@@ -1778,7 +1778,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     f" scales_per_client=[{ki.get('_min_scales_per_client', '?')}"
                     f",{ki.get('_avg_scales_per_client', 0):.1f}"
                     f",{ki.get('_max_scales_per_client', '?')}]"
-                    f" lambda_final={[round(v, 4) for v in ki.get('lambda_final', [])]}"
+                    f" lambda_final=[{', '.join(f'{v:.4f}' for v in ki.get('lambda_final', []))}]"
                 )
         print(prep_msg, flush=True)
         with open(logTxt, mode="a+", encoding="utf-8") as f:

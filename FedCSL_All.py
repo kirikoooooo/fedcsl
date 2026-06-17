@@ -656,6 +656,164 @@ def _spilter_knapsack_lagrangian_params(config, override_memory_budget=None):
     }
 
 
+# ---------------------------------------------------------------------------
+# Per-scale GPU memory calibration (same approach as measure_scale_memory.py)
+# ---------------------------------------------------------------------------
+_KNAPSACK_CALIBRATION_DIR = os.path.join("data", "knapsack_calibration")
+os.makedirs(_KNAPSACK_CALIBRATION_DIR, exist_ok=True)
+
+
+def _calibrate_per_scale_memory_mb(X_fed, model, device, batch_size,
+                                     in_channels, num_classes, dist_measure,
+                                     lr, wd, seed, dataset_tag):
+    """Measure per-scale GPU peak memory by training one scale at a time.
+
+    Replicates the measurement protocol of
+    ``scripts/system_efficiency/measure_scale_memory.py``:
+      1. Create a fresh LearningShapeletsCL client per scale
+      2. Set Selected_Scales = [s], SGD+momentum optimizer
+      3. Warmup 1 batch, reset peak stats, train 1 epoch, record peak
+      4. Cache results to data/knapsack_calibration/<dataset>.json
+
+    Returns (g_r: np.ndarray, g_0: float) in MB, or (None, 0) on CPU.
+    """
+    import gc as _gc
+    import json as _json
+
+    if device is None or device.type != "cuda":
+        return None, 0.0
+
+    cache_path = os.path.join(
+        _KNAPSACK_CALIBRATION_DIR, f"{dataset_tag}_scale_memory.json"
+    )
+    if os.path.isfile(cache_path):
+        try:
+            cached = _json.loads(open(cache_path, encoding="utf-8").read())
+            g_r = np.asarray(cached["g_r_mb"], dtype=np.float64)
+            g_0 = float(cached.get("g_0_mb", 0.0))
+            print(
+                f"[spilter] knapsack_lagrangian: loaded cached calibration "
+                f"({cache_path}): g_0={g_0:.1f}MB, g_r={[f'{v:.1f}' for v in g_r]} MB",
+                flush=True,
+            )
+            return g_r, g_0
+        except Exception:
+            pass  # Re-calibrate on cache corruption
+
+    print(
+        "[spilter] knapsack_lagrangian: no cached calibration; "
+        "measuring per-scale GPU memory (round-0, ~30s) ...",
+        flush=True,
+    )
+    from train import LearningShapeletsCL as _CL
+
+    num_scales = len(model.shapelets_size_and_len)
+    shapelets_size_and_len = dict(model.shapelets_size_and_len)
+
+    # Sample data from first non-empty client
+    sample_data = None
+    for client_x in X_fed:
+        if len(client_x) >= batch_size:
+            sample_data = client_x[:batch_size * 2]
+            break
+    if sample_data is None:
+        return None, 0.0
+
+    # Build a minimal spilter config for the calibration client
+    calib_config = {
+        "algo": "spilter",
+        "model": {"params": {"momentum": 0.9, "gamma": 0.5, "beta": 0.4}},
+        "ablation": {
+            "UseJointKD": True, "UseJointCL": True,
+            "UseScaleKD": True, "UseScaleCL": True,
+            "UseProdictor": False, "UseMTLHomo": False,
+            "UseACF": True, "UseDistribution": False,
+        },
+        "spilter": {
+            "allocation_mode": "local_score_topm",
+            "selected_scale_training": "stitched",
+            "stitched_feature_source": "selected_scales_only",
+        },
+    }
+    loss_func = torch.nn.CrossEntropyLoss()
+
+    per_scale_mb = []
+    t0 = time.perf_counter()
+    for s in range(num_scales):
+        client = _CL(
+            shapelets_size_and_len=shapelets_size_and_len,
+            loss_func=loss_func,
+            in_channels=in_channels,
+            num_classes=num_classes,
+            dist_measure=dist_measure,
+            verbose=0,
+            to_cuda=True,
+            l3=0.0, l4=0.0, T=0.1, alpha=0.0, beta=0.4,
+            seed=seed,
+            configDir=None,
+            config=calib_config,
+            device=device,
+        )
+        client.set_optimizer(
+            torch.optim.SGD(
+                client.model.parameters(), lr=float(lr),
+                weight_decay=float(wd), momentum=0.9,
+            )
+        )
+        client.Selected_Scales = [int(s)]
+
+        # Warmup
+        try:
+            client.train(sample_data, epochs=1, batch_size=batch_size,
+                         epoch_idx=-1, lr=lr)
+        except Exception:
+            pass
+
+        torch.cuda.synchronize(device)
+        torch.cuda.reset_peak_memory_stats(device)
+        try:
+            client.train(sample_data, epochs=1, batch_size=batch_size,
+                         epoch_idx=0, lr=lr)
+        except Exception:
+            pass
+        torch.cuda.synchronize(device)
+        peak_mb = float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0)
+        per_scale_mb.append(peak_mb)
+
+        del client
+        _gc.collect()
+        torch.cuda.empty_cache()
+
+    g_r = np.asarray(per_scale_mb, dtype=np.float64)
+    g_0 = float(np.min(g_r)) * 0.5  # Conservative base overhead estimate
+    g_r_marginal = np.maximum(g_r - g_0, 1.0)
+
+    # Persist
+    try:
+        open(cache_path, "w", encoding="utf-8").write(_json.dumps({
+            "dataset": dataset_tag,
+            "g_0_mb": g_0,
+            "g_r_mb": g_r_marginal.tolist(),
+            "g_r_raw_mb": g_r.tolist(),
+            "scale_lengths": list(shapelets_size_and_len.keys()),
+            "calibrated_at": time.time(),
+            "device": str(device),
+            "batch_size": batch_size,
+        }, indent=2, ensure_ascii=False))
+        print(f"[spilter] knapsack_lagrangian: calibration cached → {cache_path}",
+              flush=True)
+    except Exception:
+        pass
+
+    elapsed = time.perf_counter() - t0
+    print(
+        f"[spilter] knapsack_lagrangian: calibration done in {elapsed:.1f}s: "
+        f"g_0={g_0:.1f}MB, g_r={[f'{v:.1f}' for v in g_r_marginal]} MB",
+        flush=True,
+    )
+    return g_r_marginal, g_0
+
+
 def _plan_knapsack_lagrangian_client_scales(
     client_scores,
     model=None,
@@ -667,13 +825,23 @@ def _plan_knapsack_lagrangian_client_scales(
     lambda_lr=0.1,
     max_iter=50,
     seed=None,
+    # Calibration extras
+    X_fed=None,
+    device=None,
+    batch_size=32,
+    in_channels=1,
+    num_classes=2,
+    dist_measure="mix",
+    lr=0.01,
+    wd=0.0001,
+    dataset_tag="unknown",
 ):
     """Per-client knapsack under memory budget with global-coverage Lagrangian.
 
-    Memory costs (g_r) priority:
-      1. ``scale_memory_costs_mb`` from config  — real GPU-profiled MB values
-      2. ``_scale_system_costs`` from model     — unitless proxy (param count +
-         sliding-window compute).  Budget is then also treated as unitless.
+    Memory costs (g_r) resolution order:
+      1. ``scale_memory_costs_mb`` from config (real GPU-profiled MB)
+      2. Round-0 GPU calibration via LearningShapeletsCL (cached to disk)
+      3. ``_scale_system_costs`` from model (unitless proxy)
 
     Returns (client_selected, scale_counts, info_dict).
     """
@@ -685,23 +853,36 @@ def _plan_knapsack_lagrangian_client_scales(
     # ---- Resolve scale memory costs ----------------------------------------
     costs_source = "config"
     if scale_memory_costs_mb is None and model is not None:
-        scale_memory_costs_mb = _scale_system_costs(model)
-        costs_source = "system_proxy"
+        # Try GPU calibration first
+        g_r, g_0 = _calibrate_per_scale_memory_mb(
+            X_fed, model, device, batch_size,
+            in_channels, num_classes, dist_measure,
+            lr, wd, seed, dataset_tag,
+        )
+        if g_r is not None:
+            scale_memory_costs_mb = g_r
+            base_memory_mb = g_0 if base_memory_mb <= 0 else base_memory_mb
+            costs_source = "round0_calibrated"
+        else:
+            scale_memory_costs_mb = _scale_system_costs(model)
+            costs_source = "system_proxy"
 
     # ---- Auto budget if not set --------------------------------------------
     if memory_budgets_mb is not None:
         budgets_source = "config"
     elif scale_memory_costs_mb is not None:
-        if costs_source == "round0_calibrated":
+        if costs_source in ("config", "round0_calibrated"):
+            # Real MB: budget = 60% of total → ~5-6 scales per client
             memory_budgets_mb = float(np.sum(scale_memory_costs_mb)) * 0.6 + base_memory_mb
             budgets_source = "auto_60pct"
         else:
+            # System proxy (unitless)
             memory_budgets_mb = float(np.sum(scale_memory_costs_mb)) * 0.5
             budgets_source = "auto_50pct"
         print(
-            f"[spilter] knapsack_lagrangian: auto budget = {memory_budgets_mb:.1f} MB "
-            f"(source={budgets_source}, costs={costs_source}, "
-            f"{'MB' if costs_source == 'config' else 'unitless'})",
+            f"[spilter] knapsack_lagrangian: auto budget = {memory_budgets_mb:.1f} "
+            f"({'MB' if costs_source != 'system_proxy' else 'units'}) "
+            f"(source={budgets_source}, costs={costs_source})",
             flush=True,
         )
     else:
@@ -1756,6 +1937,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         cached_client_scale_scores,
                         model=server.model,
                         seed=original_seed or 42,
+                        X_fed=X_fed,
+                        device=server_device,
+                        batch_size=batch_size,
+                        in_channels=n_channels,
+                        num_classes=num_classes,
+                        dist_measure=dist_measure,
+                        lr=lr,
+                        wd=wd,
+                        dataset_tag=dataset,
                         **knap_params,
                     )
                 )
@@ -1838,8 +2028,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             mem_info = ""
             if cached_knapsack_info:
                 ki = cached_knapsack_info
+                budget_val = ki.get('_budget_mb')
+                budget_str = f"{budget_val:.0f}MB" if budget_val is not None else "unconstrained"
                 mem_info = (
-                    f" | knapsack: budget={ki.get('_budget_mb','?'):.0f}MB"
+                    f" | knapsack: budget={budget_str}"
                     f" g_0={ki.get('_base_memory_mb',0):.0f}MB"
                     f" scales/client=[{ki.get('_min_scales_per_client','?')}"
                     f"..{ki.get('_max_scales_per_client','?')}]"

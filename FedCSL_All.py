@@ -99,6 +99,8 @@ parser.add_argument('--spilter-random', action='store_true', default=False,
                     help='Use random (non-topM) scale selection for spilter allocation (overrides config allocation_mode to local_score_random_topm)')
 parser.add_argument('--spilter-knapsack', action='store_true', default=False,
                     help='Use knapsack-lagrangian global-coverage-aware scale allocation (overrides config allocation_mode to knapsack_lagrangian)')
+parser.add_argument('--spilter-memory-budget', type=float, default=None,
+                    help='Per-client memory budget in MB for knapsack_lagrangian mode (overrides config spilter.memory_budget_mb)')
 
 args = parser.parse_args()
 
@@ -636,12 +638,16 @@ def _plan_local_score_random_topm_client_scales(client_scores, top_m=4, seed=Non
     return client_selected, scale_counts
 
 
-def _spilter_knapsack_lagrangian_params(config):
-    """Extract knapsack-lagrangian parameters from config.spilter."""
+def _spilter_knapsack_lagrangian_params(config, override_memory_budget=None):
+    """Extract knapsack-lagrangian parameters from config.spilter.
+
+    CLI arg --spilter-memory-budget takes precedence over config file.
+    """
     spilter_cfg = config.get("spilter", {}) or {}
     knapsack_cfg = spilter_cfg.get("knapsack_lagrangian", {}) or {}
+    budget = override_memory_budget if override_memory_budget is not None else spilter_cfg.get("memory_budget_mb", None)
     return {
-        "memory_budgets_mb": spilter_cfg.get("memory_budget_mb", None),
+        "memory_budgets_mb": budget,
         "scale_memory_costs_mb": spilter_cfg.get("scale_memory_costs_mb", None),
         "base_memory_mb": float(spilter_cfg.get("base_memory_mb", 0.0)),
         "coverage_min": knapsack_cfg.get("coverage_min", None),
@@ -678,6 +684,12 @@ def _plan_knapsack_lagrangian_client_scales(
     # Fallback memory proxy: system cost ≈ memory cost
     if scale_memory_costs_mb is None and model is not None:
         scale_memory_costs_mb = _scale_system_costs(model)
+
+    # Default budget: ~half the total system cost → knapsack actually constrains
+    if memory_budgets_mb is None and scale_memory_costs_mb is not None:
+        memory_budgets_mb = float(np.sum(scale_memory_costs_mb)) * 0.5
+        print(f"[spilter] knapsack_lagrangian: auto budget = {memory_budgets_mb:.2f} (50% of total system cost)",
+              flush=True)
 
     selected, counts, info = knapsack_lagrangian_assign(
         client_scores,
@@ -1716,7 +1728,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     seed=original_seed or 42,
                 )
             elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "knapsack_lagrangian":
-                knap_params = _spilter_knapsack_lagrangian_params(config)
+                knap_params = _spilter_knapsack_lagrangian_params(config, override_memory_budget=args.spilter_memory_budget)
                 cached_client_scale_plans, cached_scale_hist, cached_knapsack_info = (
                     _plan_knapsack_lagrangian_client_scales(
                         cached_client_scale_scores,

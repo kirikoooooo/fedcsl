@@ -24,6 +24,7 @@ from sklearn.svm import SVC
 from torch import nn, optim
 
 from algo.client_selection import make_selector, available_methods
+from algo.scale_allocation import knapsack_lagrangian_assign
 from dataset_utils import *   # noqa: F401,F403  (LoadDataset_* 全家桶)
 from fedavg import fedavg
 from fedutil import cal_score, normalize_to_near_one
@@ -96,6 +97,8 @@ parser.add_argument('--eval-every-n-rounds', type=int, default=None,
                     help='Run downstream SVM/linear-probe eval every N federated rounds (default: evaluation.round_eval_interval or 1)')
 parser.add_argument('--spilter-random', action='store_true', default=False,
                     help='Use random (non-topM) scale selection for spilter allocation (overrides config allocation_mode to local_score_random_topm)')
+parser.add_argument('--spilter-knapsack', action='store_true', default=False,
+                    help='Use knapsack-lagrangian global-coverage-aware scale allocation (overrides config allocation_mode to knapsack_lagrangian)')
 
 args = parser.parse_args()
 
@@ -633,6 +636,83 @@ def _plan_local_score_random_topm_client_scales(client_scores, top_m=4, seed=Non
     return client_selected, scale_counts
 
 
+def _spilter_knapsack_lagrangian_params(config):
+    """Extract knapsack-lagrangian parameters from config.spilter."""
+    spilter_cfg = config.get("spilter", {}) or {}
+    knapsack_cfg = spilter_cfg.get("knapsack_lagrangian", {}) or {}
+    return {
+        "memory_budgets_mb": spilter_cfg.get("memory_budget_mb", None),
+        "scale_memory_costs_mb": spilter_cfg.get("scale_memory_costs_mb", None),
+        "base_memory_mb": float(spilter_cfg.get("base_memory_mb", 0.0)),
+        "coverage_min": knapsack_cfg.get("coverage_min", None),
+        "lambda_lr": float(knapsack_cfg.get("lambda_lr", 0.1)),
+        "max_iter": int(knapsack_cfg.get("max_iter", 50)),
+    }
+
+
+def _plan_knapsack_lagrangian_client_scales(
+    client_scores,
+    model=None,
+    *,
+    memory_budgets_mb=None,
+    scale_memory_costs_mb=None,
+    base_memory_mb=0.0,
+    coverage_min=None,
+    lambda_lr=0.1,
+    max_iter=50,
+    seed=None,
+):
+    """Per-client knapsack under memory budget with global-coverage Lagrangian.
+
+    If ``scale_memory_costs_mb`` is not given, ``_scale_system_costs`` from
+    the model is used as a proxy (higher cost ≈ higher memory), which keeps
+    the formulation purely unsupervised.
+
+    Returns (client_selected, scale_counts, info_dict).
+    """
+    num_clients = len(client_scores)
+    num_scales = len(client_scores[0]) if num_clients > 0 else 0
+    if num_scales <= 0:
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64), {}
+
+    # Fallback memory proxy: system cost ≈ memory cost
+    if scale_memory_costs_mb is None and model is not None:
+        scale_memory_costs_mb = _scale_system_costs(model)
+
+    selected, counts, info = knapsack_lagrangian_assign(
+        client_scores,
+        memory_budgets_mb=memory_budgets_mb,
+        scale_memory_costs_mb=scale_memory_costs_mb,
+        base_memory_mb=base_memory_mb,
+        coverage_min=coverage_min,
+        lambda_lr=lambda_lr,
+        max_iter=max_iter,
+        seed=seed,
+    )
+
+    # Log diagnostics (stdout + returned info dict for log file enrichment)
+    print(
+        f"[spilter] knapsack_lagrangian: {info['iterations']} iters, "
+        f"converged={info['converged']}, "
+        f"coverage={info['coverage_final']} "
+        f"(target={info['coverage_target']}), "
+        f"λ_final={[round(v, 4) for v in info['lambda_final']]}",
+        flush=True,
+    )
+
+    # Extra convenience fields for log messages
+    info["_costs_source"] = "config" if scale_memory_costs_mb is not None else "system_proxy"
+    info["_budgets_source"] = "config" if memory_budgets_mb is not None else "unconstrained"
+    info["_per_client_scale_counts"] = [len(s) for s in selected]
+    info["_min_scales_per_client"] = min(len(s) for s in selected) if selected else 0
+    info["_max_scales_per_client"] = max(len(s) for s in selected) if selected else 0
+    info["_avg_scales_per_client"] = (
+        sum(len(s) for s in selected) / len(selected) if selected else 0.0
+    )
+
+    return selected, counts, info
+
+
 def _spilter_allocation_mode(config):
     spilter_cfg = config.get("spilter", {}) or {}
     mode = str(spilter_cfg.get("allocation_mode", "efficiency_aware")).strip().lower()
@@ -659,6 +739,11 @@ def _spilter_allocation_mode(config):
         "random-local-topm": "local_score_random_topm",
         "efficiency": "efficiency_aware",
         "efficiency-aware": "efficiency_aware",
+        "knapsack": "knapsack_lagrangian",
+        "knapsack-lagrangian": "knapsack_lagrangian",
+        "knapsack_lagrangian": "knapsack_lagrangian",
+        "lagrangian": "knapsack_lagrangian",
+        "lagrange": "knapsack_lagrangian",
     }
     return aliases.get(mode, mode)
 
@@ -1581,12 +1666,19 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     cached_client_scale_plans = None
     cached_scale_hist = None
     cached_global_scale_probs = None
+    cached_knapsack_info = None
     scale_score_prep_sec = 0.0
     spilter_allocation_mode = _spilter_allocation_mode(config) if _uses_scale_split_algo(algo) else None
     if spilter_allocation_mode and args.spilter_random:
         spilter_allocation_mode = "local_score_random_topm"
         if args.description:
             config['description'] = args.description + "_random"
+    # knapsack-lagrangian override: CLI flag OR env var
+    _spilter_knapsack_env = os.environ.get("SPILTER_KNAPSACK", "").strip()
+    if spilter_allocation_mode and (args.spilter_knapsack or _spilter_knapsack_env == "1"):
+        spilter_allocation_mode = "knapsack_lagrangian"
+        if args.description:
+            config['description'] = args.description + "_knapsack"
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
         if _uses_scale_split_algo(algo) and spilter_allocation_mode == "uniform_single":
@@ -1623,11 +1715,22 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     top_m=local_top_m,
                     seed=original_seed or 42,
                 )
+            elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "knapsack_lagrangian":
+                knap_params = _spilter_knapsack_lagrangian_params(config)
+                cached_client_scale_plans, cached_scale_hist, cached_knapsack_info = (
+                    _plan_knapsack_lagrangian_client_scales(
+                        cached_client_scale_scores,
+                        model=server.model,
+                        seed=original_seed or 42,
+                        **knap_params,
+                    )
+                )
         if _uses_scale_split_algo(algo) and spilter_allocation_mode not in (
             "uniform_single",
             "global_score_random_single",
             "local_score_topm",
             "local_score_random_topm",
+            "knapsack_lagrangian",
         ):
             system_extra_scale_count = _spilter_system_extra_scale_count(config, default=2)
             cached_client_scale_plans, cached_scale_hist = _plan_efficiency_aware_client_scales_from_scores(
@@ -1644,6 +1747,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             prep_msg = f"[spilter] planned local-score top-m stitched clients in {scale_score_prep_sec:.3f}s"
         elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_random_topm":
             prep_msg = f"[spilter] planned local-score RANDOM top-m stitched clients in {scale_score_prep_sec:.3f}s"
+        elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "knapsack_lagrangian":
+            prep_msg = f"[spilter] planned knapsack-lagrangian global-coverage scales in {scale_score_prep_sec:.3f}s"
         else:
             prep_msg = f"[fedcsl] precomputed client scale scores once in {scale_score_prep_sec:.3f}s"
         if cached_scale_hist is not None:
@@ -1653,6 +1758,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 "global_score_random_single",
                 "local_score_topm",
                 "local_score_random_topm",
+                "knapsack_lagrangian",
             ):
                 prep_msg += f"; system_extra_scale_count={system_extra_scale_count}"
             if spilter_allocation_mode in ("local_score_topm", "local_score_random_topm"):
@@ -1660,6 +1766,20 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             if cached_global_scale_probs is not None:
                 prep_msg += f"; global_scale_probs={np.round(cached_global_scale_probs, 4).tolist()}"
             prep_msg += f"; planned scale coverage: {cached_scale_hist.tolist()}"
+            if cached_knapsack_info:
+                ki = cached_knapsack_info
+                prep_msg += (
+                    f"; knapsack_iters={ki.get('iterations', '?')}"
+                    f" best_iter={ki.get('best_iter', '?')}"
+                    f" converged={ki.get('converged', '?')}"
+                    f" shortfall={ki.get('total_shortfall', '?')}"
+                    f" costs={ki.get('_costs_source', '?')}"
+                    f" budgets={ki.get('_budgets_source', '?')}"
+                    f" scales_per_client=[{ki.get('_min_scales_per_client', '?')}"
+                    f",{ki.get('_avg_scales_per_client', 0):.1f}"
+                    f",{ki.get('_max_scales_per_client', '?')}]"
+                    f" lambda_final={[round(v, 4) for v in ki.get('lambda_final', [])]}"
+                )
         print(prep_msg, flush=True)
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(prep_msg + "\n")

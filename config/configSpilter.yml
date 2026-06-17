@@ -23,10 +23,15 @@ federated:
   auto_resume: false
 
 spilter:
-  # local_score_topm: each client selects top-m scales from its own period-score distribution.
-  # efficiency_aware: period-aware seed scales plus system-efficiency extras.
-  # uniform_single: client_id round-robin, one scale per client.
-  # global_score_random_single: sample one scale from the global period-score distribution.
+  # === Supported allocation_mode values ===
+  #   local_score_topm            — each client selects top-m scales from its own period-score distribution.
+  #   local_score_random_topm     — randomly select m scales per client (non-topM, uniform distribution).
+  #   uniform_single              — client_id round-robin, one scale per client.
+  #   global_score_random_single  — sample one scale from the global period-score distribution.
+  #   efficiency_aware            — period-aware seed scales plus system-efficiency extras.
+  #   knapsack_lagrangian         — 0-1 knapsack per client under memory budget,
+  #                                  with Lagrange relaxation for global scale coverage.
+  #                                  Requires spilter.knapsack_lagrangian subsection (see below).
   allocation_mode: "local_score_topm"
   local_top_m: 4
   # stitched: concatenate selected scales into one local submodel representation.
@@ -35,6 +40,41 @@ spilter:
   # stitched：selected_scales_only（默认）= encode_mix_forward_selected_scales（FedCSL forward 同源管线，仅所选尺度）；
   # forward_slices = 全尺度 forward 后切片（与 FedCSL 表征对照）；subset_ln_forward_scale = 旧版辅助项二次 encode_scale。
   stitched_feature_source: "selected_scales_only"
+
+  # === Knapsack Lagrangian parameters (used when allocation_mode = "knapsack_lagrangian") ===
+  # These define a per-client 0-1 knapsack with global coverage constraints relaxed via Lagrange multipliers.
+  #
+  # Formulation:
+  #   max  Σ_k Σ_r  period_score_{k,r} · x_{k,r}
+  #   s.t. g_0 + Σ_r g_r · x_{k,r} ≤ B_k   ∀k  (memory / OOM constraint)
+  #        Σ_k x_{k,r} ≥ C_min              ∀r  (global coverage constraint)
+  #
+  # memory_budget_mb: per-client memory budget in MB.
+  #   - float (e.g. 128): same budget for all clients
+  #   - list of floats: per-client budgets (must match numClient)
+  #   - omitted: unconstrained (all scales fit; knapsack reduces to coverage-aware top-m)
+  # memory_budget_mb: 128
+  #
+  # scale_memory_costs_mb: per-scale marginal memory g_r, length R=8.
+  #   - list of floats: e.g. [5.2, 8.1, 12.3, 17.8, 24.6, 32.9, 42.7, 53.4]
+  #   - omitted: system-cost proxy from _scale_system_costs (parameter count + compute)
+  # scale_memory_costs_mb: [5.2, 8.1, 12.3, 17.8, 24.6, 32.9, 42.7, 53.4]
+  #
+  # base_memory_mb: fixed overhead g_0 (model + optimizer + activations excluding scale branches).
+  # base_memory_mb: 0.0
+  #
+  # knapsack_lagrangian:
+  #   coverage_min: minimum number of clients that must cover each scale (C_min).
+  #     - int: same for all scales (default: ceil(numClient / numScales))
+  #     - list of ints: per-scale minimums
+  #   coverage_min: 6
+  #
+  #   lambda_lr: subgradient step size η for updating Lagrange multipliers.
+  #     Larger → faster convergence but may oscillate. Default 0.1.
+  #   lambda_lr: 0.1
+  #
+  #   max_iter: maximum Lagrange iterations (default 50).
+  #   max_iter: 50
 
 ablation:
   UseJointKD: True

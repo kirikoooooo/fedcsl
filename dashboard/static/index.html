@@ -197,6 +197,10 @@
                 <input type="checkbox" id="spilter-random-toggle" onchange="updateBaselineSummary()" />
                 <span>Random scales（随机选尺度，非 top-m）</span>
               </label>
+              <label class="tag-check">
+                <input type="checkbox" id="spilter-knapsack-toggle" onchange="updateBaselineSummary()" />
+                <span>Knapsack Lagrangian（背包+全局覆盖 Lagrange 松弛）</span>
+              </label>
             </div>
             <div class="form-row">
               <label>DIR_ALPHA</label>
@@ -645,10 +649,12 @@ function updateBaselineSummary() {
   const evalText = evalProtocol === 'linear_probe' ? 'Linear Probe' : 'SVM';
   const evalIntervalText = evalInterval === 1 ? '每轮' : `每 ${evalInterval} 轮`;
   const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
+  const knapsackChecked = document.getElementById('spilter-knapsack-toggle')?.checked || false;
   const randomText = randomChecked ? ' · Random scales ✓' : '';
+  const knapsackText = knapsackChecked ? ' · Knapsack Lagrangian ✓' : '';
   const el = document.getElementById('baseline-summary');
   if (el) {
-    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}${randomText}`;
+    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}${randomText}${knapsackText}`;
   }
 }
 function selectAllBaselines(checked) {
@@ -706,6 +712,9 @@ function runBadges(r) {
   if (env.SPILTER_RANDOM === '1') {
     badges.push(`<span class="tag" style="background:rgba(210,153,34,.18); color:#ffd98a; border-color:var(--warn);">RANDOM</span>`);
   }
+  if (env.SPILTER_KNAPSACK === '1') {
+    badges.push(`<span class="tag" style="background:rgba(34,153,210,.18); color:#82d4ff; border-color:var(--info);">KNAPSACK</span>`);
+  }
   return badges.join(' ');
 }
 async function launchSelectedBaselines() {
@@ -719,6 +728,7 @@ async function launchSelectedBaselines() {
   const evalInterval = normalizedEvalInterval(document.getElementById('baseline-eval-interval').value);
   const extraArgs = shellWords(document.getElementById('baseline-extra-args').value);
   const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
+  const knapsackChecked = document.getElementById('spilter-knapsack-toggle')?.checked || false;
   const started = [];
   try {
     for (const script of scripts) {
@@ -727,6 +737,10 @@ async function launchSelectedBaselines() {
         // 仅对 Spilter-Mixed 脚本生效随机选尺度选项
         if (script === 'scripts/spilter_mixed_har.sh' && randomChecked) {
           envBase.SPILTER_RANDOM = '1';
+        }
+        // Knapsack Lagrangian：对 Spilter / Spilter-Mixed 脚本均生效
+        if ((script === 'scripts/spilter_har.sh' || script === 'scripts/spilter_mixed_har.sh') && knapsackChecked) {
+          envBase.SPILTER_KNAPSACK = '1';
         }
         const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs, envBase});
         const run = await api('/runs', {

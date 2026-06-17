@@ -656,74 +656,6 @@ def _spilter_knapsack_lagrangian_params(config, override_memory_budget=None):
     }
 
 
-def _measure_per_scale_memory_mb(model, X_sample, device, batch_size,
-                                  num_scales, base_memory_mb=0.0):
-    """Round-0 GPU memory calibration: one train step per scale, measure peak.
-
-    Returns (scale_memory_mb, base_memory_mb_measured).
-    """
-    import gc as _gc
-    if device is None or device.type != "cuda":
-        return None, base_memory_mb
-
-    model_device = next(model.parameters()).device
-    was_training = model.training
-    model.train()
-
-    # Move model to measurement device if needed
-    if model_device.type != "cuda" or model_device.index != device.index:
-        model.to(device)
-
-    scaler = torch.cuda.amp.GradScaler() if hasattr(torch.cuda.amp, 'GradScaler') else None
-    batch = torch.as_tensor(X_sample[:batch_size], dtype=torch.float32, device=device)
-
-    per_scale_mb = []
-    for s in range(num_scales):
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats(device)
-
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-        optimizer.zero_grad()
-        try:
-            feats = model.encode_mix_forward_selected_scales(
-                batch, selected_scales=[s], use_global=False,
-            )
-            loss = feats.sum()
-            loss.backward()
-            optimizer.step()
-        except Exception:
-            # Fallback: use forward_scale if mix forward not available
-            try:
-                feats = model.forward_scale(batch, s)
-                loss = feats.sum()
-                loss.backward()
-                optimizer.step()
-            except Exception:
-                pass
-
-        torch.cuda.synchronize(device)
-        peak_mb = float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0)
-        per_scale_mb.append(peak_mb)
-        del optimizer
-
-    # Restore model state
-    if model_device.type != "cuda" or (device is not None and model_device.index != device.index):
-        model.to(model_device)
-    if not was_training:
-        model.eval()
-
-    torch.cuda.empty_cache()
-    _gc.collect()
-
-    g_r = np.asarray(per_scale_mb, dtype=np.float64)
-    # If base_memory_mb not explicitly set, use the min single-scale memory as g_0 estimate
-    g_0 = base_memory_mb if base_memory_mb > 0 else float(np.min(g_r)) * 0.5
-    # Marginal costs: remove base overhead
-    g_r_marginal = np.maximum(g_r - g_0, 1.0)  # minimum 1MB per scale
-
-    return g_r_marginal, g_0
-
-
 def _plan_knapsack_lagrangian_client_scales(
     client_scores,
     model=None,
@@ -735,14 +667,13 @@ def _plan_knapsack_lagrangian_client_scales(
     lambda_lr=0.1,
     max_iter=50,
     seed=None,
-    X_fed=None,
-    device=None,
-    batch_size=32,
 ):
     """Per-client knapsack under memory budget with global-coverage Lagrangian.
 
-    If ``scale_memory_costs_mb`` is not given, GPU memory is auto-calibrated
-    in round 0 by measuring per-scale peak memory on a sample batch.
+    Memory costs (g_r) priority:
+      1. ``scale_memory_costs_mb`` from config  — real GPU-profiled MB values
+      2. ``_scale_system_costs`` from model     — unitless proxy (param count +
+         sliding-window compute).  Budget is then also treated as unitless.
 
     Returns (client_selected, scale_counts, info_dict).
     """
@@ -751,37 +682,11 @@ def _plan_knapsack_lagrangian_client_scales(
     if num_scales <= 0:
         return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64), {}
 
-    # ---- Auto-calibrate per-scale memory if not provided -------------------
+    # ---- Resolve scale memory costs ----------------------------------------
     costs_source = "config"
     if scale_memory_costs_mb is None and model is not None:
-        if X_fed is not None and device is not None:
-            # Round-0 GPU calibration
-            print("[spilter] knapsack_lagrangian: calibrating per-scale GPU memory (round-0)...",
-                  flush=True)
-            sample_data = None
-            for client_x in X_fed:
-                if len(client_x) >= batch_size:
-                    sample_data = client_x
-                    break
-            if sample_data is not None:
-                g_r, g_0 = _measure_per_scale_memory_mb(
-                    model, sample_data, device, batch_size,
-                    num_scales, base_memory_mb,
-                )
-                scale_memory_costs_mb = g_r
-                base_memory_mb = g_0
-                costs_source = "round0_calibrated"
-                print(
-                    f"[spilter] knapsack_lagrangian: calibrated g_0={g_0:.1f}MB, "
-                    f"g_r={[f'{v:.1f}' for v in g_r]} MB",
-                    flush=True,
-                )
-            else:
-                costs_source = "system_proxy"
-                scale_memory_costs_mb = _scale_system_costs(model)
-        else:
-            costs_source = "system_proxy"
-            scale_memory_costs_mb = _scale_system_costs(model)
+        scale_memory_costs_mb = _scale_system_costs(model)
+        costs_source = "system_proxy"
 
     # ---- Auto budget if not set --------------------------------------------
     if memory_budgets_mb is not None:
@@ -795,7 +700,8 @@ def _plan_knapsack_lagrangian_client_scales(
             budgets_source = "auto_50pct"
         print(
             f"[spilter] knapsack_lagrangian: auto budget = {memory_budgets_mb:.1f} MB "
-            f"(source={budgets_source}, costs={costs_source})",
+            f"(source={budgets_source}, costs={costs_source}, "
+            f"{'MB' if costs_source == 'config' else 'unitless'})",
             flush=True,
         )
     else:
@@ -1850,9 +1756,6 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         cached_client_scale_scores,
                         model=server.model,
                         seed=original_seed or 42,
-                        X_fed=X_fed,
-                        device=server_device,
-                        batch_size=batch_size,
                         **knap_params,
                     )
                 )
@@ -1907,7 +1810,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     f" converged={ki.get('converged', '?')}"
                     f" shortfall={ki.get('total_shortfall', '?')}"
                     f" costs={ki.get('_costs_source', '?')}"
-                    f" g_r(MB)={g_r_str}"
+                    f" g_r={g_r_str}{'MB' if ki.get('_costs_source') == 'config' else ''}"
                     f" g_0={ki.get('_base_memory_mb', 0):.1f}MB"
                     f" budget={ki.get('_budget_mb', '?'):.1f}MB"
                     f" budgets_src={ki.get('_budgets_source', '?')}"

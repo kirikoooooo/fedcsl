@@ -1006,25 +1006,18 @@ def _plan_topm_then_local_knapsack_client_scales(
         client_scores, top_m=top_m
     )
 
-    # ---- Resolve scale memory costs (simple forward-pass, no g_0 / no calibration) ----
-    costs_source = "config" if scale_memory_costs_mb is not None else "unknown"
-    if scale_memory_costs_mb is None and server_model is not None and device is not None:
-        server_mem = _measure_server_per_scale_memory(
-            server_model, X_fed, device, batch_size
-        )
-        if server_mem is not None:
-            s_totals = server_mem.get("total_mem_mb", {})
-            if s_totals:
-                lengths_sorted = sorted(s_totals.keys())
-                scale_memory_costs_mb = [float(s_totals[L]) for L in lengths_sorted]
-                costs_source = "server_forward"
+    # ---- Resolve scale memory costs for knapsack internal use only ----
+    # Use lightweight system proxy; real per-scale memory will be measured
+    # from client training in round 0 and replace these values afterward.
     if scale_memory_costs_mb is None:
         scale_memory_costs_mb = _scale_system_costs(server_model)
         costs_source = "system_proxy"
+    else:
+        costs_source = "config"
 
     g_r = np.asarray(scale_memory_costs_mb, dtype=np.float64)
     g_r = np.maximum(g_r, 1e-6)
-    g_0 = 0.0  # no separate base overhead; per-scale costs are self-contained
+    g_0 = 0.0
 
     # ---- Per-client budgets ----
     if memory_budgets_mb is not None:
@@ -2339,22 +2332,22 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 )
             print(f"[round {round}] planned scale coverage: {round_scale_hist.tolist()}{mem_info}", flush=True)
             if client_scale_plans is not None:
-                # Compute per-client memory usage
                 g_r_list = cached_knapsack_info.get("_scale_memory_costs_mb") if cached_knapsack_info else None
-                g_0 = cached_knapsack_info.get("_base_memory_mb", 0) if cached_knapsack_info else 0
+                costs_src = cached_knapsack_info.get("_costs_source", "") if cached_knapsack_info else ""
                 per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client") if cached_knapsack_info else None
                 topm_candidates = cached_knapsack_info.get("_topm_candidates") if cached_knapsack_info else None
+                # Only show memory when we have real measurements (not system proxy)
+                show_mem = g_r_list is not None and costs_src not in ("system_proxy", "unknown", "config")
                 plan_lines = []
                 for cid, scales in enumerate(client_scale_plans):
                     topm = topm_candidates[cid] if topm_candidates and cid < len(topm_candidates) else []
-                    if g_r_list is not None:
+                    if show_mem:
                         g_r = np.asarray(g_r_list, dtype=np.float64)
-                        used = g_0 + sum(g_r[s] for s in scales)
+                        used = sum(g_r[s] for s in scales)
                         c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
                         budget_str = f" {used:.0f}/{c_budget:.0f}MB" if c_budget is not None else f" {used:.0f}MB"
                     else:
                         budget_str = ""
-                    # Show: top-M candidates → knapsack selection
                     topm_str = f"top{len(topm)}={sorted(topm)}" if topm else ""
                     sel_str = f"→{sorted(scales)}" if sorted(scales) != sorted(topm) else ""
                     plan_lines.append(f"c{cid}:{topm_str}{sel_str}{budget_str}")
@@ -2596,11 +2589,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     )
                     # Re-print per-client scales with corrected memory values
                     corrected_lines = []
-                    g_0 = cached_knapsack_info.get("_base_memory_mb", 0)
                     per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client")
                     for cid, scales in enumerate(client_scale_plans):
                         c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
-                        used = g_0 + sum(measured_g_r[s] for s in scales if s < len(measured_g_r))
+                        used = sum(measured_g_r[s] for s in scales if s < len(measured_g_r))
                         budget_str = f" {used:.0f}/{c_budget:.0f}MB" if c_budget is not None else f" {used:.0f}MB"
                         corrected_lines.append(f"c{cid}:{sorted(scales)}{budget_str}")
                     print(

@@ -623,7 +623,7 @@ function gpuOptionLabel(g) {
   const free = gpuFreePercent(g);
   return `GPU ${g.index} · 空闲 ${free}% · ${g.memory_used_mb}/${g.memory_total_mb}MB · util ${g.utilization}%`;
 }
-async function loadGpuOptions(selectId, {includeAuto=true}={}) {
+async function loadGpuOptions(selectId, {includeAuto=true, selectMostIdle=false}={}) {
   const select = document.getElementById(selectId);
   if (!select) return [];
   try {
@@ -638,6 +638,14 @@ async function loadGpuOptions(selectId, {includeAuto=true}={}) {
     if (includeAuto) options.push('<option value="">自动选择</option>');
     options.push(...data.gpus.map(g => `<option value="${g.index}">${gpuOptionLabel(g)}</option>`));
     select.innerHTML = options.join('');
+    // Auto-select the most idle GPU (lowest memory usage ratio)
+    if (selectMostIdle && data.gpus.length > 0) {
+      const mostIdle = data.gpus.reduce((best, g) => {
+        const ratio = g.memory_used_mb / Math.max(g.memory_total_mb, 1);
+        return ratio < best.ratio ? {ratio, idx: g.index} : best;
+      }, {ratio: Infinity, idx: data.gpus[0].index});
+      select.value = String(mostIdle.idx);
+    }
     return data.gpus;
   } catch (e) {
     select.innerHTML = `<option value="">GPU 读取失败</option>`;
@@ -750,7 +758,7 @@ function selectAllBaselines(checked) {
   updateBaselineSummary();
 }
 async function refreshBaselineGpuOptions() {
-  await loadGpuOptions('baseline-gpu');
+  await loadGpuOptions('baseline-gpu', {includeAuto: false, selectMostIdle: true});
   updateBaselineSummary();
 }
 function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', dataset='HAR', evalProtocol='svm', evalInterval=1, extraArgs=[], envBase={}}={}) {

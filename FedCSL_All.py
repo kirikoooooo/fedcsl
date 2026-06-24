@@ -961,6 +961,84 @@ def _measure_server_per_scale_memory(server_model, X_fed, device, batch_size):
     return {"total_mem_mb": per_scale_total_mb}
 
 
+def _measure_server_gpu_peak_mb(server_model, sample_data, device):
+    """服务端逐尺度隔离测量：每个 scale 独立 reset peak → forward → max_memory_allocated。
+
+    与 _calibrate_per_scale_memory_mb 不同，此函数只做一次 no_grad forward，
+    不创建新模型也不跑训练，速度快（<5s），适合在正式训练前在线测量。
+
+    Returns:
+        g_r: np.ndarray [R] — 每个 scale 独立 forward 的总峰值显存 (MB)，含模型基础开销
+        g_0: float — 基础开销估算 (MB)
+
+    若 device 非 CUDA，返回 (None, 0.0)。
+    """
+    if device is None or device.type != "cuda":
+        return None, 0.0
+    if sample_data is None or len(sample_data) == 0:
+        return None, 0.0
+
+    num_scales = len(server_model.shapelets_size_and_len)
+    lengths = list(server_model.shapelets_size_and_len.keys())
+    x = torch.from_numpy(np.asarray(sample_data, dtype=np.float32)).float().to(device)
+
+    # 临时启用 autograd（forward 期间需要记录激活用于反向传播的显存）
+    saved_grad_flags = {}
+    for pname, p in server_model.named_parameters():
+        saved_grad_flags[pname] = p.requires_grad
+        p.requires_grad_(True)
+
+    per_scale_mb = []
+    try:
+        for s in range(num_scales):
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats(device)
+
+            if hasattr(server_model, 'shapelets_euclidean'):
+                server_model.shapelets_euclidean.forward_scale(x, s, masking=False)
+                server_model.shapelets_cosine.forward_scale(x, s, masking=False)
+                server_model.shapelets_cross_correlation.forward_scale(x, s, masking=False)
+            elif hasattr(server_model, 'shapelets_blocks'):
+                server_model.shapelets_blocks.forward_scale(x, s, masking=False)
+            else:
+                continue
+
+            torch.cuda.synchronize(device)
+            peak_mb = float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0)
+            per_scale_mb.append(peak_mb)
+    finally:
+        for pname, p in server_model.named_parameters():
+            p.requires_grad_(saved_grad_flags.get(pname, False))
+        torch.cuda.empty_cache()
+
+    if len(per_scale_mb) != num_scales:
+        return None, 0.0
+
+    g_r = np.asarray(per_scale_mb, dtype=np.float64)
+    g_0 = float(np.min(g_r)) * 0.5  # 保守估算：最小值的一半作为基础开销
+    g_r_marginal = np.maximum(g_r - g_0, 1.0)  # 每个 scale 的边际开销
+
+    # 打印测量结果表
+    sep = "=" * 72
+    lines = [
+        "",
+        sep,
+        "[server-scale-memory] 服务端逐尺度隔离测量 (reset peak + forward each scale)",
+        f"  device: {device}  sample_batch: {x.shape}",
+        f"  {'Scale':>6s}  {'Length':>8s}  {'Peak(MB)':>10s}  {'Marginal(MB)':>13s}",
+    ]
+    for s in range(num_scales):
+        lines.append(
+            f"  {s:>6d}  {lengths[s]:>8d}  {g_r[s]:>10.2f}  {g_r_marginal[s]:>13.2f}"
+        )
+    lines.append(f"  {'g_0':>6s}  {'—':>8s}  {g_0:>10.2f}  {'(base overhead)':>13s}")
+    lines.append(sep)
+    out_str = "\n".join(lines)
+    print(out_str, flush=True)
+
+    return g_r_marginal, g_0
+
+
 def _plan_topm_then_local_knapsack_client_scales(
     client_scores,
     server_model,
@@ -2250,6 +2328,28 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         spilter_allocation_mode = "knapsack_lagrangian"
         if args.description:
             config['description'] = args.description + "_knapsack"
+
+    # ----- 服务端逐尺度显存测量（正式训练前，每个 scale 隔离 forward 一次） -----
+    server_scale_g_r = None
+    server_scale_g_0 = 0.0
+    if _uses_scale_split_algo(algo) and server_device.type == "cuda":
+        _sample_data = None
+        for _cx in X_fed:
+            if len(_cx) >= batch_size:
+                _sample_data = _cx[:batch_size]
+                break
+        if _sample_data is not None:
+            _g_r_marg, _g_0_m = _measure_server_gpu_peak_mb(
+                server.model, _sample_data, server_device
+            )
+            if _g_r_marg is not None:
+                server_scale_g_r = _g_r_marg
+                server_scale_g_0 = _g_0_m
+                # 注入 config，knapsack 路径会从中读取 scale_memory_costs_mb
+                _sp_cfg = config.setdefault("spilter", {})
+                _sp_cfg["scale_memory_costs_mb"] = server_scale_g_r.tolist()
+                _sp_cfg["base_memory_mb"] = float(server_scale_g_0)
+
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
         if _uses_scale_split_algo(algo) and spilter_allocation_mode == "uniform_single":
@@ -2508,19 +2608,28 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         measured_pct = actual_peak / c_budget * 100
                         measured_vs_budget = f" (实测/预算={measured_pct:.0f}%)"
 
+                    # 服务端参考值：对该 client 所选 scales 按 g_r 累加
+                    server_ref_str = ""
+                    if server_scale_g_r is not None and scales:
+                        server_sum = server_scale_g_0 + sum(
+                            server_scale_g_r[s] for s in scales if 0 <= s < len(server_scale_g_r)
+                        )
+                        server_ref_str = f" 服务端参考={server_sum:.1f}MB"
+
                     lines_out = [
                         "",
                         sep,
                         "[spilter-memory-budget] client {} — {} of {} scales trained".format(
                             idx, n_measured, len(mem.get("total_mem_mb", {}))
                         ),
-                        "  scales: {} | {} | {} | {}{}{}".format(
+                        "  scales: {} | {} | {} | {}{}{}{}".format(
                             sorted(scales) if scales else "?",
                             acc_str,
                             measured_str,
                             budget_str,
                             acc_vs_budget,
                             measured_vs_budget,
+                            server_ref_str,
                         ),
                     ]
                     if actual_peak is not None and c_budget is not None and c_budget > 0 and actual_peak > c_budget:

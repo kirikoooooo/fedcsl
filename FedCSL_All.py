@@ -2219,12 +2219,13 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 )
             elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "knapsack_lagrangian":
                 knap_params = _spilter_knapsack_lagrangian_params(config, override_memory_budget=args.spilter_memory_budget)
-                local_top_m = _spilter_local_top_m(config, default=4)
+                # Force top-4 for spilter-memory-budget experiment (config may
+                # set per-client values for other experiments; knapsack always uses 4)
                 cached_client_scale_plans, cached_scale_hist, cached_knapsack_info = (
                     _plan_topm_then_local_knapsack_client_scales(
                         cached_client_scale_scores,
                         server_model=server.model,
-                        top_m=local_top_m,
+                        top_m=4,
                         X_fed=X_fed,
                         device=server_device,
                         batch_size=batch_size,

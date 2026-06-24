@@ -25,6 +25,9 @@ class MinEuclideanDistBlock(nn.Module):
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
         self.in_channels = in_channels
+        # Per-block memory tracking (peak delta in bytes, measured once on first forward)
+        self._peak_mem_delta_bytes: int = 0
+        self._peak_mem_measured: bool = False
 
         # if not registered as parameter, the optimizer will not be able to see the parameters
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True,
@@ -35,10 +38,25 @@ class MinEuclideanDistBlock(nn.Module):
         # otherwise gradients will not be backpropagated
         self.shapelets.retain_grad()
 
+    @property
+    def peak_mem_mb(self) -> float:
+        """Peak forward memory delta in MiB (0 if not measured yet or on CPU)."""
+        return float(self._peak_mem_delta_bytes) / (1024.0 * 1024.0)
+
+    @property
+    def param_mem_bytes(self) -> int:
+        """Total parameter memory in bytes."""
+        total = 0
+        for p in self.parameters(recurse=True):
+            total += p.numel() * p.element_size()
+        return total
+
     def forward(self, x, masking=False):
-
-
-
+        # ---- per-block forward memory profiling (MAST-style, device-local) ----
+        if self.to_cuda and not self._peak_mem_measured:
+            torch.cuda.synchronize(self.device)
+            torch.cuda.reset_peak_memory_stats(self.device)
+            pre_mem = torch.cuda.memory_allocated(self.device)
 
         # unfold time series to emulate sliding window
         x = x.unfold(2, self.shapelets_size, 1).contiguous()
@@ -72,6 +90,15 @@ class MinEuclideanDistBlock(nn.Module):
 
         # hard min compared to soft-min from the paper
         x, _ = torch.min(x, 3)
+
+        # ---- finalise memory measurement ----
+        if self.to_cuda and not self._peak_mem_measured:
+            torch.cuda.synchronize(self.device)
+            self._peak_mem_delta_bytes = max(
+                int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
+            )
+            self._peak_mem_measured = True
+
         return x
 
 
@@ -90,6 +117,9 @@ class MaxCosineSimilarityBlock(nn.Module):
         self.relu = nn.ReLU()
         self.mean = 0
         self.var  = 0
+        # Per-block memory tracking (peak delta in bytes, measured once on first forward)
+        self._peak_mem_delta_bytes: int = 0
+        self._peak_mem_measured: bool = False
 
         # if not registered as parameter, the optimizer will not be able to see the parameters
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True,
@@ -106,7 +136,25 @@ class MaxCosineSimilarityBlock(nn.Module):
                                         nn.ReLU(),
                                         nn.Linear(self.num_shapelets, self.num_shapelets))
 
+    @property
+    def peak_mem_mb(self) -> float:
+        """Peak forward memory delta in MiB (0 if not measured yet or on CPU)."""
+        return float(self._peak_mem_delta_bytes) / (1024.0 * 1024.0)
+
+    @property
+    def param_mem_bytes(self) -> int:
+        """Total parameter memory in bytes."""
+        total = 0
+        for p in self.parameters(recurse=True):
+            total += p.numel() * p.element_size()
+        return total
+
     def forward(self, x, masking=False):
+        # ---- per-block forward memory profiling (MAST-style, device-local) ----
+        if self.to_cuda and not self._peak_mem_measured:
+            torch.cuda.synchronize(self.device)
+            torch.cuda.reset_peak_memory_stats(self.device)
+            pre_mem = torch.cuda.memory_allocated(self.device)
 
         """
         n_dims = x.shape[1]
@@ -160,6 +208,14 @@ class MaxCosineSimilarityBlock(nn.Module):
         # concat之前 是否需要mlp？
         #x = self.prodictor(x)
 
+        # ---- finalise memory measurement ----
+        if self.to_cuda and not self._peak_mem_measured:
+            torch.cuda.synchronize(self.device)
+            self._peak_mem_delta_bytes = max(
+                int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
+            )
+            self._peak_mem_measured = True
+
         return x #[8,1,40]
 
 
@@ -174,18 +230,46 @@ class MaxCrossCorrelationBlock(nn.Module):
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
         self.to_cuda = self.device.type == "cuda"
+        # Per-block memory tracking (peak delta in bytes, measured once on first forward)
+        self._peak_mem_delta_bytes: int = 0
+        self._peak_mem_measured: bool = False
         if self.to_cuda:
             self.to(self.device)
 
+    @property
+    def peak_mem_mb(self) -> float:
+        """Peak forward memory delta in MiB (0 if not measured yet or on CPU)."""
+        return float(self._peak_mem_delta_bytes) / (1024.0 * 1024.0)
 
+    @property
+    def param_mem_bytes(self) -> int:
+        """Total parameter memory in bytes."""
+        total = 0
+        for p in self.parameters(recurse=True):
+            total += p.numel() * p.element_size()
+        return total
 
     def forward(self, x, masking=False):
+        # ---- per-block forward memory profiling (MAST-style, device-local) ----
+        if self.to_cuda and not self._peak_mem_measured:
+            torch.cuda.synchronize(self.device)
+            torch.cuda.reset_peak_memory_stats(self.device)
+            pre_mem = torch.cuda.memory_allocated(self.device)
 
         x = self.shapelets(x)
         if masking:
             mask = generate_binomial_mask(x.shape, device=x.device)
             x *= mask
         x, _ = torch.max(x, 2, keepdim=True)
+
+        # ---- finalise memory measurement ----
+        if self.to_cuda and not self._peak_mem_measured:
+            torch.cuda.synchronize(self.device)
+            self._peak_mem_delta_bytes = max(
+                int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
+            )
+            self._peak_mem_measured = True
+
         return x.transpose(2, 1)
 
 
@@ -284,8 +368,66 @@ class ShapeletsDistBlocks(nn.Module):
                     parts.append(block(x, masking))
         return torch.cat(parts, dim=2)
 
+    # ---- per-scale memory aggregation (MAST-style, peak forward delta + param mem) ----
+    def get_per_scale_peak_mem_mb(self) -> dict:
+        """Return per-scale peak forward memory in MiB.
 
+        For single distance measures: scale_i = block[i].peak_mem_mb.
+        For 'mix': scale_i = euclidean[i] + cosine[i] + cross[i] (sum of 3 sub-blocks).
 
+        Returns:
+            OrderedDict[int, float]: scale_length → peak_mem_mb.
+            Empty dict if no blocks have been forwarded yet.
+        """
+        lengths = list(self.shapelets_size_and_len.keys())
+        if not lengths:
+            return {}
+        result = {}
+        if self.dist_measure == 'mix':
+            for i, L in enumerate(lengths):
+                eu_mb = self.blocks[i * 3].peak_mem_mb
+                co_mb = self.blocks[i * 3 + 1].peak_mem_mb
+                cc_mb = self.blocks[i * 3 + 2].peak_mem_mb
+                result[L] = eu_mb + co_mb + cc_mb
+        else:
+            for i, L in enumerate(lengths):
+                result[L] = self.blocks[i].peak_mem_mb
+        return result
+
+    def get_per_scale_param_mem_mb(self) -> dict:
+        """Return per-scale parameter memory in MiB (same grouping as peak mem).
+
+        Returns:
+            OrderedDict[int, float]: scale_length → param_mem_mb.
+        """
+        lengths = list(self.shapelets_size_and_len.keys())
+        if not lengths:
+            return {}
+        result = {}
+        if self.dist_measure == 'mix':
+            for i, L in enumerate(lengths):
+                eu_bytes = self.blocks[i * 3].param_mem_bytes
+                co_bytes = self.blocks[i * 3 + 1].param_mem_bytes
+                cc_bytes = self.blocks[i * 3 + 2].param_mem_bytes
+                result[L] = (eu_bytes + co_bytes + cc_bytes) / (1024.0 * 1024.0)
+        else:
+            for i, L in enumerate(lengths):
+                result[L] = float(self.blocks[i].param_mem_bytes) / (1024.0 * 1024.0)
+        return result
+
+    def get_per_scale_memory_summary(self) -> dict:
+        """Combined per-scale memory summary (peak + param, all in MiB).
+
+        Returns:
+            dict with keys 'peak_mem_mb', 'param_mem_mb', 'total_mem_mb' —
+            each an OrderedDict[int, float] mapping scale_length → value.
+        """
+        peak = self.get_per_scale_peak_mem_mb()
+        param = self.get_per_scale_param_mem_mb()
+        total = {}
+        for L in peak:
+            total[L] = peak.get(L, 0.0) + param.get(L, 0.0)
+        return {"peak_mem_mb": peak, "param_mem_mb": param, "total_mem_mb": total}
 
 
 class LearningShapeletsModel(nn.Module):
@@ -368,6 +510,10 @@ class LearningShapeletsModel(nn.Module):
         if normalize:
             x = nn.functional.layer_norm(x, (x.shape[1],))
         return x
+
+    def get_per_scale_memory_summary(self) -> dict:
+        """Delegate to ShapeletsDistBlocks per-scale memory aggregation."""
+        return self.shapelets_blocks.get_per_scale_memory_summary()
 
     def forward(self, x, optimize='acc', masking=False,isProdictor=False):
 
@@ -508,6 +654,33 @@ class LearningShapeletsModelMixDistances(nn.Module):
         if normalize:
             out = nn.functional.layer_norm(out, (out.shape[1],))
         return out
+
+    def get_per_scale_memory_summary(self) -> dict:
+        """Combine per-scale memory from all three mix-distance branches.
+
+        Each scale = euclidean[scale_idx] + cosine[scale_idx] + cross[scale_idx].
+        Returns same structure as ShapeletsDistBlocks.get_per_scale_memory_summary.
+        """
+        lengths = list(self.shapelets_size_and_len.keys())
+        if not lengths:
+            return {"peak_mem_mb": {}, "param_mem_mb": {}, "total_mem_mb": {}}
+
+        eu_peak = self.shapelets_euclidean.get_per_scale_peak_mem_mb()
+        co_peak = self.shapelets_cosine.get_per_scale_peak_mem_mb()
+        cc_peak = self.shapelets_cross_correlation.get_per_scale_peak_mem_mb()
+        eu_param = self.shapelets_euclidean.get_per_scale_param_mem_mb()
+        co_param = self.shapelets_cosine.get_per_scale_param_mem_mb()
+        cc_param = self.shapelets_cross_correlation.get_per_scale_param_mem_mb()
+
+        peak = {}
+        param = {}
+        total = {}
+        for L in lengths:
+            peak[L] = eu_peak.get(L, 0.0) + co_peak.get(L, 0.0) + cc_peak.get(L, 0.0)
+            param[L] = eu_param.get(L, 0.0) + co_param.get(L, 0.0) + cc_param.get(L, 0.0)
+            total[L] = peak[L] + param[L]
+
+        return {"peak_mem_mb": peak, "param_mem_mb": param, "total_mem_mb": total}
 
     @staticmethod
     def _split_mix_branch_flat(flat, selected_scales_int, branch, shapelets_size_and_len):

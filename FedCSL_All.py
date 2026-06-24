@@ -177,6 +177,21 @@ def _format_exception_block(exc_type, exc_value, exc_traceback):
     )
 
 
+def _fmt_knap_budget(ki):
+    """Format knapsack budget info for log messages.
+
+    Handles both uniform (scalar) and per-client (list) budgets.
+    """
+    budget_val = ki.get('_budget_mb')
+    if budget_val is None:
+        return 'unconstrained'
+    bmin = ki.get('_budget_mb_min')
+    bmax = ki.get('_budget_mb_max')
+    if bmin is not None and bmax is not None and bmin != bmax:
+        return f"{budget_val:.1f}MB [{bmin:.0f}..{bmax:.0f}]"
+    return f"{budget_val:.1f}MB"
+
+
 def _result_log_excepthook(exc_type, exc_value, exc_traceback):
     if _ACTIVE_RESULT_LOG and not issubclass(exc_type, KeyboardInterrupt):
         try:
@@ -641,11 +656,37 @@ def _plan_local_score_random_topm_client_scales(client_scores, top_m=4, seed=Non
 def _spilter_knapsack_lagrangian_params(config, override_memory_budget=None):
     """Extract knapsack-lagrangian parameters from config.spilter.
 
-    CLI arg --spilter-memory-budget takes precedence over config file.
+    Resolution order for memory budgets:
+      1. CLI arg ``--spilter-memory-budget`` (single float)
+      2. Env var ``SPILTER_MEMORY_BUDGETS`` (comma-separated per-client list)
+      3. Config file ``spilter.memory_budget_mb``
+
+    When ``SPILTER_MEMORY_BUDGETS`` is set, it overrides the single-value budget
+    with a per-client list (used by the dashboard's spilter-memory-budget experiment).
     """
     spilter_cfg = config.get("spilter", {}) or {}
     knapsack_cfg = spilter_cfg.get("knapsack_lagrangian", {}) or {}
+
+    # Resolve budget: CLI > env var > config
     budget = override_memory_budget if override_memory_budget is not None else spilter_cfg.get("memory_budget_mb", None)
+
+    # Per-client budgets via env var (dashboard spilter-memory-budget experiment)
+    env_budgets = os.environ.get("SPILTER_MEMORY_BUDGETS", "").strip()
+    if env_budgets:
+        try:
+            per_client = [float(v.strip()) for v in env_budgets.split(",") if v.strip()]
+            if per_client:
+                budget = per_client
+                print(
+                    f"[spilter] memory budgets from SPILTER_MEMORY_BUDGETS: "
+                    f"{len(per_client)} clients, "
+                    f"range=[{min(per_client):.0f}, {max(per_client):.0f}] MB, "
+                    f"mean={np.mean(per_client):.1f} MB",
+                    flush=True,
+                )
+        except (ValueError, TypeError):
+            pass
+
     return {
         "memory_budgets_mb": budget,
         "scale_memory_costs_mb": spilter_cfg.get("scale_memory_costs_mb", None),
@@ -869,7 +910,7 @@ def _plan_knapsack_lagrangian_client_scales(
 
     # ---- Auto budget if not set --------------------------------------------
     if memory_budgets_mb is not None:
-        budgets_source = "config"
+        budgets_source = os.environ.get("SPILTER_MEMORY_BUDGETS", "") and "env_per_client" or "config"
     elif scale_memory_costs_mb is not None:
         if costs_source in ("config", "round0_calibrated"):
             # Real MB: budget = 60% of total → ~5-6 scales per client
@@ -912,7 +953,15 @@ def _plan_knapsack_lagrangian_client_scales(
     # Extra convenience fields for log messages
     info["_costs_source"] = costs_source
     info["_budgets_source"] = budgets_source
-    info["_budget_mb"] = memory_budgets_mb
+    # Store budget summary: if per-client list, store mean; else store the scalar.
+    if isinstance(memory_budgets_mb, (list, tuple)):
+        mb_arr = np.asarray(memory_budgets_mb, dtype=np.float64)
+        info["_budget_mb"] = float(np.mean(mb_arr))
+        info["_budget_mb_min"] = float(np.min(mb_arr))
+        info["_budget_mb_max"] = float(np.max(mb_arr))
+        info["_budget_mb_per_client"] = mb_arr.tolist()
+    else:
+        info["_budget_mb"] = float(memory_budgets_mb) if memory_budgets_mb is not None else None
     info["_base_memory_mb"] = base_memory_mb
     info["_scale_memory_costs_mb"] = (
         scale_memory_costs_mb.tolist() if hasattr(scale_memory_costs_mb, 'tolist')
@@ -1087,6 +1136,7 @@ def _train_client_worker(
             "state": None,
             "scale_indices": list(selected_scales),
             "scale_states": None,
+            "memory_summary": None,
             "worker_id": worker_id,
             "device": str(device),
             "skipped": False,
@@ -1147,6 +1197,14 @@ def _train_client_worker(
                 loss_all = 0.0
                 loss_breakdown["total"] = 0.0
 
+        # ---- round-0 per-scale memory collection (MAST-style) ----
+        memory_summary = None
+        if round_idx == 0 and use_scale_split_comm:
+            try:
+                memory_summary = c.model.get_per_scale_memory_summary()
+            except Exception:
+                memory_summary = None
+
         if _SPILTER_DEBUG and use_scale_split_comm:
             scale_ids = result.get("scale_indices") or []
             all_prefixes = []
@@ -1193,6 +1251,7 @@ def _train_client_worker(
         result["loss"] = loss_all
         result["loss_breakdown"] = loss_breakdown
         result["state"] = _state_dict_to_cpu(c.model.state_dict())
+        result["memory_summary"] = memory_summary
         if use_scale_split_comm and result["scale_indices"]:
             result["scale_states"] = {
                 int(scale_idx): c.model.scale_state_dict(scale_idx, clone=True, cpu=True)
@@ -2002,7 +2061,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     f" costs={ki.get('_costs_source', '?')}"
                     f" g_r={g_r_str}{'MB' if ki.get('_costs_source') == 'config' else ''}"
                     f" g_0={ki.get('_base_memory_mb', 0):.1f}MB"
-                    f" budget={f'{ki_budget:.1f}MB' if (ki_budget := ki.get('_budget_mb')) is not None else 'unconstrained'}"
+                    f" budget={_fmt_knap_budget(ki)}"
                     f" budgets_src={ki.get('_budgets_source', '?')}"
                     f" scales_per_client=[{ki.get('_min_scales_per_client', '?')}"
                     f",{ki.get('_avg_scales_per_client', 0):.1f}"
@@ -2029,7 +2088,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             if cached_knapsack_info:
                 ki = cached_knapsack_info
                 budget_val = ki.get('_budget_mb')
-                budget_str = f"{budget_val:.0f}MB" if budget_val is not None else "unconstrained"
+                if budget_val is not None:
+                    bmin = ki.get('_budget_mb_min')
+                    bmax = ki.get('_budget_mb_max')
+                    if bmin is not None and bmax is not None and bmin != bmax:
+                        budget_str = f"{budget_val:.0f}MB [{bmin:.0f}..{bmax:.0f}]"
+                    else:
+                        budget_str = f"{budget_val:.0f}MB"
+                else:
+                    budget_str = "unconstrained"
                 mem_info = (
                     f" | knapsack: budget={budget_str}"
                     f" g_0={ki.get('_base_memory_mb',0):.0f}MB"
@@ -2101,6 +2168,73 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                             "states": result["scale_states"],
                         }
         train_stage_sec = time.perf_counter() - train_stage_t0
+
+        # ----- round-0 per-scale memory aggregation (MAST-style, spilter-memory-budget) -----
+        if round == 0 and use_scale_split_comm:
+            # Collect memory summaries from all client workers
+            scale_peak_mem_mb = {}
+            scale_param_mem_mb = {}
+            scale_total_mem_mb = {}
+            n_mem_clients = 0
+            for result_list in [future.result() for future in futures]:
+                for result in result_list:
+                    mem = result.get("memory_summary")
+                    if mem is None:
+                        continue
+                    n_mem_clients += 1
+                    for L, v in mem.get("peak_mem_mb", {}).items():
+                        scale_peak_mem_mb[L] = scale_peak_mem_mb.get(L, 0.0) + v
+                    for L, v in mem.get("param_mem_mb", {}).items():
+                        scale_param_mem_mb[L] = scale_param_mem_mb.get(L, 0.0) + v
+                    for L, v in mem.get("total_mem_mb", {}).items():
+                        scale_total_mem_mb[L] = scale_total_mem_mb.get(L, 0.0) + v
+
+            if n_mem_clients > 0:
+                # Average across clients
+                mem_report_lines = [
+                    "",
+                    "=" * 72,
+                    "[spilter-memory-budget] Round-0 per-scale GPU memory (avg across {} clients)".format(n_mem_clients),
+                    "-" * 72,
+                    f"{'Scale Length':>14s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}",
+                ]
+                for L in sorted(scale_total_mem_mb.keys()):
+                    peak_avg = scale_peak_mem_mb.get(L, 0.0) / n_mem_clients
+                    param_avg = scale_param_mem_mb.get(L, 0.0) / n_mem_clients
+                    total_avg = scale_total_mem_mb.get(L, 0.0) / n_mem_clients
+                    mem_report_lines.append(
+                        f"{L:>14d}  {peak_avg:>10.2f}  {param_avg:>10.2f}  {total_avg:>10.2f}"
+                    )
+                total_peak = sum(v / n_mem_clients for v in scale_peak_mem_mb.values())
+                total_param = sum(v / n_mem_clients for v in scale_param_mem_mb.values())
+                total_all = sum(v / n_mem_clients for v in scale_total_mem_mb.values())
+                mem_report_lines.append("-" * 72)
+                mem_report_lines.append(
+                    f"{'SUM':>14s}  {total_peak:>10.2f}  {total_param:>10.2f}  {total_all:>10.2f}"
+                )
+                mem_report_lines.append("=" * 72)
+                mem_report_str = "\n".join(mem_report_lines)
+                print(mem_report_str, flush=True)
+                with open(logTxt, mode="a+", encoding="utf-8") as f:
+                    f.write(mem_report_str + "\n")
+
+                # Store per-scale memory costs (peak + param avg) for knapsack use
+                _scale_mem_mb_list = [
+                    scale_total_mem_mb.get(L, 0.0) / n_mem_clients
+                    for L in sorted(scale_total_mem_mb.keys())
+                ]
+                if cached_knapsack_info is None:
+                    cached_knapsack_info = {}
+                cached_knapsack_info["_round0_scale_mem_mb"] = _scale_mem_mb_list
+                cached_knapsack_info["_round0_scale_peak_mb"] = [
+                    scale_peak_mem_mb.get(L, 0.0) / n_mem_clients
+                    for L in sorted(scale_peak_mem_mb.keys())
+                ]
+                cached_knapsack_info["_round0_scale_param_mb"] = [
+                    scale_param_mem_mb.get(L, 0.0) / n_mem_clients
+                    for L in sorted(scale_param_mem_mb.keys())
+                ]
+                cached_knapsack_info["_round0_total_mb"] = total_all
 
         # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----
         dist_stage_t0 = time.perf_counter()

@@ -201,6 +201,32 @@
                 <input type="checkbox" id="spilter-knapsack-toggle" onchange="updateBaselineSummary()" />
                 <span>Knapsack Lagrangian（背包+全局覆盖 Lagrange 松弛）</span>
               </label>
+              <label class="tag-check" style="margin-top:6px">
+                <input type="checkbox" id="spilter-memory-budget-toggle" onchange="updateMemoryBudgetSection(); updateBaselineSummary();" />
+                <span>Spilter-memory-budget（显存预算实验）</span>
+              </label>
+            </div>
+            <div id="memory-budget-section" style="display:none; margin-bottom:8px; padding:10px; background:var(--card); border:1px solid var(--border); border-radius:6px;">
+              <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">显存预算配置</div>
+              <div class="form-row">
+                <label>显存基础 (MB)</label>
+                <input id="memory-budget-base" class="control" type="number" min="1" step="1" value="200" oninput="updateBaselineSummary()" style="width:120px" />
+              </div>
+              <div style="font-size:12px; color:var(--muted); margin:6px 0 4px;">
+                客户端等级分布（强/中/弱）
+              </div>
+              <div class="form-row" style="display:flex; gap:8px; align-items:center;">
+                <label style="min-width:auto">强:</label>
+                <input id="memory-budget-ratio-strong" class="control" type="number" min="0" max="100" step="1" value="30" oninput="updateBaselineSummary()" style="width:55px" />
+                <span style="font-size:11px">% (×1.0)</span>
+                <label style="min-width:auto; margin-left:8px">中:</label>
+                <input id="memory-budget-ratio-medium" class="control" type="number" min="0" max="100" step="1" value="40" oninput="updateBaselineSummary()" style="width:55px" />
+                <span style="font-size:11px">% (×0.8)</span>
+                <label style="min-width:auto; margin-left:8px">弱:</label>
+                <input id="memory-budget-ratio-weak" class="control" type="number" min="0" max="100" step="1" value="30" oninput="updateBaselineSummary()" style="width:55px" />
+                <span style="font-size:11px">% (×0.6)</span>
+              </div>
+              <div id="memory-budget-summary" style="font-size:12px; color:var(--info); margin-top:6px;"></div>
             </div>
             <div class="form-row">
               <label>DIR_ALPHA</label>
@@ -636,6 +662,61 @@ function selectedBaselineAlphas() {
   const alpha = document.getElementById('baseline-alpha').value;
   return alpha === '__ALL__' ? alphaChoices : [alpha];
 }
+function updateMemoryBudgetSection() {
+  const toggle = document.getElementById('spilter-memory-budget-toggle');
+  const section = document.getElementById('memory-budget-section');
+  if (section && toggle) {
+    section.style.display = toggle.checked ? 'block' : 'none';
+  }
+  if (toggle && toggle.checked) {
+    _refreshMemoryBudgetSummary();
+  }
+}
+function _memoryBudgetConfig() {
+  const base = parseInt(document.getElementById('memory-budget-base')?.value) || 200;
+  const rStrong = parseInt(document.getElementById('memory-budget-ratio-strong')?.value) || 30;
+  const rMedium = parseInt(document.getElementById('memory-budget-ratio-medium')?.value) || 40;
+  const rWeak = parseInt(document.getElementById('memory-budget-ratio-weak')?.value) || 30;
+  const totalRatio = rStrong + rMedium + rWeak || 100;
+  return {
+    base: base,
+    ratios: { strong: rStrong / 100, medium: rMedium / 100, weak: rWeak / 100 },
+    coeffs: { strong: 1.0, medium: 0.8, weak: 0.6 },
+    budgets: {
+      strong: Math.round(base * 1.0),
+      medium: Math.round(base * 0.8),
+      weak: Math.round(base * 0.6),
+    },
+    normalizedRatios: {
+      strong: rStrong / totalRatio,
+      medium: rMedium / totalRatio,
+      weak: rWeak / totalRatio,
+    },
+  };
+}
+function _refreshMemoryBudgetSummary() {
+  const el = document.getElementById('memory-budget-summary');
+  if (!el) return;
+  const cfg = _memoryBudgetConfig();
+  el.innerHTML = `预算: 强 ${cfg.budgets.strong}MB (×1.0) | 中 ${cfg.budgets.medium}MB (×0.8) | 弱 ${cfg.budgets.weak}MB (×0.6) &nbsp; 占比: ${(cfg.normalizedRatios.strong*100).toFixed(0)}%/${(cfg.normalizedRatios.medium*100).toFixed(0)}%/${(cfg.normalizedRatios.weak*100).toFixed(0)}%`;
+}
+function computePerClientMemoryBudgets(numClients) {
+  const cfg = _memoryBudgetConfig();
+  const n = Math.max(1, parseInt(numClients) || 50);
+  const nStrong = Math.max(1, Math.round(n * cfg.normalizedRatios.strong));
+  const nMedium = Math.max(1, Math.round(n * cfg.normalizedRatios.medium));
+  const nWeak = n - nStrong - nMedium;
+  const budgets = [];
+  for (let i = 0; i < nStrong; i++) budgets.push(cfg.budgets.strong);
+  for (let i = 0; i < nMedium; i++) budgets.push(cfg.budgets.medium);
+  for (let i = 0; i < Math.max(0, nWeak); i++) budgets.push(cfg.budgets.weak);
+  // Shuffle so clients aren't clustered by tier
+  for (let i = budgets.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [budgets[i], budgets[j]] = [budgets[j], budgets[i]];
+  }
+  return budgets;
+}
 function updateBaselineSummary() {
   const scripts = selectedBaselineScripts();
   const alphas = selectedBaselineAlphas();
@@ -650,11 +731,19 @@ function updateBaselineSummary() {
   const evalIntervalText = evalInterval === 1 ? '每轮' : `每 ${evalInterval} 轮`;
   const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
   const knapsackChecked = document.getElementById('spilter-knapsack-toggle')?.checked || false;
+  const memBudgetChecked = document.getElementById('spilter-memory-budget-toggle')?.checked || false;
   const randomText = randomChecked ? ' · Random scales ✓' : '';
   const knapsackText = knapsackChecked ? ' · Knapsack Lagrangian ✓' : '';
+  let memBudgetText = '';
+  if (memBudgetChecked) {
+    const cfg = _memoryBudgetConfig();
+    const nCli = parseInt(numClient) || 50;
+    memBudgetText = ` · 显存预算: base=${cfg.base}MB (强${cfg.budgets.strong}/中${cfg.budgets.medium}/弱${cfg.budgets.weak}) 分布${(cfg.normalizedRatios.strong*100).toFixed(0)}/${(cfg.normalizedRatios.medium*100).toFixed(0)}/${(cfg.normalizedRatios.weak*100).toFixed(0)} × ${nCli}客户端`;
+  }
+  _refreshMemoryBudgetSummary();
   const el = document.getElementById('baseline-summary');
   if (el) {
-    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}${randomText}${knapsackText}`;
+    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}${randomText}${knapsackText}${memBudgetText}`;
   }
 }
 function selectAllBaselines(checked) {
@@ -715,6 +804,9 @@ function runBadges(r) {
   if (env.SPILTER_KNAPSACK === '1') {
     badges.push(`<span class="tag" style="background:rgba(34,153,210,.18); color:#82d4ff; border-color:var(--info);">KNAPSACK</span>`);
   }
+  if (env.SPILTER_MEMORY_BUDGETS && !env.SPILTER_MEMORY_BUDGETS.startsWith('__')) {
+    badges.push(`<span class="tag" style="background:rgba(153,34,210,.18); color:#d9b3ff; border-color:#a855f7;">MEM-BUDGET</span>`);
+  }
   return badges.join(' ');
 }
 async function launchSelectedBaselines() {
@@ -729,6 +821,7 @@ async function launchSelectedBaselines() {
   const extraArgs = shellWords(document.getElementById('baseline-extra-args').value);
   const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
   const knapsackChecked = document.getElementById('spilter-knapsack-toggle')?.checked || false;
+  const memBudgetChecked = document.getElementById('spilter-memory-budget-toggle')?.checked || false;
   const started = [];
   try {
     for (const script of scripts) {
@@ -741,6 +834,14 @@ async function launchSelectedBaselines() {
         // Knapsack Lagrangian：对 Spilter / Spilter-Mixed 脚本均生效
         if ((script === 'scripts/spilter_har.sh' || script === 'scripts/spilter_mixed_har.sh') && knapsackChecked) {
           envBase.SPILTER_KNAPSACK = '1';
+        }
+        // Spilter-memory-budget: 对 Spilter 脚本均生效
+        //  启用 Knapsack Lagrangian + 传递 per-client 显存预算
+        if ((script === 'scripts/spilter_har.sh' || script === 'scripts/spilter_mixed_har.sh') && memBudgetChecked) {
+          envBase.SPILTER_KNAPSACK = '1';
+          const nCli = parseInt(numClient) || 50;
+          const perClientBudgets = computePerClientMemoryBudgets(nCli);
+          envBase.SPILTER_MEMORY_BUDGETS = perClientBudgets.join(',');
         }
         const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs, envBase});
         const run = await api('/runs', {

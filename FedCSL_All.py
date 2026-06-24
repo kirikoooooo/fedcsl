@@ -856,14 +856,13 @@ def _calibrate_per_scale_memory_mb(X_fed, model, device, batch_size,
 
 
 def _measure_server_per_scale_memory(server_model, X_fed, device, batch_size):
-    """Force a full forward pass on the server model to trigger per-block memory measurement.
+    """Force a forward pass on the server model to measure per-block peak memory.
 
-    ``_precompute_client_scale_scores`` calls ``model(x)`` only as a fallback inside
-    ``_client_scale_scores_batch`` (when ``period_score`` returns empty).  If period_score
-    succeeds, the model is never forwarded and all blocks stay unmeasured (g_r = 0).
+    Runs WITH autograd (temporarily enables requires_grad on the server model)
+    so the measurement includes the memory for saved activations — matching
+    the peak memory that clients will see during actual training.
 
-    This function does one no-grad forward with a small batch to guarantee all blocks
-    record their peak memory deltas.  Returns the per-scale memory summary dict.
+    Returns the per-scale memory summary dict.
     """
     if device is None or device.type != "cuda":
         return None
@@ -877,8 +876,32 @@ def _measure_server_per_scale_memory(server_model, X_fed, device, batch_size):
         return None
     x = torch.from_numpy(np.asarray(sample_data, dtype=np.float32)).float().to(device)
     torch.cuda.synchronize(device)
-    with torch.no_grad():
+
+    # Reset per-block peak-memory flags: _precompute_client_scale_scores may
+    # have forwarded the model under torch.no_grad() (if period_score fallback
+    # was triggered), recording unrealistically low deltas.  We reset so our
+    # explicit autograd-enabled forward re-measures correctly.
+    def _reset_block_mem(blocks):
+        for blk in blocks:
+            blk._peak_mem_measured = False
+            blk._peak_mem_delta_bytes = 0
+    if hasattr(server_model, "shapelets_blocks"):
+        _reset_block_mem(server_model.shapelets_blocks.blocks)
+    if hasattr(server_model, "shapelets_euclidean"):
+        _reset_block_mem(server_model.shapelets_euclidean.blocks)
+        _reset_block_mem(server_model.shapelets_cosine.blocks)
+        _reset_block_mem(server_model.shapelets_cross_correlation.blocks)
+
+    # Temporarily enable requires_grad so forward allocates autograd saved tensors
+    saved_grad_flags = {}
+    for pname, p in server_model.named_parameters():
+        saved_grad_flags[pname] = p.requires_grad
+        p.requires_grad_(True)
+    try:
         _ = server_model(x, optimize=None, masking=False)
+    finally:
+        for pname, p in server_model.named_parameters():
+            p.requires_grad_(saved_grad_flags.get(pname, False))
     torch.cuda.synchronize(device)
     _gc.collect()
     try:

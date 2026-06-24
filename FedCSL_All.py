@@ -2340,9 +2340,25 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 best = max(all_mem_results, key=lambda r: _num_measured(r["memory_summary"]))
                 best_mem = best["memory_summary"]
                 best_idx = best["idx"]
+                best_scales = best.get("scale_indices", [])
                 n_measured = _num_measured(best_mem)
                 per_branch = best_mem.get("per_branch")
                 has_branches = bool(per_branch)
+
+                # Accumulated module memory for this client (sum of measured total_mem)
+                acc_module_mb = sum(
+                    best_mem.get("total_mem_mb", {}).get(L, 0.0)
+                    for L, measured in best_mem.get("per_scale_measured", {}).items()
+                    if measured
+                )
+                # Client budget
+                client_budget_mb = None
+                if cached_knapsack_info:
+                    per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client")
+                    if per_client_budgets and best_idx < len(per_client_budgets):
+                        client_budget_mb = per_client_budgets[best_idx]
+                    elif cached_knapsack_info.get("_budget_mb") is not None:
+                        client_budget_mb = cached_knapsack_info["_budget_mb"]
 
                 sep = "=" * 94 if has_branches else "=" * 72
                 dash = "-" * 94 if has_branches else "-" * 72
@@ -2352,6 +2368,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     "[spilter-memory-budget] Round-0 per-scale GPU memory "
                     "(client {} — {} of {} scales trained)".format(
                         best_idx, n_measured, len(best_mem.get("total_mem_mb", {}))
+                    ),
+                    "  selected scales: {} | accumulated module mem: {:.1f} MB{}".format(
+                        sorted(best_scales) if best_scales else "?",
+                        acc_module_mb,
+                        " / budget: {:.1f} MB (used {:.0f}%)".format(
+                            client_budget_mb,
+                            acc_module_mb / client_budget_mb * 100,
+                        ) if client_budget_mb is not None and client_budget_mb > 0
+                        else "",
                     ),
                 ]
                 if has_branches:

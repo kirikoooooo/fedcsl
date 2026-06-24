@@ -2302,7 +2302,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             if cached_knapsack_info:
                 ki = cached_knapsack_info
                 g_r = ki.get('_scale_memory_costs_mb')
-                g_r_str = f"[{', '.join(f'{v:.1f}' for v in g_r)}]" if g_r else "?"
+                g_r_str = f"[{', '.join(f'{v:.1f}' for v in g_r)}]" if g_r is not None and len(g_r) > 0 else "?"
                 prep_msg += (
                     f"; top_m={ki.get('_top_m', '?')}"
                     f" costs={ki.get('_costs_source', '?')}"

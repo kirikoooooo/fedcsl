@@ -856,13 +856,15 @@ def _calibrate_per_scale_memory_mb(X_fed, model, device, batch_size,
 
 
 def _measure_server_per_scale_memory(server_model, X_fed, device, batch_size):
-    """Force a forward pass on the server model to measure per-block peak memory.
+    """Measure per-scale GPU memory by forwarding EACH scale individually.
 
-    Runs WITH autograd (temporarily enables requires_grad on the server model)
-    so the measurement includes the memory for saved activations — matching
-    the peak memory that clients will see during actual training.
+    A full forward (all 8 scales × 3 branches = 24 blocks) allows PyTorch's
+    caching allocator to reuse memory across sequential blocks, producing
+    unrealistically low per-block peak deltas.  Clients only train a subset
+    of scales, so we measure each scale in isolation to get costs that match
+    real training memory.
 
-    Returns the per-scale memory summary dict.
+    Returns a dict {scale_length: total_mem_mb} suitable for knapsack g_r.
     """
     if device is None or device.type != "cuda":
         return None
@@ -874,40 +876,89 @@ def _measure_server_per_scale_memory(server_model, X_fed, device, batch_size):
             break
     if sample_data is None:
         return None
-    x = torch.from_numpy(np.asarray(sample_data, dtype=np.float32)).float().to(device)
-    torch.cuda.synchronize(device)
 
-    # Reset per-block peak-memory flags: _precompute_client_scale_scores may
-    # have forwarded the model under torch.no_grad() (if period_score fallback
-    # was triggered), recording unrealistically low deltas.  We reset so our
-    # explicit autograd-enabled forward re-measures correctly.
-    def _reset_block_mem(blocks):
-        for blk in blocks:
-            blk._peak_mem_measured = False
-            blk._peak_mem_delta_bytes = 0
-    if hasattr(server_model, "shapelets_blocks"):
-        _reset_block_mem(server_model.shapelets_blocks.blocks)
-    if hasattr(server_model, "shapelets_euclidean"):
-        _reset_block_mem(server_model.shapelets_euclidean.blocks)
-        _reset_block_mem(server_model.shapelets_cosine.blocks)
-        _reset_block_mem(server_model.shapelets_cross_correlation.blocks)
+    def _all_blocks(model):
+        """Yield all block modules reachable from the model."""
+        if hasattr(model, "shapelets_blocks"):
+            yield from model.shapelets_blocks.blocks
+        if hasattr(model, "shapelets_euclidean"):
+            yield from model.shapelets_euclidean.blocks
+            yield from model.shapelets_cosine.blocks
+            yield from model.shapelets_cross_correlation.blocks
 
-    # Temporarily enable requires_grad so forward allocates autograd saved tensors
+    # Enable autograd so forward includes saved-activation memory
     saved_grad_flags = {}
     for pname, p in server_model.named_parameters():
         saved_grad_flags[pname] = p.requires_grad
         p.requires_grad_(True)
+
+    num_scales = len(server_model.shapelets_size_and_len)
+    per_scale_total_mb = {}
+    x = torch.from_numpy(np.asarray(sample_data, dtype=np.float32)).float().to(device)
+
     try:
-        _ = server_model(x, optimize=None, masking=False)
+        for scale_idx in range(num_scales):
+            # Reset ALL blocks before measuring just this scale
+            for blk in _all_blocks(server_model):
+                blk._peak_mem_measured = False
+                blk._peak_mem_delta_bytes = 0
+
+            torch.cuda.synchronize(device)
+            torch.cuda.empty_cache()
+            # Forward only this scale (like a client that only trains this scale)
+            try:
+                enc = getattr(server_model, "encode_scale", None)
+                if enc is not None:
+                    _ = enc(x, scale_idx, masking=False, normalize=False)
+                else:
+                    _ = server_model.shapelets_blocks.forward_scale(x, scale_idx, masking=False)
+            except Exception:
+                # Fallback: forward_subset
+                try:
+                    _ = server_model.shapelets_blocks.forward_subset(x, [scale_idx], masking=False)
+                except Exception:
+                    continue
+            torch.cuda.synchronize(device)
+
+            # Collect measured total for this scale
+            lengths = list(server_model.shapelets_size_and_len.keys())
+            L = lengths[scale_idx]
+            scale_total = 0.0
+            # Sum peak+param from blocks belonging to this scale
+            for blk_type, branch_blocks in [
+                ("euclidean", getattr(server_model, "shapelets_euclidean", None)),
+                ("cosine", getattr(server_model, "shapelets_cosine", None)),
+                ("cross_corr", getattr(server_model, "shapelets_cross_correlation", None)),
+            ]:
+                if branch_blocks is not None and scale_idx < len(branch_blocks.blocks):
+                    blk = branch_blocks.blocks[scale_idx]
+                    scale_total += blk.peak_mem_mb + float(blk.param_mem_bytes) / (1024.0 * 1024.0)
+            if scale_total <= 0 and hasattr(server_model, "shapelets_blocks"):
+                sbd = server_model.shapelets_blocks
+                if sbd.dist_measure == "mix":
+                    for offset in range(3):
+                        blk = sbd.blocks[scale_idx * 3 + offset]
+                        scale_total += blk.peak_mem_mb + float(blk.param_mem_bytes) / (1024.0 * 1024.0)
+                else:
+                    blk = sbd.blocks[scale_idx]
+                    scale_total += blk.peak_mem_mb + float(blk.param_mem_bytes) / (1024.0 * 1024.0)
+            per_scale_total_mb[L] = max(scale_total, 0.1)  # floor to avoid zero
     finally:
         for pname, p in server_model.named_parameters():
             p.requires_grad_(saved_grad_flags.get(pname, False))
-    torch.cuda.synchronize(device)
+
     _gc.collect()
-    try:
-        return server_model.get_per_scale_memory_summary()
-    except Exception:
+    torch.cuda.empty_cache()
+
+    if not per_scale_total_mb:
         return None
+    lengths_sorted = sorted(per_scale_total_mb.keys())
+    print(
+        f"[spilter] per-scale memory (isolated, with autograd): "
+        f"g_r={[f'{per_scale_total_mb[L]:.1f}' for L in lengths_sorted]} MB",
+        flush=True,
+    )
+    return {"total_mem_mb": per_scale_total_mb}
 
 
 def _plan_topm_then_local_knapsack_client_scales(
@@ -958,17 +1009,10 @@ def _plan_topm_then_local_knapsack_client_scales(
             if s_totals:
                 lengths_sorted = sorted(s_totals.keys())
                 scale_memory_costs_mb = [float(s_totals[L]) for L in lengths_sorted]
-                costs_source = "server_forward"
-                print(
-                    f"[spilter] topm+knapsack: per-scale memory from server forward: "
-                    f"g_r={[f'{v:.1f}' for v in scale_memory_costs_mb]} MB",
-                    flush=True,
-                )
+    costs_source = "server_forward" if scale_memory_costs_mb is not None else "unknown"
     if scale_memory_costs_mb is None:
         scale_memory_costs_mb = _scale_system_costs(server_model)
         costs_source = "system_proxy"
-    else:
-        costs_source = "server_forward"
 
     g_r = np.asarray(scale_memory_costs_mb, dtype=np.float64)
     g_r = np.maximum(g_r, 1e-6)

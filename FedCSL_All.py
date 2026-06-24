@@ -1006,39 +1006,25 @@ def _plan_topm_then_local_knapsack_client_scales(
         client_scores, top_m=top_m
     )
 
-    # ---- Resolve scale memory costs ----
-    # Prefer _calibrate_per_scale_memory_mb: trains each scale for 1 epoch
-    # → captures forward+backward+optimizer memory (cached to disk, fast
-    # after first run).  Falls back to system-cost proxy if calibration fails.
+    # ---- Resolve scale memory costs (simple forward-pass, no g_0 / no calibration) ----
     costs_source = "config" if scale_memory_costs_mb is not None else "unknown"
     if scale_memory_costs_mb is None and server_model is not None and device is not None:
-        g_r, g_0_calib = _calibrate_per_scale_memory_mb(
-            X_fed, server_model, device, batch_size,
-            in_channels, num_classes, dist_measure,
-            lr, wd, seed, dataset_tag,
+        server_mem = _measure_server_per_scale_memory(
+            server_model, X_fed, device, batch_size
         )
-        if g_r is not None:
-            scale_memory_costs_mb = g_r
-            base_memory_mb = g_0_calib if base_memory_mb <= 0 else base_memory_mb
-            costs_source = "train_calibrated"
-        else:
-            # Fallback: forward-pass measurement (underestimates, no backward/optimizer)
-            server_mem = _measure_server_per_scale_memory(
-                server_model, X_fed, device, batch_size
-            )
-            if server_mem is not None:
-                s_totals = server_mem.get("total_mem_mb", {})
-                if s_totals:
-                    lengths_sorted = sorted(s_totals.keys())
-                    scale_memory_costs_mb = [float(s_totals[L]) for L in lengths_sorted]
-                    costs_source = "server_forward"
+        if server_mem is not None:
+            s_totals = server_mem.get("total_mem_mb", {})
+            if s_totals:
+                lengths_sorted = sorted(s_totals.keys())
+                scale_memory_costs_mb = [float(s_totals[L]) for L in lengths_sorted]
+                costs_source = "server_forward"
     if scale_memory_costs_mb is None:
         scale_memory_costs_mb = _scale_system_costs(server_model)
         costs_source = "system_proxy"
 
     g_r = np.asarray(scale_memory_costs_mb, dtype=np.float64)
     g_r = np.maximum(g_r, 1e-6)
-    g_0 = float(base_memory_mb)
+    g_0 = 0.0  # no separate base overhead; per-scale costs are self-contained
 
     # ---- Per-client budgets ----
     if memory_budgets_mb is not None:

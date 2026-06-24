@@ -1085,6 +1085,7 @@ def _plan_topm_then_local_knapsack_client_scales(
             sum(len(s) for s in client_selected) / len(client_selected) if client_selected else 0.0
         ),
         "_top_m": top_m,
+        "_topm_candidates": topm_selected,  # per-client top-M lists (before knapsack)
     }
     return client_selected, scale_counts, info
 
@@ -2338,19 +2339,25 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 )
             print(f"[round {round}] planned scale coverage: {round_scale_hist.tolist()}{mem_info}", flush=True)
             if client_scale_plans is not None:
-                # Compute per-client memory usage if costs available
-                g_r = cached_knapsack_info.get("_scale_memory_costs_mb") if cached_knapsack_info else None
+                # Compute per-client memory usage
+                g_r_list = cached_knapsack_info.get("_scale_memory_costs_mb") if cached_knapsack_info else None
                 g_0 = cached_knapsack_info.get("_base_memory_mb", 0) if cached_knapsack_info else 0
                 per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client") if cached_knapsack_info else None
+                topm_candidates = cached_knapsack_info.get("_topm_candidates") if cached_knapsack_info else None
                 plan_lines = []
                 for cid, scales in enumerate(client_scale_plans):
-                    if g_r is not None:
+                    topm = topm_candidates[cid] if topm_candidates and cid < len(topm_candidates) else []
+                    if g_r_list is not None:
+                        g_r = np.asarray(g_r_list, dtype=np.float64)
                         used = g_0 + sum(g_r[s] for s in scales)
                         c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
                         budget_str = f" {used:.0f}/{c_budget:.0f}MB" if c_budget is not None else f" {used:.0f}MB"
                     else:
                         budget_str = ""
-                    plan_lines.append(f"c{cid}:{sorted(scales)}{budget_str}")
+                    # Show: top-M candidates → knapsack selection
+                    topm_str = f"top{len(topm)}={sorted(topm)}" if topm else ""
+                    sel_str = f"→{sorted(scales)}" if sorted(scales) != sorted(topm) else ""
+                    plan_lines.append(f"c{cid}:{topm_str}{sel_str}{budget_str}")
                 print(f"[round {round}] per-client scales: {' | '.join(plan_lines)}", flush=True)
 
         # ----- 本地训练阶段：多个 client worker 并行训练，client 按 round-robin 均分到 worker -----

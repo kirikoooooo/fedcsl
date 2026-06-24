@@ -855,6 +855,160 @@ def _calibrate_per_scale_memory_mb(X_fed, model, device, batch_size,
     return g_r_marginal, g_0
 
 
+def _measure_server_per_scale_memory(server_model, X_fed, device, batch_size):
+    """Force a full forward pass on the server model to trigger per-block memory measurement.
+
+    ``_precompute_client_scale_scores`` calls ``model(x)`` only as a fallback inside
+    ``_client_scale_scores_batch`` (when ``period_score`` returns empty).  If period_score
+    succeeds, the model is never forwarded and all blocks stay unmeasured (g_r = 0).
+
+    This function does one no-grad forward with a small batch to guarantee all blocks
+    record their peak memory deltas.  Returns the per-scale memory summary dict.
+    """
+    if device is None or device.type != "cuda":
+        return None
+    import gc as _gc
+    sample_data = None
+    for client_x in X_fed:
+        if len(client_x) >= batch_size:
+            sample_data = client_x[:batch_size]
+            break
+    if sample_data is None:
+        return None
+    x = torch.from_numpy(np.asarray(sample_data, dtype=np.float32)).float().to(device)
+    torch.cuda.synchronize(device)
+    with torch.no_grad():
+        _ = server_model(x, optimize=None, masking=False)
+    torch.cuda.synchronize(device)
+    _gc.collect()
+    try:
+        return server_model.get_per_scale_memory_summary()
+    except Exception:
+        return None
+
+
+def _plan_topm_then_local_knapsack_client_scales(
+    client_scores,
+    server_model,
+    *,
+    top_m=4,
+    memory_budgets_mb=None,
+    scale_memory_costs_mb=None,
+    base_memory_mb=0.0,
+    X_fed=None,
+    device=None,
+    batch_size=32,
+    seed=None,
+):
+    """Two-stage spilter-memory-budget allocation.
+
+    Stage 1 (server): top-M per client by local period score (same as local_score_topm).
+    Stage 2 (local): each client runs a 0-1 knapsack on its top-M candidates,
+    constrained by its per-client memory budget.
+
+    Returns (client_selected, scale_counts, info_dict).
+    """
+    from algo.scale_allocation.lagrangian import knapsack_dp_select
+
+    num_clients = len(client_scores)
+    num_scales = len(client_scores[0]) if num_clients > 0 else 0
+    if num_scales <= 0:
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64), {}
+
+    # ---- Stage 1: top-M per client (server side) ----
+    topm_selected, _ = _plan_local_score_topm_client_scales(
+        client_scores, top_m=top_m
+    )
+
+    # ---- Resolve scale memory costs (force server forward if needed) ----
+    if scale_memory_costs_mb is None and server_model is not None and device is not None:
+        server_mem = _measure_server_per_scale_memory(
+            server_model, X_fed, device, batch_size
+        )
+        if server_mem is not None:
+            s_totals = server_mem.get("total_mem_mb", {})
+            if s_totals:
+                lengths_sorted = sorted(s_totals.keys())
+                scale_memory_costs_mb = [float(s_totals[L]) for L in lengths_sorted]
+                costs_source = "server_forward"
+                print(
+                    f"[spilter] topm+knapsack: per-scale memory from server forward: "
+                    f"g_r={[f'{v:.1f}' for v in scale_memory_costs_mb]} MB",
+                    flush=True,
+                )
+    if scale_memory_costs_mb is None:
+        scale_memory_costs_mb = _scale_system_costs(server_model)
+        costs_source = "system_proxy"
+    else:
+        costs_source = "server_forward"
+
+    g_r = np.asarray(scale_memory_costs_mb, dtype=np.float64)
+    g_r = np.maximum(g_r, 1e-6)
+    g_0 = float(base_memory_mb)
+
+    # ---- Per-client budgets ----
+    if memory_budgets_mb is not None:
+        if isinstance(memory_budgets_mb, (int, float)):
+            B_k = np.full(num_clients, float(memory_budgets_mb), dtype=np.float64)
+        else:
+            B_k = np.asarray(memory_budgets_mb, dtype=np.float64)
+            if len(B_k) == 1:
+                B_k = np.full(num_clients, B_k[0], dtype=np.float64)
+    else:
+        B_k = np.full(num_clients, g_0 + float(np.sum(g_r)) + 1000.0, dtype=np.float64)
+
+    # ---- Stage 2: per-client local knapsack on top-M candidates ----
+    client_selected = []
+    for cid in range(num_clients):
+        candidates = topm_selected[cid]
+        if not candidates:
+            candidates = [int(np.argmax(client_scores[cid]))]
+        candidate_values = [max(float(client_scores[cid][s]), 0.0) for s in candidates]
+        candidate_costs = [float(g_r[s]) for s in candidates]
+        budget = float(B_k[cid])
+
+        selected_indices = knapsack_dp_select(
+            values=candidate_values,
+            weights=candidate_costs,
+            budget=budget,
+            base_cost=g_0,
+        )
+        client_selected.append([candidates[i] for i in selected_indices])
+
+    # ---- Coverage stats ----
+    scale_counts = np.zeros(num_scales, dtype=np.int64)
+    for sel in client_selected:
+        for s in sel:
+            if 0 <= s < num_scales:
+                scale_counts[s] += 1
+
+    info = {
+        "iterations": 1,
+        "best_iter": 0,
+        "converged": True,
+        "coverage_final": scale_counts.tolist(),
+        "coverage_target": "n/a (local knapsack on top-M)",
+        "total_shortfall": 0.0,
+        "lambda_final": [],
+        "_costs_source": costs_source,
+        "_budgets_source": os.environ.get("SPILTER_MEMORY_BUDGETS", "") and "env_per_client" or "config",
+        "_budget_mb": float(np.mean(B_k)) if len(B_k) > 0 else None,
+        "_budget_mb_min": float(np.min(B_k)) if len(B_k) > 0 else None,
+        "_budget_mb_max": float(np.max(B_k)) if len(B_k) > 0 else None,
+        "_budget_mb_per_client": B_k.tolist() if len(B_k) > 0 else None,
+        "_base_memory_mb": g_0,
+        "_scale_memory_costs_mb": scale_memory_costs_mb,
+        "_per_client_scale_counts": [len(s) for s in client_selected],
+        "_min_scales_per_client": min(len(s) for s in client_selected) if client_selected else 0,
+        "_max_scales_per_client": max(len(s) for s in client_selected) if client_selected else 0,
+        "_avg_scales_per_client": (
+            sum(len(s) for s in client_selected) / len(client_selected) if client_selected else 0.0
+        ),
+        "_top_m": top_m,
+    }
+    return client_selected, scale_counts, info
+
+
 def _plan_knapsack_lagrangian_client_scales(
     client_scores,
     model=None,
@@ -1991,42 +2145,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 )
             elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "knapsack_lagrangian":
                 knap_params = _spilter_knapsack_lagrangian_params(config, override_memory_budget=args.spilter_memory_budget)
-                # ---- collect per-scale GPU memory from server model's full forward ----
-                # _precompute_client_scale_scores already ran server.model.forward(optimize=None)
-                # through ALL blocks → all blocks have been measured on server device.
-                # Use these per-scale peak+param totals as knapsack costs (replaces
-                # the expensive per-scale calibration).
-                if knap_params.get("scale_memory_costs_mb") is None:
-                    try:
-                        server_mem = server.model.get_per_scale_memory_summary()
-                        s_totals = server_mem.get("total_mem_mb", {})
-                        if s_totals:
-                            lengths_sorted = sorted(s_totals.keys())
-                            g_r_list = [float(s_totals[L]) for L in lengths_sorted]
-                            knap_params["scale_memory_costs_mb"] = g_r_list
-                            knap_params["base_memory_mb"] = 0.0  # already included in per-block peak
-                            print(
-                                f"[spilter] knapsack_lagrangian: using per-scale memory "
-                                f"from server forward pass: "
-                                f"g_r={[f'{v:.1f}' for v in g_r_list]} MB",
-                                flush=True,
-                            )
-                    except Exception:
-                        pass
+                local_top_m = _spilter_local_top_m(config, default=4)
                 cached_client_scale_plans, cached_scale_hist, cached_knapsack_info = (
-                    _plan_knapsack_lagrangian_client_scales(
+                    _plan_topm_then_local_knapsack_client_scales(
                         cached_client_scale_scores,
-                        model=server.model,
-                        seed=original_seed or 42,
+                        server_model=server.model,
+                        top_m=local_top_m,
                         X_fed=X_fed,
                         device=server_device,
                         batch_size=batch_size,
-                        in_channels=n_channels,
-                        num_classes=num_classes,
-                        dist_measure=dist_measure,
-                        lr=lr,
-                        wd=wd,
-                        dataset_tag=dataset,
+                        seed=original_seed or 42,
                         **knap_params,
                     )
                 )
@@ -2076,19 +2204,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 g_r = ki.get('_scale_memory_costs_mb')
                 g_r_str = f"[{', '.join(f'{v:.1f}' for v in g_r)}]" if g_r else "?"
                 prep_msg += (
-                    f"; knapsack_iters={ki.get('iterations', '?')}"
-                    f" best_iter={ki.get('best_iter', '?')}"
-                    f" converged={ki.get('converged', '?')}"
-                    f" shortfall={ki.get('total_shortfall', '?')}"
+                    f"; top_m={ki.get('_top_m', '?')}"
                     f" costs={ki.get('_costs_source', '?')}"
-                    f" g_r={g_r_str}{'MB' if ki.get('_costs_source') == 'config' else ''}"
+                    f" g_r={g_r_str}{'MB' if ki.get('_costs_source') in ('config', 'server_forward') else ''}"
                     f" g_0={ki.get('_base_memory_mb', 0):.1f}MB"
                     f" budget={_fmt_knap_budget(ki)}"
                     f" budgets_src={ki.get('_budgets_source', '?')}"
                     f" scales_per_client=[{ki.get('_min_scales_per_client', '?')}"
                     f",{ki.get('_avg_scales_per_client', 0):.1f}"
                     f",{ki.get('_max_scales_per_client', '?')}]"
-                    f" lambda_final=[{', '.join(f'{v:.4f}' for v in ki.get('lambda_final', []))}]"
                 )
         print(prep_msg, flush=True)
         with open(logTxt, mode="a+", encoding="utf-8") as f:

@@ -1458,6 +1458,41 @@ def _train_client_worker(
                 memory_summary = c.model.get_per_scale_memory_summary()
             except Exception:
                 memory_summary = None
+
+            # 补齐未训练尺度的显存数据：对所有尺度跑一次 no_grad forward，
+            # 让每个模块都有 peak_mem_measured=True，确保统计表完整。
+            if device is not None and device.type == "cuda" and len(X_fed[idx]) >= batch_size:
+                try:
+                    num_scales = len(c.model.shapelets_size_and_len)
+                    all_scales = set(range(num_scales))
+                    trained_scales = set(
+                        i for i, L in enumerate(c.model.shapelets_size_and_len.keys())
+                        if memory_summary
+                        and memory_summary.get("per_scale_measured", {}).get(L, False)
+                    )
+                    missing_scales = sorted(all_scales - trained_scales)
+                    if missing_scales:
+                        sample_x = torch.from_numpy(
+                            np.asarray(X_fed[idx][:batch_size], dtype=np.float32)
+                        ).float().to(device)
+                        with torch.no_grad():
+                            if hasattr(c.model, 'shapelets_euclidean'):
+                                # Mix-distance 模型：每个 scale 要过 3 个分支
+                                for s in missing_scales:
+                                    c.model.shapelets_euclidean.forward_scale(sample_x, s, masking=False)
+                                    c.model.shapelets_cosine.forward_scale(sample_x, s, masking=False)
+                                    c.model.shapelets_cross_correlation.forward_scale(sample_x, s, masking=False)
+                            elif hasattr(c.model, 'shapelets_blocks'):
+                                for s in missing_scales:
+                                    c.model.shapelets_blocks.forward_scale(sample_x, s, masking=False)
+                        # 重新收集（现在所有 scale 都有数据了）
+                        try:
+                            memory_summary = c.model.get_per_scale_memory_summary()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
             # 实测：整个 client 训练的 GPU 峰值显存（非模块累加）
             if device is not None and device.type == "cuda":
                 try:

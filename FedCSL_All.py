@@ -2282,13 +2282,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             prep_msg += f"; planned scale coverage: {cached_scale_hist.tolist()}"
             if cached_knapsack_info:
                 ki = cached_knapsack_info
-                g_r = ki.get('_scale_memory_costs_mb')
-                g_r_str = f"[{', '.join(f'{v:.1f}' for v in g_r)}]" if g_r is not None and len(g_r) > 0 else "?"
                 prep_msg += (
                     f"; top_m={ki.get('_top_m', '?')}"
-                    f" costs={ki.get('_costs_source', '?')}"
-                    f" g_r={g_r_str}{'MB' if ki.get('_costs_source') in ('config', 'server_forward') else ''}"
-                    f" g_0={ki.get('_base_memory_mb', 0):.1f}MB"
                     f" budget={_fmt_knap_budget(ki)}"
                     f" budgets_src={ki.get('_budgets_source', '?')}"
                     f" scales_per_client=[{ki.get('_min_scales_per_client', '?')}"
@@ -2325,33 +2320,22 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 else:
                     budget_str = "unconstrained"
                 mem_info = (
-                    f" | knapsack: budget={budget_str}"
-                    f" g_0={ki.get('_base_memory_mb',0):.0f}MB"
+                    f" | budget={budget_str}"
                     f" scales/client=[{ki.get('_min_scales_per_client','?')}"
                     f"..{ki.get('_max_scales_per_client','?')}]"
-                    f" costs={ki.get('_costs_source','?')}"
                 )
             print(f"[round {round}] planned scale coverage: {round_scale_hist.tolist()}{mem_info}", flush=True)
             if client_scale_plans is not None:
-                g_r_list = cached_knapsack_info.get("_scale_memory_costs_mb") if cached_knapsack_info else None
-                costs_src = cached_knapsack_info.get("_costs_source", "") if cached_knapsack_info else ""
-                per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client") if cached_knapsack_info else None
                 topm_candidates = cached_knapsack_info.get("_topm_candidates") if cached_knapsack_info else None
-                # Only show memory when we have real measurements (not system proxy)
-                show_mem = g_r_list is not None and costs_src not in ("system_proxy", "unknown", "config")
+                per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client") if cached_knapsack_info else None
                 plan_lines = []
                 for cid, scales in enumerate(client_scale_plans):
                     topm = topm_candidates[cid] if topm_candidates and cid < len(topm_candidates) else []
-                    if show_mem:
-                        g_r = np.asarray(g_r_list, dtype=np.float64)
-                        used = sum(g_r[s] for s in scales)
-                        c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
-                        budget_str = f" {used:.0f}/{c_budget:.0f}MB" if c_budget is not None else f" {used:.0f}MB"
-                    else:
-                        budget_str = ""
+                    c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
+                    budget_tag = f" [{c_budget:.0f}MB]" if c_budget is not None else ""
                     topm_str = f"top{len(topm)}={sorted(topm)}" if topm else ""
-                    sel_str = f"→{sorted(scales)}" if sorted(scales) != sorted(topm) else ""
-                    plan_lines.append(f"c{cid}:{topm_str}{sel_str}{budget_str}")
+                    sel_str = f" → {sorted(scales)}" if sorted(scales) != sorted(topm) else ""
+                    plan_lines.append(f"c{cid}:{topm_str}{sel_str}{budget_tag}")
                 print(f"[round {round}] per-client scales: {' | '.join(plan_lines)}", flush=True)
 
         # ----- 本地训练阶段：多个 client worker 并行训练，client 按 round-robin 均分到 worker -----
@@ -2569,37 +2553,6 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 ]
                 cached_knapsack_info["_round0_total_mb"] = total_all
 
-                # ---- Replace server-estimated g_r with actual client-measured per-scale memory ----
-                agg_total = {}
-                agg_count = {}
-                for r in all_mem_results:
-                    mem = r["memory_summary"]
-                    for L, measured in mem.get("per_scale_measured", {}).items():
-                        if measured:
-                            agg_total[L] = agg_total.get(L, 0.0) + mem.get("total_mem_mb", {}).get(L, 0.0)
-                            agg_count[L] = agg_count.get(L, 0) + 1
-                if agg_total:
-                    lengths_sorted = sorted(agg_total.keys())
-                    measured_g_r = [agg_total[L] / max(agg_count[L], 1) for L in lengths_sorted]
-                    cached_knapsack_info["_scale_memory_costs_mb"] = measured_g_r
-                    cached_knapsack_info["_costs_source"] = "round0_measured"
-                    print(
-                        f"[spilter-memory-budget] updated g_r from round-0 client measurements: "
-                        f"g_r={[f'{v:.1f}' for v in measured_g_r]} MB",
-                        flush=True,
-                    )
-                    # Re-print per-client scales with corrected memory values
-                    corrected_lines = []
-                    per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client")
-                    for cid, scales in enumerate(client_scale_plans):
-                        c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
-                        used = sum(measured_g_r[s] for s in scales if s < len(measured_g_r))
-                        budget_str = f" {used:.0f}/{c_budget:.0f}MB" if c_budget is not None else f" {used:.0f}MB"
-                        corrected_lines.append(f"c{cid}:{sorted(scales)}{budget_str}")
-                    print(
-                        f"[round {round}] per-client scales (corrected): {' | '.join(corrected_lines)}",
-                        flush=True,
-                    )
 
         # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----
         dist_stage_t0 = time.perf_counter()

@@ -2328,14 +2328,17 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             if client_scale_plans is not None:
                 topm_candidates = cached_knapsack_info.get("_topm_candidates") if cached_knapsack_info else None
                 per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client") if cached_knapsack_info else None
+                per_client_acc = cached_knapsack_info.get("_per_client_acc_mem_mb") if cached_knapsack_info else None
                 plan_lines = []
                 for cid, scales in enumerate(client_scale_plans):
                     topm = topm_candidates[cid] if topm_candidates and cid < len(topm_candidates) else []
                     c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
+                    c_acc = per_client_acc.get(cid) if per_client_acc else None
                     budget_tag = f" [{c_budget:.0f}MB]" if c_budget is not None else ""
+                    acc_tag = f" acc={c_acc:.0f}MB" if c_acc is not None else ""
                     topm_str = f"top{len(topm)}={sorted(topm)}" if topm else ""
                     sel_str = f" → {sorted(scales)}" if sorted(scales) != sorted(topm) else ""
-                    plan_lines.append(f"c{cid}:{topm_str}{sel_str}{budget_tag}")
+                    plan_lines.append(f"c{cid}:{topm_str}{sel_str}{budget_tag}{acc_tag}")
                 print(f"[round {round}] per-client scales: {' | '.join(plan_lines)}", flush=True)
 
         # ----- 本地训练阶段：多个 client worker 并行训练，client 按 round-robin 均分到 worker -----
@@ -2516,6 +2519,20 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 print(cov_line, flush=True)
                 with open(logTxt, mode="a+", encoding="utf-8") as f:
                     f.write(cov_line + "\n")
+
+                # Store per-client accumulated memory for subsequent round display
+                _per_client_acc = {}
+                for r in all_mem_results:
+                    mem = r["memory_summary"]
+                    acc = sum(
+                        mem.get("total_mem_mb", {}).get(L, 0.0)
+                        for L, measured in mem.get("per_scale_measured", {}).items()
+                        if measured
+                    )
+                    _per_client_acc[r["idx"]] = acc
+                if cached_knapsack_info is None:
+                    cached_knapsack_info = {}
+                cached_knapsack_info["_per_client_acc_mem_mb"] = _per_client_acc
 
         # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----
         dist_stage_t0 = time.perf_counter()

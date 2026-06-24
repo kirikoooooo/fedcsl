@@ -2175,6 +2175,9 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             scale_peak_mem_mb = {}
             scale_param_mem_mb = {}
             scale_total_mem_mb = {}
+            # Per-branch tracking for mix distance (euclidean / cosine / cross-correlation)
+            branch_peak: Dict[str, Dict[int, float]] = {}
+            branch_param: Dict[str, Dict[int, float]] = {}
             n_mem_clients = 0
             for result_list in [future.result() for future in futures]:
                 for result in result_list:
@@ -2188,31 +2191,88 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         scale_param_mem_mb[L] = scale_param_mem_mb.get(L, 0.0) + v
                     for L, v in mem.get("total_mem_mb", {}).items():
                         scale_total_mem_mb[L] = scale_total_mem_mb.get(L, 0.0) + v
+                    # Per-branch breakdown
+                    per_branch = mem.get("per_branch")
+                    if per_branch:
+                        for branch_name, data in per_branch.items():
+                            if branch_name not in branch_peak:
+                                branch_peak[branch_name] = {}
+                                branch_param[branch_name] = {}
+                            for L, v in data.get("peak", {}).items():
+                                branch_peak[branch_name][L] = branch_peak[branch_name].get(L, 0.0) + v
+                            for L, v in data.get("param", {}).items():
+                                branch_param[branch_name][L] = branch_param[branch_name].get(L, 0.0) + v
 
             if n_mem_clients > 0:
+                has_branches = bool(branch_peak)
                 # Average across clients
+                sep = "=" * 94 if has_branches else "=" * 72
+                dash = "-" * 94 if has_branches else "-" * 72
                 mem_report_lines = [
                     "",
-                    "=" * 72,
+                    sep,
                     "[spilter-memory-budget] Round-0 per-scale GPU memory (avg across {} clients)".format(n_mem_clients),
-                    "-" * 72,
-                    f"{'Scale Length':>14s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}",
                 ]
-                for L in sorted(scale_total_mem_mb.keys()):
-                    peak_avg = scale_peak_mem_mb.get(L, 0.0) / n_mem_clients
-                    param_avg = scale_param_mem_mb.get(L, 0.0) / n_mem_clients
-                    total_avg = scale_total_mem_mb.get(L, 0.0) / n_mem_clients
+                if has_branches:
+                    mem_report_lines.append("  → mix-distance: 三个子模块分别显示")
+                mem_report_lines.append(dash)
+
+                if has_branches:
+                    # Per-branch header
                     mem_report_lines.append(
-                        f"{L:>14d}  {peak_avg:>10.2f}  {param_avg:>10.2f}  {total_avg:>10.2f}"
+                        f"{'Scale':>6s}  {'Eu(MB)':>8s}  {'Co(MB)':>8s}  {'CC(MB)':>8s}  "
+                        f"{'SumPeak':>9s}  {'Param':>8s}  {'Total':>8s}"
                     )
-                total_peak = sum(v / n_mem_clients for v in scale_peak_mem_mb.values())
-                total_param = sum(v / n_mem_clients for v in scale_param_mem_mb.values())
-                total_all = sum(v / n_mem_clients for v in scale_total_mem_mb.values())
-                mem_report_lines.append("-" * 72)
-                mem_report_lines.append(
-                    f"{'SUM':>14s}  {total_peak:>10.2f}  {total_param:>10.2f}  {total_all:>10.2f}"
-                )
-                mem_report_lines.append("=" * 72)
+                    for L in sorted(scale_total_mem_mb.keys()):
+                        eu_avg = branch_peak.get("euclidean", {}).get(L, 0.0) / n_mem_clients
+                        co_avg = branch_peak.get("cosine", {}).get(L, 0.0) / n_mem_clients
+                        cc_avg = branch_peak.get("cross_corr", {}).get(L, 0.0) / n_mem_clients
+                        peak_sum = eu_avg + co_avg + cc_avg
+                        param_avg = scale_param_mem_mb.get(L, 0.0) / n_mem_clients
+                        total_avg = peak_sum + param_avg
+                        mem_report_lines.append(
+                            f"{L:>6d}  {eu_avg:>8.2f}  {co_avg:>8.2f}  {cc_avg:>8.2f}  "
+                            f"{peak_sum:>9.2f}  {param_avg:>8.2f}  {total_avg:>8.2f}"
+                        )
+                    # Sum row
+                    sum_eu = sum(v / n_mem_clients for v in branch_peak.get("euclidean", {}).values())
+                    sum_co = sum(v / n_mem_clients for v in branch_peak.get("cosine", {}).values())
+                    sum_cc = sum(v / n_mem_clients for v in branch_peak.get("cross_corr", {}).values())
+                    sum_peak = sum_eu + sum_co + sum_cc
+                    sum_param = sum(v / n_mem_clients for v in scale_param_mem_mb.values())
+                    sum_total = sum_peak + sum_param
+                    mem_report_lines.append(dash)
+                    mem_report_lines.append(
+                        f"{'SUM':>6s}  {sum_eu:>8.2f}  {sum_co:>8.2f}  {sum_cc:>8.2f}  "
+                        f"{sum_peak:>9.2f}  {sum_param:>8.2f}  {sum_total:>8.2f}"
+                    )
+                    # Per-branch percentage
+                    if sum_peak > 0:
+                        mem_report_lines.append(
+                            f"{'%':>6s}  {sum_eu/sum_peak*100:>7.1f}%  {sum_co/sum_peak*100:>7.1f}%  "
+                            f"{sum_cc/sum_peak*100:>7.1f}%"
+                        )
+                    total_all = sum_total
+                else:
+                    mem_report_lines.append(
+                        f"{'Scale Length':>14s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}"
+                    )
+                    for L in sorted(scale_total_mem_mb.keys()):
+                        peak_avg = scale_peak_mem_mb.get(L, 0.0) / n_mem_clients
+                        param_avg = scale_param_mem_mb.get(L, 0.0) / n_mem_clients
+                        total_avg = scale_total_mem_mb.get(L, 0.0) / n_mem_clients
+                        mem_report_lines.append(
+                            f"{L:>14d}  {peak_avg:>10.2f}  {param_avg:>10.2f}  {total_avg:>10.2f}"
+                        )
+                    total_peak = sum(v / n_mem_clients for v in scale_peak_mem_mb.values())
+                    total_param = sum(v / n_mem_clients for v in scale_param_mem_mb.values())
+                    total_all = sum(v / n_mem_clients for v in scale_total_mem_mb.values())
+                    mem_report_lines.append(dash)
+                    mem_report_lines.append(
+                        f"{'SUM':>14s}  {total_peak:>10.2f}  {total_param:>10.2f}  {total_all:>10.2f}"
+                    )
+
+                mem_report_lines.append(sep)
                 mem_report_str = "\n".join(mem_report_lines)
                 print(mem_report_str, flush=True)
                 with open(logTxt, mode="a+", encoding="utf-8") as f:

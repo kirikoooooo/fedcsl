@@ -421,13 +421,35 @@ class ShapeletsDistBlocks(nn.Module):
         Returns:
             dict with keys 'peak_mem_mb', 'param_mem_mb', 'total_mem_mb' —
             each an OrderedDict[int, float] mapping scale_length → value.
+            When dist_measure == 'mix', also includes 'per_branch' with
+            per-sub-module (euclidean/cosine/cross_corr) breakdown.
         """
         peak = self.get_per_scale_peak_mem_mb()
         param = self.get_per_scale_param_mem_mb()
         total = {}
         for L in peak:
             total[L] = peak.get(L, 0.0) + param.get(L, 0.0)
-        return {"peak_mem_mb": peak, "param_mem_mb": param, "total_mem_mb": total}
+
+        result = {"peak_mem_mb": peak, "param_mem_mb": param, "total_mem_mb": total}
+
+        if self.dist_measure == 'mix':
+            lengths = list(self.shapelets_size_and_len.keys())
+            eu_peak, co_peak, cc_peak = {}, {}, {}
+            eu_param, co_param, cc_param = {}, {}, {}
+            for i, L in enumerate(lengths):
+                eu_peak[L] = self.blocks[i * 3].peak_mem_mb
+                co_peak[L] = self.blocks[i * 3 + 1].peak_mem_mb
+                cc_peak[L] = self.blocks[i * 3 + 2].peak_mem_mb
+                eu_param[L] = float(self.blocks[i * 3].param_mem_bytes) / (1024.0 * 1024.0)
+                co_param[L] = float(self.blocks[i * 3 + 1].param_mem_bytes) / (1024.0 * 1024.0)
+                cc_param[L] = float(self.blocks[i * 3 + 2].param_mem_bytes) / (1024.0 * 1024.0)
+            result["per_branch"] = {
+                "euclidean":  {"peak": eu_peak,  "param": eu_param},
+                "cosine":     {"peak": co_peak,  "param": co_param},
+                "cross_corr": {"peak": cc_peak,  "param": cc_param},
+            }
+
+        return result
 
 
 class LearningShapeletsModel(nn.Module):
@@ -659,7 +681,13 @@ class LearningShapeletsModelMixDistances(nn.Module):
         """Combine per-scale memory from all three mix-distance branches.
 
         Each scale = euclidean[scale_idx] + cosine[scale_idx] + cross[scale_idx].
-        Returns same structure as ShapeletsDistBlocks.get_per_scale_memory_summary.
+
+        Returns:
+            dict with keys:
+              - peak_mem_mb / param_mem_mb / total_mem_mb: per-scale aggregated
+              - per_branch: dict with per-branch peak and param by scale,
+                e.g. {"euclidean": {"peak": {L: MB, ...}, "param": {L: MB, ...}}, ...}
+                Only present when dist_measure == 'mix'.
         """
         lengths = list(self.shapelets_size_and_len.keys())
         if not lengths:
@@ -680,7 +708,18 @@ class LearningShapeletsModelMixDistances(nn.Module):
             param[L] = eu_param.get(L, 0.0) + co_param.get(L, 0.0) + cc_param.get(L, 0.0)
             total[L] = peak[L] + param[L]
 
-        return {"peak_mem_mb": peak, "param_mem_mb": param, "total_mem_mb": total}
+        per_branch = {
+            "euclidean":  {"peak": eu_peak,  "param": eu_param},
+            "cosine":     {"peak": co_peak,  "param": co_param},
+            "cross_corr": {"peak": cc_peak,  "param": cc_param},
+        }
+
+        return {
+            "peak_mem_mb": peak,
+            "param_mem_mb": param,
+            "total_mem_mb": total,
+            "per_branch": per_branch,
+        }
 
     @staticmethod
     def _split_mix_branch_flat(flat, selected_scales_int, branch, shapelets_size_and_len):

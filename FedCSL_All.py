@@ -2399,122 +2399,108 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         all_mem_results.append(result)
 
             if all_mem_results:
-                # Pick the client with the most measured scales as the "strong" reference
-                def _num_measured(mem):
-                    return sum(
-                        1 for v in mem.get("per_scale_measured", {}).values() if v
+                per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client") if cached_knapsack_info else None
+
+                # --- Print per-scale memory table for EVERY client ---
+                for result in sorted(all_mem_results, key=lambda r: r["idx"]):
+                    mem = result["memory_summary"]
+                    idx = result["idx"]
+                    scales = result.get("scale_indices", [])
+                    per_branch = mem.get("per_branch")
+                    has_br = bool(per_branch)
+                    n_measured = sum(1 for v in mem.get("per_scale_measured", {}).values() if v)
+                    acc_module_mb = sum(
+                        mem.get("total_mem_mb", {}).get(L, 0.0)
+                        for L, measured in mem.get("per_scale_measured", {}).items()
+                        if measured
                     )
-                best = max(all_mem_results, key=lambda r: _num_measured(r["memory_summary"]))
-                best_mem = best["memory_summary"]
-                best_idx = best["idx"]
-                best_scales = best.get("scale_indices", [])
-                n_measured = _num_measured(best_mem)
-                per_branch = best_mem.get("per_branch")
-                has_branches = bool(per_branch)
+                    c_budget = per_client_budgets[idx] if per_client_budgets and idx < len(per_client_budgets) else None
 
-                # Accumulated module memory for this client (sum of measured total_mem)
-                acc_module_mb = sum(
-                    best_mem.get("total_mem_mb", {}).get(L, 0.0)
-                    for L, measured in best_mem.get("per_scale_measured", {}).items()
-                    if measured
-                )
-                # Client budget
-                client_budget_mb = None
-                if cached_knapsack_info:
-                    per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client")
-                    if per_client_budgets and best_idx < len(per_client_budgets):
-                        client_budget_mb = per_client_budgets[best_idx]
-                    elif cached_knapsack_info.get("_budget_mb") is not None:
-                        client_budget_mb = cached_knapsack_info["_budget_mb"]
+                    if n_measured == 0:
+                        continue
 
-                sep = "=" * 94 if has_branches else "=" * 72
-                dash = "-" * 94 if has_branches else "-" * 72
-                mem_report_lines = [
-                    "",
-                    sep,
-                    "[spilter-memory-budget] Round-0 per-scale GPU memory "
-                    "(client {} — {} of {} scales trained)".format(
-                        best_idx, n_measured, len(best_mem.get("total_mem_mb", {}))
-                    ),
-                    "  selected scales: {} | accumulated module mem: {:.1f} MB{}".format(
-                        sorted(best_scales) if best_scales else "?",
-                        acc_module_mb,
-                        " / budget: {:.1f} MB (used {:.0f}%)".format(
-                            client_budget_mb,
-                            acc_module_mb / client_budget_mb * 100,
-                        ) if client_budget_mb is not None and client_budget_mb > 0
-                        else "",
-                    ),
-                ]
-                if has_branches:
-                    mem_report_lines.append("  → mix-distance: 三个子模块分别显示")
-                mem_report_lines.append(dash)
+                    sep = "=" * 94 if has_br else "=" * 72
+                    dash = "-" * 94 if has_br else "-" * 72
 
-                if has_branches:
-                    sorted_lengths = sorted(best_mem.get("total_mem_mb", {}).keys())
-                    mem_report_lines.append(
-                        f"{'Scale':>6s}  {'Eu(MB)':>8s}  {'Co(MB)':>8s}  {'CC(MB)':>8s}  "
-                        f"{'SumPeak':>9s}  {'Param':>8s}  {'Total':>8s}"
-                    )
-                    eu_data = per_branch.get("euclidean", {})
-                    co_data = per_branch.get("cosine", {})
-                    cc_data = per_branch.get("cross_corr", {})
-                    sum_eu = 0.0
-                    sum_co = 0.0
-                    sum_cc = 0.0
-                    sum_param = 0.0
-                    for L in sorted_lengths:
-                        eu_mb = eu_data.get("peak", {}).get(L, 0.0)
-                        co_mb = co_data.get("peak", {}).get(L, 0.0)
-                        cc_mb = cc_data.get("peak", {}).get(L, 0.0)
-                        peak_sum = eu_mb + co_mb + cc_mb
-                        param_mb = best_mem.get("param_mem_mb", {}).get(L, 0.0)
-                        total_mb = peak_sum + param_mb
-                        sum_eu += eu_mb
-                        sum_co += co_mb
-                        sum_cc += cc_mb
-                        sum_param += param_mb
-                        mem_report_lines.append(
-                            f"{L:>6d}  {eu_mb:>8.2f}  {co_mb:>8.2f}  {cc_mb:>8.2f}  "
-                            f"{peak_sum:>9.2f}  {param_mb:>8.2f}  {total_mb:>8.2f}"
+                    lines_out = [
+                        "",
+                        sep,
+                        "[spilter-memory-budget] client {} — {} of {} scales trained".format(
+                            idx, n_measured, len(mem.get("total_mem_mb", {}))
+                        ),
+                        "  selected: {} | acc mem: {:.1f} MB{}".format(
+                            sorted(scales) if scales else "?",
+                            acc_module_mb,
+                            " / budget: {:.1f} MB (used {:.0f}%)".format(
+                                        c_budget, acc_module_mb / c_budget * 100,
+                            ) if c_budget is not None and c_budget > 0 else "",
+                        ),
+                    ]
+                    if has_br:
+                        lines_out.append("  -> mix: Eu/Co/CC")
+                    lines_out.append(dash)
+
+                    sorted_lengths = sorted(mem.get("total_mem_mb", {}).keys())
+
+                    if has_br:
+                        lines_out.append(
+                            f"{'Scale':>6s}  {'Eu(MB)':>8s}  {'Co(MB)':>8s}  {'CC(MB)':>8s}  "
+                            f"{'SumPeak':>9s}  {'Param':>8s}  {'Total':>8s}"
                         )
-                    sum_peak = sum_eu + sum_co + sum_cc
-                    sum_total = sum_peak + sum_param
-                    mem_report_lines.append(dash)
-                    mem_report_lines.append(
-                        f"{'SUM':>6s}  {sum_eu:>8.2f}  {sum_co:>8.2f}  {sum_cc:>8.2f}  "
-                        f"{sum_peak:>9.2f}  {sum_param:>8.2f}  {sum_total:>8.2f}"
-                    )
-                    if sum_peak > 0:
-                        mem_report_lines.append(
-                            f"{'%':>6s}  {sum_eu/sum_peak*100:>7.1f}%  {sum_co/sum_peak*100:>7.1f}%  "
-                            f"{sum_cc/sum_peak*100:>7.1f}%"
+                        eu_data = per_branch.get("euclidean", {})
+                        co_data = per_branch.get("cosine", {})
+                        cc_data = per_branch.get("cross_corr", {})
+                        sum_eu = 0.0; sum_co = 0.0; sum_cc = 0.0; sum_param = 0.0
+                        for L in sorted_lengths:
+                            eu_mb = eu_data.get("peak", {}).get(L, 0.0)
+                            co_mb = co_data.get("peak", {}).get(L, 0.0)
+                            cc_mb = cc_data.get("peak", {}).get(L, 0.0)
+                            peak_sum = eu_mb + co_mb + cc_mb
+                            param_mb = mem.get("param_mem_mb", {}).get(L, 0.0)
+                            total_mb = peak_sum + param_mb
+                            sum_eu += eu_mb; sum_co += co_mb; sum_cc += cc_mb; sum_param += param_mb
+                            lines_out.append(
+                                        f"{L:>6d}  {eu_mb:>8.2f}  {co_mb:>8.2f}  {cc_mb:>8.2f}  "
+                                        f"{peak_sum:>9.2f}  {param_mb:>8.2f}  {total_mb:>8.2f}"
+                            )
+                        sum_peak = sum_eu + sum_co + sum_cc
+                        sum_total = sum_peak + sum_param
+                        lines_out.append(dash)
+                        lines_out.append(
+                            f"{'SUM':>6s}  {sum_eu:>8.2f}  {sum_co:>8.2f}  {sum_cc:>8.2f}  "
+                            f"{sum_peak:>9.2f}  {sum_param:>8.2f}  {sum_total:>8.2f}"
                         )
-                    total_all = sum_total
-                else:
-                    sorted_lengths = sorted(best_mem.get("total_mem_mb", {}).keys())
-                    mem_report_lines.append(
-                        f"{'Scale Length':>14s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}"
-                    )
-                    total_peak = 0.0
-                    total_param = 0.0
-                    for L in sorted_lengths:
-                        peak_mb = best_mem.get("peak_mem_mb", {}).get(L, 0.0)
-                        param_mb = best_mem.get("param_mem_mb", {}).get(L, 0.0)
-                        total_mb = best_mem.get("total_mem_mb", {}).get(L, 0.0)
-                        total_peak += peak_mb
-                        total_param += param_mb
-                        mem_report_lines.append(
-                            f"{L:>14d}  {peak_mb:>10.2f}  {param_mb:>10.2f}  {total_mb:>10.2f}"
+                        if sum_peak > 0:
+                            lines_out.append(
+                                        f"{'%':>6s}  {sum_eu/sum_peak*100:>7.1f}%  {sum_co/sum_peak*100:>7.1f}%  "
+                                        f"{sum_cc/sum_peak*100:>7.1f}%"
+                            )
+                    else:
+                        lines_out.append(
+                            f"{'Scale Length':>14s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}"
                         )
-                    total_all = total_peak + total_param
-                    mem_report_lines.append(dash)
-                    mem_report_lines.append(
-                        f"{'SUM':>14s}  {total_peak:>10.2f}  {total_param:>10.2f}  {total_all:>10.2f}"
-                    )
+                        total_peak = 0.0; total_param = 0.0
+                        for L in sorted_lengths:
+                            peak_mb = mem.get("peak_mem_mb", {}).get(L, 0.0)
+                            param_mb = mem.get("param_mem_mb", {}).get(L, 0.0)
+                            total_mb = mem.get("total_mem_mb", {}).get(L, 0.0)
+                            total_peak += peak_mb; total_param += param_mb
+                            lines_out.append(
+                                        f"{L:>14d}  {peak_mb:>10.2f}  {param_mb:>10.2f}  {total_mb:>10.2f}"
+                            )
+                        total_all = total_peak + total_param
+                        lines_out.append(dash)
+                        lines_out.append(
+                            f"{'SUM':>14s}  {total_peak:>10.2f}  {total_param:>10.2f}  {total_all:>10.2f}"
+                        )
+                    lines_out.append(sep)
 
-                mem_report_lines.append(sep)
-                # Also show scale coverage across all clients for reference
+                    out_str = "\n".join(lines_out)
+                    print(out_str, flush=True)
+                    with open(logTxt, mode="a+", encoding="utf-8") as f:
+                        f.write(out_str + "\n")
+
+                # --- Scale coverage summary ---
                 scale_cov = {}
                 for r in all_mem_results:
                     for L, measured in r["memory_summary"].get("per_scale_measured", {}).items():
@@ -2524,35 +2510,12 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     f"L{L}:{scale_cov.get(L, 0)}/{len(all_mem_results)}"
                     for L in sorted(scale_cov.keys())
                 )
-                mem_report_lines.append(
-                    f"[spilter-memory-budget] scale coverage across {len(all_mem_results)} clients: {cov_str}"
+                cov_line = "\n[spilter-memory-budget] scale coverage across {} clients: {}\n".format(
+                    len(all_mem_results), cov_str
                 )
-                mem_report_lines.append("")
-
-                mem_report_str = "\n".join(mem_report_lines)
-                print(mem_report_str, flush=True)
+                print(cov_line, flush=True)
                 with open(logTxt, mode="a+", encoding="utf-8") as f:
-                    f.write(mem_report_str + "\n")
-
-                # Store per-scale memory from strongest client for reference
-                sorted_lengths_store = sorted(best_mem.get("total_mem_mb", {}).keys())
-                _scale_mem_mb_list = [
-                    best_mem.get("total_mem_mb", {}).get(L, 0.0)
-                    for L in sorted_lengths_store
-                ]
-                if cached_knapsack_info is None:
-                    cached_knapsack_info = {}
-                cached_knapsack_info["_round0_scale_mem_mb"] = _scale_mem_mb_list
-                cached_knapsack_info["_round0_scale_peak_mb"] = [
-                    best_mem.get("peak_mem_mb", {}).get(L, 0.0)
-                    for L in sorted_lengths_store
-                ]
-                cached_knapsack_info["_round0_scale_param_mb"] = [
-                    best_mem.get("param_mem_mb", {}).get(L, 0.0)
-                    for L in sorted_lengths_store
-                ]
-                cached_knapsack_info["_round0_total_mb"] = total_all
-
+                    f.write(cov_line + "\n")
 
         # ----- 分布打分：cal_score(predict) + normalize（UseDistribution=False 时退化为全 1） -----
         dist_stage_t0 = time.perf_counter()

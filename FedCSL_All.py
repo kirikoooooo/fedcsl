@@ -1006,29 +1006,54 @@ def _plan_topm_then_local_knapsack_client_scales(
         client_scores, top_m=top_m
     )
 
-    # ---- Resolve scale memory costs for knapsack internal use only ----
-    # Use lightweight system proxy; real per-scale memory will be measured
-    # from client training in round 0 and replace these values afterward.
-    if scale_memory_costs_mb is None:
+    # ---- Resolve scale memory costs ----------------------------------------
+    costs_source = "config"
+    if scale_memory_costs_mb is None and server_model is not None:
+        # Try GPU calibration first (same as knapsack_lagrangian path)
+        g_r, g_0_calib = _calibrate_per_scale_memory_mb(
+            X_fed, server_model, device, batch_size,
+            in_channels, num_classes, dist_measure,
+            lr, wd, seed, dataset_tag,
+        )
+        if g_r is not None:
+            scale_memory_costs_mb = g_r
+            base_memory_mb = g_0_calib if base_memory_mb <= 0 else base_memory_mb
+            costs_source = "round0_calibrated"
+        else:
+            scale_memory_costs_mb = _scale_system_costs(server_model)
+            costs_source = "system_proxy"
+    elif scale_memory_costs_mb is None:
         scale_memory_costs_mb = _scale_system_costs(server_model)
         costs_source = "system_proxy"
-    else:
-        costs_source = "config"
+    # else: costs_source stays "config"
 
     g_r = np.asarray(scale_memory_costs_mb, dtype=np.float64)
     g_r = np.maximum(g_r, 1e-6)
-    g_0 = 0.0
+    g_0 = float(base_memory_mb)
 
-    # ---- Per-client budgets ----
+    # ---- Per-client budgets ------------------------------------------------
     if memory_budgets_mb is not None:
+        budgets_source = os.environ.get("SPILTER_MEMORY_BUDGETS", "") and "env_per_client" or "config"
         if isinstance(memory_budgets_mb, (int, float)):
             B_k = np.full(num_clients, float(memory_budgets_mb), dtype=np.float64)
         else:
             B_k = np.asarray(memory_budgets_mb, dtype=np.float64)
             if len(B_k) == 1:
                 B_k = np.full(num_clients, B_k[0], dtype=np.float64)
+    elif costs_source in ("config", "round0_calibrated"):
+        # Real MB: budget = 60% of total → ~5-6 scales per client
+        memory_budgets_mb = float(np.sum(g_r)) * 0.6 + g_0
+        B_k = np.full(num_clients, float(memory_budgets_mb), dtype=np.float64)
+        budgets_source = "auto_60pct"
     else:
-        B_k = np.full(num_clients, g_0 + float(np.sum(g_r)) + 1000.0, dtype=np.float64)
+        # System proxy (unitless)
+        memory_budgets_mb = float(np.sum(g_r)) * 0.5
+        B_k = np.full(num_clients, float(memory_budgets_mb), dtype=np.float64)
+        budgets_source = "auto_50pct"
+
+    # Each client must afford at least the cheapest scale + base overhead
+    min_possible = g_0 + float(np.min(g_r))
+    B_k = np.maximum(B_k, min_possible)
 
     # ---- Stage 2: per-client local knapsack on top-M candidates ----
     client_selected = []
@@ -1064,7 +1089,7 @@ def _plan_topm_then_local_knapsack_client_scales(
         "total_shortfall": 0.0,
         "lambda_final": [],
         "_costs_source": costs_source,
-        "_budgets_source": os.environ.get("SPILTER_MEMORY_BUDGETS", "") and "env_per_client" or "config",
+        "_budgets_source": budgets_source,
         "_budget_mb": float(np.mean(B_k)) if len(B_k) > 0 else None,
         "_budget_mb_min": float(np.min(B_k)) if len(B_k) > 0 else None,
         "_budget_mb_max": float(np.max(B_k)) if len(B_k) > 0 else None,
@@ -1427,11 +1452,19 @@ def _train_client_worker(
 
         # ---- round-0 per-scale memory collection (MAST-style) ----
         memory_summary = None
+        actual_peak_mem_mb = None
         if round_idx == 0 and use_scale_split_comm:
             try:
                 memory_summary = c.model.get_per_scale_memory_summary()
             except Exception:
                 memory_summary = None
+            # 实测：整个 client 训练的 GPU 峰值显存（非模块累加）
+            if device is not None and device.type == "cuda":
+                try:
+                    torch.cuda.synchronize(device)
+                    actual_peak_mem_mb = float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0)
+                except Exception:
+                    actual_peak_mem_mb = None
 
         if _SPILTER_DEBUG and use_scale_split_comm:
             scale_ids = result.get("scale_indices") or []
@@ -1480,6 +1513,7 @@ def _train_client_worker(
         result["loss_breakdown"] = loss_breakdown
         result["state"] = _state_dict_to_cpu(c.model.state_dict())
         result["memory_summary"] = memory_summary
+        result["actual_peak_mem_mb"] = actual_peak_mem_mb
         if use_scale_split_comm and result["scale_indices"]:
             result["scale_states"] = {
                 int(scale_idx): c.model.scale_state_dict(scale_idx, clone=True, cpu=True)
@@ -2334,8 +2368,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     topm = topm_candidates[cid] if topm_candidates and cid < len(topm_candidates) else []
                     c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
                     c_acc = per_client_acc.get(cid) if per_client_acc else None
-                    budget_tag = f" [{c_budget:.0f}MB]" if c_budget is not None else ""
-                    acc_tag = f" acc={c_acc:.0f}MB" if c_acc is not None else ""
+                    budget_tag = f" 预算={c_budget:.0f}MB" if c_budget is not None else ""
+                    acc_tag = f" 累加={c_acc:.0f}MB" if c_acc is not None else ""
                     topm_str = f"top{len(topm)}={sorted(topm)}" if topm else ""
                     sel_str = f" → {sorted(scales)}" if sorted(scales) != sorted(topm) else ""
                     plan_lines.append(f"c{cid}:{topm_str}{sel_str}{budget_tag}{acc_tag}")
@@ -2418,6 +2452,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         if measured
                     )
                     c_budget = per_client_budgets[idx] if per_client_budgets and idx < len(per_client_budgets) else None
+                    actual_peak = result.get("actual_peak_mem_mb")
 
                     if n_measured == 0:
                         continue
@@ -2425,20 +2460,43 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     sep = "=" * 94 if has_br else "=" * 72
                     dash = "-" * 94 if has_br else "-" * 72
 
+                    # Build budget + measured line
+                    budget_str = f"预算={c_budget:.1f}MB" if c_budget is not None and c_budget > 0 else "预算=无"
+                    acc_str = f"累加={acc_module_mb:.1f}MB"
+                    measured_str = f"实测={actual_peak:.1f}MB" if actual_peak is not None else "实测=N/A"
+                    acc_vs_budget = ""
+                    if c_budget is not None and c_budget > 0:
+                        acc_pct = acc_module_mb / c_budget * 100
+                        acc_vs_budget = f" (累加/预算={acc_pct:.0f}%)"
+                    measured_vs_budget = ""
+                    if c_budget is not None and c_budget > 0 and actual_peak is not None:
+                        measured_pct = actual_peak / c_budget * 100
+                        measured_vs_budget = f" (实测/预算={measured_pct:.0f}%)"
+
                     lines_out = [
                         "",
                         sep,
                         "[spilter-memory-budget] client {} — {} of {} scales trained".format(
                             idx, n_measured, len(mem.get("total_mem_mb", {}))
                         ),
-                        "  selected: {} | acc mem: {:.1f} MB{}".format(
+                        "  scales: {} | {} | {} | {}{}{}".format(
                             sorted(scales) if scales else "?",
-                            acc_module_mb,
-                            " / budget: {:.1f} MB (used {:.0f}%)".format(
-                                        c_budget, acc_module_mb / c_budget * 100,
-                            ) if c_budget is not None and c_budget > 0 else "",
+                            acc_str,
+                            measured_str,
+                            budget_str,
+                            acc_vs_budget,
+                            measured_vs_budget,
                         ),
                     ]
+                    if actual_peak is not None and c_budget is not None and c_budget > 0 and actual_peak > c_budget:
+                        lines_out.append(
+                            "  ⚠ WARNING: 实测峰值 {:.1f} MB 超出预算 {:.1f} MB "
+                            "达 {:.1f} MB ({:.0f}%) — OOM 风险!".format(
+                                actual_peak, c_budget,
+                                actual_peak - c_budget,
+                                (actual_peak / c_budget - 1.0) * 100,
+                            )
+                        )
                     if has_br:
                         lines_out.append("  -> mix: Eu/Co/CC")
                     lines_out.append(dash)

@@ -973,6 +973,13 @@ def _plan_topm_then_local_knapsack_client_scales(
     device=None,
     batch_size=32,
     seed=None,
+    # Calibration extras (passed through to _calibrate_per_scale_memory_mb)
+    in_channels=1,
+    num_classes=2,
+    dist_measure="mix",
+    lr=0.01,
+    wd=0.0001,
+    dataset_tag="unknown",
     # Absorb legacy knapsack_lagrangian params (ignored in local mode)
     coverage_min=None,
     lambda_lr=0.1,
@@ -999,17 +1006,32 @@ def _plan_topm_then_local_knapsack_client_scales(
         client_scores, top_m=top_m
     )
 
-    # ---- Resolve scale memory costs (force server forward if needed) ----
+    # ---- Resolve scale memory costs ----
+    # Prefer _calibrate_per_scale_memory_mb: trains each scale for 1 epoch
+    # → captures forward+backward+optimizer memory (cached to disk, fast
+    # after first run).  Falls back to system-cost proxy if calibration fails.
+    costs_source = "config" if scale_memory_costs_mb is not None else "unknown"
     if scale_memory_costs_mb is None and server_model is not None and device is not None:
-        server_mem = _measure_server_per_scale_memory(
-            server_model, X_fed, device, batch_size
+        g_r, g_0_calib = _calibrate_per_scale_memory_mb(
+            X_fed, server_model, device, batch_size,
+            in_channels, num_classes, dist_measure,
+            lr, wd, seed, dataset_tag,
         )
-        if server_mem is not None:
-            s_totals = server_mem.get("total_mem_mb", {})
-            if s_totals:
-                lengths_sorted = sorted(s_totals.keys())
-                scale_memory_costs_mb = [float(s_totals[L]) for L in lengths_sorted]
-    costs_source = "server_forward" if scale_memory_costs_mb is not None else "unknown"
+        if g_r is not None:
+            scale_memory_costs_mb = g_r
+            base_memory_mb = g_0_calib if base_memory_mb <= 0 else base_memory_mb
+            costs_source = "train_calibrated"
+        else:
+            # Fallback: forward-pass measurement (underestimates, no backward/optimizer)
+            server_mem = _measure_server_per_scale_memory(
+                server_model, X_fed, device, batch_size
+            )
+            if server_mem is not None:
+                s_totals = server_mem.get("total_mem_mb", {})
+                if s_totals:
+                    lengths_sorted = sorted(s_totals.keys())
+                    scale_memory_costs_mb = [float(s_totals[L]) for L in lengths_sorted]
+                    costs_source = "server_forward"
     if scale_memory_costs_mb is None:
         scale_memory_costs_mb = _scale_system_costs(server_model)
         costs_source = "system_proxy"
@@ -2227,6 +2249,12 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         device=server_device,
                         batch_size=batch_size,
                         seed=original_seed or 42,
+                        in_channels=n_channels,
+                        num_classes=num_classes,
+                        dist_measure=dist_measure,
+                        lr=lr,
+                        wd=wd,
+                        dataset_tag=dataset,
                         **knap_params,
                     )
                 )

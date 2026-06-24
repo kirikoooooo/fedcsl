@@ -39,6 +39,11 @@ class MinEuclideanDistBlock(nn.Module):
         self.shapelets.retain_grad()
 
     @property
+    def peak_mem_measured(self) -> bool:
+        """Whether the forward peak memory has been measured on this block."""
+        return self._peak_mem_measured
+
+    @property
     def peak_mem_mb(self) -> float:
         """Peak forward memory delta in MiB (0 if not measured yet or on CPU)."""
         return float(self._peak_mem_delta_bytes) / (1024.0 * 1024.0)
@@ -135,6 +140,11 @@ class MaxCosineSimilarityBlock(nn.Module):
         self.prodictor = nn.Sequential(nn.Linear(self.num_shapelets, self.num_shapelets),
                                         nn.ReLU(),
                                         nn.Linear(self.num_shapelets, self.num_shapelets))
+
+    @property
+    def peak_mem_measured(self) -> bool:
+        """Whether the forward peak memory has been measured on this block."""
+        return self._peak_mem_measured
 
     @property
     def peak_mem_mb(self) -> float:
@@ -235,6 +245,11 @@ class MaxCrossCorrelationBlock(nn.Module):
         self._peak_mem_measured: bool = False
         if self.to_cuda:
             self.to(self.device)
+
+    @property
+    def peak_mem_measured(self) -> bool:
+        """Whether the forward peak memory has been measured on this block."""
+        return self._peak_mem_measured
 
     @property
     def peak_mem_mb(self) -> float:
@@ -419,10 +434,11 @@ class ShapeletsDistBlocks(nn.Module):
         """Combined per-scale memory summary (peak + param, all in MiB).
 
         Returns:
-            dict with keys 'peak_mem_mb', 'param_mem_mb', 'total_mem_mb' —
-            each an OrderedDict[int, float] mapping scale_length → value.
-            When dist_measure == 'mix', also includes 'per_branch' with
-            per-sub-module (euclidean/cosine/cross_corr) breakdown.
+            dict with keys:
+              - 'peak_mem_mb', 'param_mem_mb', 'total_mem_mb': per-scale values
+              - 'per_scale_measured': bool per scale — ALL blocks for this scale
+                have been forwarded at least once (peak memory is valid)
+              - 'per_branch': (mix only) per-sub-module breakdown with measured flags
         """
         peak = self.get_per_scale_peak_mem_mb()
         param = self.get_per_scale_param_mem_mb()
@@ -430,12 +446,31 @@ class ShapeletsDistBlocks(nn.Module):
         for L in peak:
             total[L] = peak.get(L, 0.0) + param.get(L, 0.0)
 
-        result = {"peak_mem_mb": peak, "param_mem_mb": param, "total_mem_mb": total}
+        # Per-scale measurement status: True only if ALL blocks for this scale were measured
+        lengths = list(self.shapelets_size_and_len.keys())
+        per_scale_measured = {}
+        if self.dist_measure == 'mix':
+            for i, L in enumerate(lengths):
+                per_scale_measured[L] = (
+                    self.blocks[i * 3].peak_mem_measured
+                    and self.blocks[i * 3 + 1].peak_mem_measured
+                    and self.blocks[i * 3 + 2].peak_mem_measured
+                )
+        else:
+            for i, L in enumerate(lengths):
+                per_scale_measured[L] = self.blocks[i].peak_mem_measured
+
+        result = {
+            "peak_mem_mb": peak,
+            "param_mem_mb": param,
+            "total_mem_mb": total,
+            "per_scale_measured": per_scale_measured,
+        }
 
         if self.dist_measure == 'mix':
-            lengths = list(self.shapelets_size_and_len.keys())
             eu_peak, co_peak, cc_peak = {}, {}, {}
             eu_param, co_param, cc_param = {}, {}, {}
+            eu_measured, co_measured, cc_measured = {}, {}, {}
             for i, L in enumerate(lengths):
                 eu_peak[L] = self.blocks[i * 3].peak_mem_mb
                 co_peak[L] = self.blocks[i * 3 + 1].peak_mem_mb
@@ -443,10 +478,13 @@ class ShapeletsDistBlocks(nn.Module):
                 eu_param[L] = float(self.blocks[i * 3].param_mem_bytes) / (1024.0 * 1024.0)
                 co_param[L] = float(self.blocks[i * 3 + 1].param_mem_bytes) / (1024.0 * 1024.0)
                 cc_param[L] = float(self.blocks[i * 3 + 2].param_mem_bytes) / (1024.0 * 1024.0)
+                eu_measured[L] = self.blocks[i * 3].peak_mem_measured
+                co_measured[L] = self.blocks[i * 3 + 1].peak_mem_measured
+                cc_measured[L] = self.blocks[i * 3 + 2].peak_mem_measured
             result["per_branch"] = {
-                "euclidean":  {"peak": eu_peak,  "param": eu_param},
-                "cosine":     {"peak": co_peak,  "param": co_param},
-                "cross_corr": {"peak": cc_peak,  "param": cc_param},
+                "euclidean":  {"peak": eu_peak,  "param": eu_param,  "measured": eu_measured},
+                "cosine":     {"peak": co_peak,  "param": co_param,  "measured": co_measured},
+                "cross_corr": {"peak": cc_peak,  "param": cc_param,  "measured": cc_measured},
             }
 
         return result
@@ -685,13 +723,16 @@ class LearningShapeletsModelMixDistances(nn.Module):
         Returns:
             dict with keys:
               - peak_mem_mb / param_mem_mb / total_mem_mb: per-scale aggregated
-              - per_branch: dict with per-branch peak and param by scale,
-                e.g. {"euclidean": {"peak": {L: MB, ...}, "param": {L: MB, ...}}, ...}
-                Only present when dist_measure == 'mix'.
+              - per_scale_measured: bool per scale — ALL 3 sub-blocks forwarded
+              - per_branch: dict with per-branch peak/param/measured by scale
         """
         lengths = list(self.shapelets_size_and_len.keys())
         if not lengths:
             return {"peak_mem_mb": {}, "param_mem_mb": {}, "total_mem_mb": {}}
+
+        eu_blocks = self.shapelets_euclidean.blocks
+        co_blocks = self.shapelets_cosine.blocks
+        cc_blocks = self.shapelets_cross_correlation.blocks
 
         eu_peak = self.shapelets_euclidean.get_per_scale_peak_mem_mb()
         co_peak = self.shapelets_cosine.get_per_scale_peak_mem_mb()
@@ -703,21 +744,30 @@ class LearningShapeletsModelMixDistances(nn.Module):
         peak = {}
         param = {}
         total = {}
-        for L in lengths:
+        per_scale_measured = {}
+        eu_measured, co_measured, cc_measured = {}, {}, {}
+        for i, L in enumerate(lengths):
             peak[L] = eu_peak.get(L, 0.0) + co_peak.get(L, 0.0) + cc_peak.get(L, 0.0)
             param[L] = eu_param.get(L, 0.0) + co_param.get(L, 0.0) + cc_param.get(L, 0.0)
             total[L] = peak[L] + param[L]
+            eu_measured[L] = eu_blocks[i].peak_mem_measured
+            co_measured[L] = co_blocks[i].peak_mem_measured
+            cc_measured[L] = cc_blocks[i].peak_mem_measured
+            per_scale_measured[L] = (
+                eu_measured[L] and co_measured[L] and cc_measured[L]
+            )
 
         per_branch = {
-            "euclidean":  {"peak": eu_peak,  "param": eu_param},
-            "cosine":     {"peak": co_peak,  "param": co_param},
-            "cross_corr": {"peak": cc_peak,  "param": cc_param},
+            "euclidean":  {"peak": eu_peak,  "param": eu_param,  "measured": eu_measured},
+            "cosine":     {"peak": co_peak,  "param": co_param,  "measured": co_measured},
+            "cross_corr": {"peak": cc_peak,  "param": cc_param,  "measured": cc_measured},
         }
 
         return {
             "peak_mem_mb": peak,
             "param_mem_mb": param,
             "total_mem_mb": total,
+            "per_scale_measured": per_scale_measured,
             "per_branch": per_branch,
         }
 

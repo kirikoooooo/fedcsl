@@ -2171,13 +2171,18 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
         # ----- round-0 per-scale memory aggregation (MAST-style, spilter-memory-budget) -----
         if round == 0 and use_scale_split_comm:
-            # Collect memory summaries from all client workers
+            # Collect memory summaries from all client workers.
+            # In Spilter mode each client only trains selected scales → we track
+            # per-scale measurement counts and only average over clients that
+            # actually forwarded that scale (per_scale_measured / branch measured).
             scale_peak_mem_mb = {}
             scale_param_mem_mb = {}
             scale_total_mem_mb = {}
-            # Per-branch tracking for mix distance (euclidean / cosine / cross-correlation)
+            scale_count: Dict[int, int] = {}  # clients that measured this scale
+            # Per-branch tracking for mix distance
             branch_peak: Dict[str, Dict[int, float]] = {}
             branch_param: Dict[str, Dict[int, float]] = {}
+            branch_count: Dict[str, Dict[int, int]] = {}
             n_mem_clients = 0
             for result_list in [future.result() for future in futures]:
                 for result in result_list:
@@ -2185,23 +2190,34 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     if mem is None:
                         continue
                     n_mem_clients += 1
+                    per_scale_measured = mem.get("per_scale_measured", {})
                     for L, v in mem.get("peak_mem_mb", {}).items():
+                        if not per_scale_measured.get(L, False):
+                            continue
                         scale_peak_mem_mb[L] = scale_peak_mem_mb.get(L, 0.0) + v
+                        scale_count[L] = scale_count.get(L, 0) + 1
                     for L, v in mem.get("param_mem_mb", {}).items():
-                        scale_param_mem_mb[L] = scale_param_mem_mb.get(L, 0.0) + v
+                        if per_scale_measured.get(L, False):
+                            scale_param_mem_mb[L] = scale_param_mem_mb.get(L, 0.0) + v
                     for L, v in mem.get("total_mem_mb", {}).items():
-                        scale_total_mem_mb[L] = scale_total_mem_mb.get(L, 0.0) + v
-                    # Per-branch breakdown
+                        if per_scale_measured.get(L, False):
+                            scale_total_mem_mb[L] = scale_total_mem_mb.get(L, 0.0) + v
+                    # Per-branch breakdown (also gated by per-branch measured flag)
                     per_branch = mem.get("per_branch")
                     if per_branch:
                         for branch_name, data in per_branch.items():
                             if branch_name not in branch_peak:
                                 branch_peak[branch_name] = {}
                                 branch_param[branch_name] = {}
+                                branch_count[branch_name] = {}
+                            branch_measured = data.get("measured", {})
                             for L, v in data.get("peak", {}).items():
-                                branch_peak[branch_name][L] = branch_peak[branch_name].get(L, 0.0) + v
+                                if branch_measured.get(L, False):
+                                    branch_peak[branch_name][L] = branch_peak[branch_name].get(L, 0.0) + v
+                                    branch_count[branch_name][L] = branch_count[branch_name].get(L, 0) + 1
                             for L, v in data.get("param", {}).items():
-                                branch_param[branch_name][L] = branch_param[branch_name].get(L, 0.0) + v
+                                if branch_measured.get(L, False):
+                                    branch_param[branch_name][L] = branch_param[branch_name].get(L, 0.0) + v
 
             if n_mem_clients > 0:
                 has_branches = bool(branch_peak)
@@ -2211,42 +2227,49 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 mem_report_lines = [
                     "",
                     sep,
-                    "[spilter-memory-budget] Round-0 per-scale GPU memory (avg across {} clients)".format(n_mem_clients),
+                    "[spilter-memory-budget] Round-0 per-scale GPU memory "
+                    "(avg over clients that trained each scale; {} clients total)".format(n_mem_clients),
                 ]
                 if has_branches:
                     mem_report_lines.append("  → mix-distance: 三个子模块分别显示")
                 mem_report_lines.append(dash)
 
                 if has_branches:
-                    # Per-branch header
+                    # Per-branch header (n = #clients that trained this scale)
+                    sorted_lengths = sorted(scale_total_mem_mb.keys())
                     mem_report_lines.append(
                         f"{'Scale':>6s}  {'Eu(MB)':>8s}  {'Co(MB)':>8s}  {'CC(MB)':>8s}  "
-                        f"{'SumPeak':>9s}  {'Param':>8s}  {'Total':>8s}"
+                        f"{'SumPeak':>9s}  {'Param':>8s}  {'Total':>8s}  {'n':>4s}"
                     )
-                    for L in sorted(scale_total_mem_mb.keys()):
-                        eu_avg = branch_peak.get("euclidean", {}).get(L, 0.0) / n_mem_clients
-                        co_avg = branch_peak.get("cosine", {}).get(L, 0.0) / n_mem_clients
-                        cc_avg = branch_peak.get("cross_corr", {}).get(L, 0.0) / n_mem_clients
+                    def _safe_div(num, den):
+                        return num / den if den > 0 else 0.0
+                    for L in sorted_lengths:
+                        n_eu = branch_count.get("euclidean", {}).get(L, 0)
+                        n_co = branch_count.get("cosine", {}).get(L, 0)
+                        n_cc = branch_count.get("cross_corr", {}).get(L, 0)
+                        eu_avg = _safe_div(branch_peak.get("euclidean", {}).get(L, 0.0), n_eu)
+                        co_avg = _safe_div(branch_peak.get("cosine", {}).get(L, 0.0), n_co)
+                        cc_avg = _safe_div(branch_peak.get("cross_corr", {}).get(L, 0.0), n_cc)
                         peak_sum = eu_avg + co_avg + cc_avg
-                        param_avg = scale_param_mem_mb.get(L, 0.0) / n_mem_clients
+                        n_scale = scale_count.get(L, 0)
+                        param_avg = _safe_div(scale_param_mem_mb.get(L, 0.0), n_scale)
                         total_avg = peak_sum + param_avg
                         mem_report_lines.append(
                             f"{L:>6d}  {eu_avg:>8.2f}  {co_avg:>8.2f}  {cc_avg:>8.2f}  "
-                            f"{peak_sum:>9.2f}  {param_avg:>8.2f}  {total_avg:>8.2f}"
+                            f"{peak_sum:>9.2f}  {param_avg:>8.2f}  {total_avg:>8.2f}  {n_scale:>4d}"
                         )
-                    # Sum row
-                    sum_eu = sum(v / n_mem_clients for v in branch_peak.get("euclidean", {}).values())
-                    sum_co = sum(v / n_mem_clients for v in branch_peak.get("cosine", {}).values())
-                    sum_cc = sum(v / n_mem_clients for v in branch_peak.get("cross_corr", {}).values())
+                    # Sum row: sum of per-scale averages
+                    sum_eu = sum(_safe_div(branch_peak.get("euclidean", {}).get(L, 0.0), branch_count.get("euclidean", {}).get(L, 0)) for L in sorted_lengths)
+                    sum_co = sum(_safe_div(branch_peak.get("cosine", {}).get(L, 0.0), branch_count.get("cosine", {}).get(L, 0)) for L in sorted_lengths)
+                    sum_cc = sum(_safe_div(branch_peak.get("cross_corr", {}).get(L, 0.0), branch_count.get("cross_corr", {}).get(L, 0)) for L in sorted_lengths)
                     sum_peak = sum_eu + sum_co + sum_cc
-                    sum_param = sum(v / n_mem_clients for v in scale_param_mem_mb.values())
+                    sum_param = sum(_safe_div(scale_param_mem_mb.get(L, 0.0), scale_count.get(L, 0)) for L in sorted_lengths)
                     sum_total = sum_peak + sum_param
                     mem_report_lines.append(dash)
                     mem_report_lines.append(
                         f"{'SUM':>6s}  {sum_eu:>8.2f}  {sum_co:>8.2f}  {sum_cc:>8.2f}  "
                         f"{sum_peak:>9.2f}  {sum_param:>8.2f}  {sum_total:>8.2f}"
                     )
-                    # Per-branch percentage
                     if sum_peak > 0:
                         mem_report_lines.append(
                             f"{'%':>6s}  {sum_eu/sum_peak*100:>7.1f}%  {sum_co/sum_peak*100:>7.1f}%  "
@@ -2254,19 +2277,23 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         )
                     total_all = sum_total
                 else:
+                    sorted_lengths = sorted(scale_total_mem_mb.keys())
                     mem_report_lines.append(
-                        f"{'Scale Length':>14s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}"
+                        f"{'Scale Length':>14s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}  {'n':>4s}"
                     )
-                    for L in sorted(scale_total_mem_mb.keys()):
-                        peak_avg = scale_peak_mem_mb.get(L, 0.0) / n_mem_clients
-                        param_avg = scale_param_mem_mb.get(L, 0.0) / n_mem_clients
-                        total_avg = scale_total_mem_mb.get(L, 0.0) / n_mem_clients
+                    def _safe_div2(num, den):
+                        return num / den if den > 0 else 0.0
+                    for L in sorted_lengths:
+                        n_scale = scale_count.get(L, 0)
+                        peak_avg = _safe_div2(scale_peak_mem_mb.get(L, 0.0), n_scale)
+                        param_avg = _safe_div2(scale_param_mem_mb.get(L, 0.0), n_scale)
+                        total_avg = _safe_div2(scale_total_mem_mb.get(L, 0.0), n_scale)
                         mem_report_lines.append(
-                            f"{L:>14d}  {peak_avg:>10.2f}  {param_avg:>10.2f}  {total_avg:>10.2f}"
+                            f"{L:>14d}  {peak_avg:>10.2f}  {param_avg:>10.2f}  {total_avg:>10.2f}  {n_scale:>4d}"
                         )
-                    total_peak = sum(v / n_mem_clients for v in scale_peak_mem_mb.values())
-                    total_param = sum(v / n_mem_clients for v in scale_param_mem_mb.values())
-                    total_all = sum(v / n_mem_clients for v in scale_total_mem_mb.values())
+                    total_peak = sum(_safe_div2(scale_peak_mem_mb.get(L, 0.0), scale_count.get(L, 0)) for L in sorted_lengths)
+                    total_param = sum(_safe_div2(scale_param_mem_mb.get(L, 0.0), scale_count.get(L, 0)) for L in sorted_lengths)
+                    total_all = sum(_safe_div2(scale_total_mem_mb.get(L, 0.0), scale_count.get(L, 0)) for L in sorted_lengths)
                     mem_report_lines.append(dash)
                     mem_report_lines.append(
                         f"{'SUM':>14s}  {total_peak:>10.2f}  {total_param:>10.2f}  {total_all:>10.2f}"
@@ -2278,21 +2305,22 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 with open(logTxt, mode="a+", encoding="utf-8") as f:
                     f.write(mem_report_str + "\n")
 
-                # Store per-scale memory costs (peak + param avg) for knapsack use
+                # Store per-scale memory costs (per-scale avg, not global avg) for knapsack use
+                sorted_lengths_store = sorted(scale_total_mem_mb.keys())
                 _scale_mem_mb_list = [
-                    scale_total_mem_mb.get(L, 0.0) / n_mem_clients
-                    for L in sorted(scale_total_mem_mb.keys())
+                    scale_total_mem_mb.get(L, 0.0) / max(scale_count.get(L, 0), 1)
+                    for L in sorted_lengths_store
                 ]
                 if cached_knapsack_info is None:
                     cached_knapsack_info = {}
                 cached_knapsack_info["_round0_scale_mem_mb"] = _scale_mem_mb_list
                 cached_knapsack_info["_round0_scale_peak_mb"] = [
-                    scale_peak_mem_mb.get(L, 0.0) / n_mem_clients
-                    for L in sorted(scale_peak_mem_mb.keys())
+                    scale_peak_mem_mb.get(L, 0.0) / max(scale_count.get(L, 0), 1)
+                    for L in sorted_lengths_store
                 ]
                 cached_knapsack_info["_round0_scale_param_mb"] = [
-                    scale_param_mem_mb.get(L, 0.0) / n_mem_clients
-                    for L in sorted(scale_param_mem_mb.keys())
+                    scale_param_mem_mb.get(L, 0.0) / max(scale_count.get(L, 0), 1)
+                    for L in sorted_lengths_store
                 ]
                 cached_knapsack_info["_round0_total_mb"] = total_all
 

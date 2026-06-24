@@ -246,7 +246,7 @@
             </div>
             <div class="form-row">
               <label>客户端数量</label>
-              <input id="baseline-num-client" class="control" type="number" min="1" step="1" value="50" oninput="updateBaselineSummary()" />
+              <input id="baseline-num-client" class="control" type="number" min="1" step="1" value="10" oninput="updateBaselineSummary()" />
             </div>
             <div class="form-row">
               <label>下游评估</label>
@@ -702,8 +702,7 @@ function _refreshMemoryBudgetSummary() {
 }
 function computePerClientMemoryBudgets(numClients) {
   const cfg = _memoryBudgetConfig();
-  const n = Math.max(1, parseInt(numClients) || 50);
-  const nStrong = Math.max(1, Math.round(n * cfg.normalizedRatios.strong));
+  const n = Math.max(1, parseInt(numClients) || 10);  const nStrong = Math.max(1, Math.round(n * cfg.normalizedRatios.strong));
   const nMedium = Math.max(1, Math.round(n * cfg.normalizedRatios.medium));
   const nWeak = n - nStrong - nMedium;
   const budgets = [];
@@ -737,7 +736,7 @@ function updateBaselineSummary() {
   let memBudgetText = '';
   if (memBudgetChecked) {
     const cfg = _memoryBudgetConfig();
-    const nCli = parseInt(numClient) || 50;
+    const nCli = parseInt(numClient) || 10;
     memBudgetText = ` · 显存预算: base=${cfg.base}MB (强${cfg.budgets.strong}/中${cfg.budgets.medium}/弱${cfg.budgets.weak}) 分布${(cfg.normalizedRatios.strong*100).toFixed(0)}/${(cfg.normalizedRatios.medium*100).toFixed(0)}/${(cfg.normalizedRatios.weak*100).toFixed(0)} × ${nCli}客户端`;
   }
   _refreshMemoryBudgetSummary();
@@ -839,7 +838,7 @@ async function launchSelectedBaselines() {
         //  启用 Knapsack Lagrangian + 传递 per-client 显存预算
         if ((script === 'scripts/spilter_har.sh' || script === 'scripts/spilter_mixed_har.sh') && memBudgetChecked) {
           envBase.SPILTER_KNAPSACK = '1';
-          const nCli = parseInt(numClient) || 50;
+          const nCli = parseInt(numClient) || 10;
           const perClientBudgets = computePerClientMemoryBudgets(nCli);
           envBase.SPILTER_MEMORY_BUDGETS = perClientBudgets.join(',');
         }

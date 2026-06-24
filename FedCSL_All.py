@@ -899,6 +899,11 @@ def _plan_topm_then_local_knapsack_client_scales(
     device=None,
     batch_size=32,
     seed=None,
+    # Absorb legacy knapsack_lagrangian params (ignored in local mode)
+    coverage_min=None,
+    lambda_lr=0.1,
+    max_iter=50,
+    **kwargs,
 ):
     """Two-stage spilter-memory-budget allocation.
 

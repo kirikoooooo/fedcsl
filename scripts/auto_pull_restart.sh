@@ -11,7 +11,7 @@
 #
 # 查看日志:
 #   tail -f /tmp/auto_pull.log
-
+# add
 set -euo pipefail
 
 # ====== 配置 ======

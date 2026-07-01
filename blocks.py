@@ -17,25 +17,49 @@ def _resolve_device(to_cuda=True, device=None):
 
 
 # ---------------------------------------------------------------------------
-# 统一的 backward hook（MAST-style：pre-hook 记录基线 + reset peak，
-# post-hook 取峰值 delta）
+# MAST-style backward profiling wrappers (autograd.Function)
+# _BwRangeOut → reset peak before block.backward
+# _BwRangeIn  → record peak after block.backward
+# The x.clone() in forward creates clean autograd boundaries.
 # ---------------------------------------------------------------------------
-def _bw_pre_hook(module, grad_output):
-    if getattr(module, 'to_cuda', False) and not module._bw_peak_mem_measured:
-        torch.cuda.synchronize(module.device)
-        torch.cuda.reset_peak_memory_stats(module.device)
-        module._bw_pre_mem = torch.cuda.memory_allocated(module.device)
+class _BwRangeIn(torch.autograd.Function):
+    """Inserted BEFORE block input. Backward: block.backward → _BwRangeIn.backward → x."""
+
+    @staticmethod
+    def forward(ctx, x, module):
+        ctx.module = module
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        module = ctx.module
+        if getattr(module, 'to_cuda', False) and not module._bw_peak_mem_measured:
+            torch.cuda.synchronize(module.device)
+            pre = getattr(module, '_bw_pre_mem', 0)
+            if pre > 0:
+                module._bw_peak_mem_delta_bytes = max(
+                    int(torch.cuda.max_memory_allocated(module.device) - pre), 0
+                )
+            module._bw_peak_mem_measured = True
+        return grad_output, None
 
 
-def _bw_post_hook(module, grad_input, grad_output):
-    if getattr(module, 'to_cuda', False) and not module._bw_peak_mem_measured:
-        torch.cuda.synchronize(module.device)
-        pre = getattr(module, '_bw_pre_mem', 0)
-        if pre > 0:
-            module._bw_peak_mem_delta_bytes = max(
-                int(torch.cuda.max_memory_allocated(module.device) - pre), 0
-            )
-        module._bw_peak_mem_measured = True
+class _BwRangeOut(torch.autograd.Function):
+    """Inserted AFTER block output. Backward: cat → _BwRangeOut.backward → reset peak → block.backward."""
+
+    @staticmethod
+    def forward(ctx, x, module):
+        ctx.module = module
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        module = ctx.module
+        if getattr(module, 'to_cuda', False) and not module._bw_peak_mem_measured:
+            torch.cuda.synchronize(module.device)
+            torch.cuda.reset_peak_memory_stats(module.device)
+            module._bw_pre_mem = torch.cuda.memory_allocated(module.device)
+        return grad_output, None
 
 
 class MinEuclideanDistBlock(nn.Module):
@@ -56,10 +80,6 @@ class MinEuclideanDistBlock(nn.Module):
         self._bw_pre_mem: int = 0
         # Retained activation size (output tensor bytes)
         self._retained_activation_bytes: int = 0
-
-        # Register backward hooks
-        self.register_full_backward_pre_hook(_bw_pre_hook)
-        self.register_full_backward_hook(_bw_post_hook)
 
         # if not registered as parameter, the optimizer will not be able to see the parameters
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True,
@@ -371,41 +391,41 @@ class ShapeletsDistBlocks(nn.Module):
         else:
             raise ValueError("dist_measure must be either of 'euclidean', 'cross-correlation', 'cosine'")
 
+    def _wrap_block_call(self, block, x, masking):
+        """Call block optionally wrapped with BW profiling autograd.Function nodes."""
+        if getattr(self, '_bw_profiling_enabled', False):
+            x_in = _BwRangeIn.apply(x, block)
+            block_out = block(x_in, masking)
+            return _BwRangeOut.apply(block_out, block)
+        else:
+            return block(x, masking)
+
     def forward(self, x, masking=False):
         parts = []
         for block in self.blocks:
             if self.checkpoint and self.dist_measure != 'cross-correlation':
                 parts.append(checkpoint(block, x, masking))
-
             else:
-                parts.append(block(x, masking))
-
+                parts.append(self._wrap_block_call(block, x, masking))
         return torch.cat(parts, dim=2) #[8,1,320]
 
     def forward_scale(self, x, scale_idx, masking=False):
-        """仅前向一个尺度对应的 block，避免 one-hot 变体把其它尺度也白算一遍。"""
+        """仅前向一个尺度对应的 block。"""
         if self.dist_measure == 'mix':
             base = int(scale_idx) * 3
             block_indices = range(base, base + 3)
         else:
             block_indices = [int(scale_idx)]
-
         parts = []
         for idx in block_indices:
             block = self.blocks[idx]
             if self.checkpoint and self.dist_measure != 'cross-correlation':
                 parts.append(checkpoint(block, x, masking))
             else:
-                parts.append(block(x, masking))
-
+                parts.append(self._wrap_block_call(block, x, masking))
         return torch.cat(parts, dim=2)
 
     def forward_subset(self, x, scale_indices, masking=False):
-        """仅前向所选全局尺度：与依次 ``forward_scale`` 再拼接等价，但作为本子模块的一次 forward 路径。
-
-        语义上相当于「只含这些尺度 block 的拼接子编码器」跑一次 ``forward``（内部仍按尺度顺序计算各 block）。
-        ``scale_indices`` 为全局尺度下标列表，顺序决定拼接顺序。
-        """
         parts = []
         for si in scale_indices:
             si = int(si)
@@ -419,7 +439,7 @@ class ShapeletsDistBlocks(nn.Module):
                 if self.checkpoint and self.dist_measure != 'cross-correlation':
                     parts.append(checkpoint(block, x, masking))
                 else:
-                    parts.append(block(x, masking))
+                    parts.append(self._wrap_block_call(block, x, masking))
         return torch.cat(parts, dim=2)
 
     # ---- per-scale memory aggregation (MAST-style, peak forward delta + param mem) ----

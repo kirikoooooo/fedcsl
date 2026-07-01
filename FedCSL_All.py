@@ -768,6 +768,12 @@ def _collect_scale_memory_table(server_model, sample_data, device):
         blk._bw_pre_mem = 0
         blk._retained_activation_bytes = 0
 
+    # ── Enable BW profiling wrappers on all branch models ──
+    for branch_name in ['shapelets_euclidean', 'shapelets_cosine', 'shapelets_cross_correlation']:
+        branch = getattr(server_model, branch_name, None)
+        if branch is not None:
+            branch._bw_profiling_enabled = True
+
     # ── Enable autograd ──
     saved_grad_flags = {}
     for pname, p in server_model.named_parameters():
@@ -797,70 +803,56 @@ def _collect_scale_memory_table(server_model, sample_data, device):
 
     torch.cuda.synchronize(device)
 
-    # ── 2) Backward — measure global peak once ──
+    # ── 2) Backward — per-block BW peaks measured by MAST wrappers ──
     loss = full_out.sum()
-    torch.cuda.reset_peak_memory_stats(device)
-    bwd_pre_mem = torch.cuda.memory_allocated(device)
     try:
         loss.backward()
     except Exception as e:
         print(f"[scale-memory] backward 失败: {e}", flush=True)
     torch.cuda.synchronize(device)
-    global_bwd_peak_mb = max(
-        float(torch.cuda.max_memory_allocated(device) - bwd_pre_mem), 0.0
-    ) / (1024.0 * 1024.0)
 
-    # Count how many backward hooks actually fired
-    bwd_fired = sum(1 for _br, blk in _all_blocks(server_model) if blk._bw_peak_mem_measured)
-    for _br, blk in _all_blocks(server_model):
-        blk._bw_peak_mem_measured = True  # mark all so table shows data
-
-    # ── restore grad flags ──
+    # ── restore grad flags, disable wrappers ──
+    for branch_name in ['shapelets_euclidean', 'shapelets_cosine', 'shapelets_cross_correlation']:
+        branch = getattr(server_model, branch_name, None)
+        if branch is not None:
+            branch._bw_profiling_enabled = False
     for pname, p in server_model.named_parameters():
         p.requires_grad_(saved_grad_flags.get(pname, False))
     server_model.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     _gc.collect()
 
-    # ── Collect per-scale data ──
+    # ── Collect per-scale data (from per-block measurements) ──
     table = []
-    total_fwd_sum = 0.0
     for s in range(num_scales):
         L = lengths[s]
         eu_fwd = 0.0; co_fwd = 0.0; cc_fwd = 0.0
+        eu_bwd = 0.0; co_bwd = 0.0; cc_bwd = 0.0
         eu_ret = 0.0; co_ret = 0.0; cc_ret = 0.0
         param = 0.0
         for blk_name, blk in _scale_blocks(server_model, s):
             fwd = blk.peak_mem_mb
+            bwd = blk.bw_peak_mem_mb
             ret = blk.retained_activation_mb
             par = float(blk.param_mem_bytes) / (1024.0 * 1024.0)
             if blk_name == "eu":
-                eu_fwd = fwd; eu_ret = ret; param += par
+                eu_fwd = fwd; eu_bwd = bwd; eu_ret = ret; param += par
             elif blk_name == "co":
-                co_fwd = fwd; co_ret = ret; param += par
+                co_fwd = fwd; co_bwd = bwd; co_ret = ret; param += par
             elif blk_name == "cc":
-                cc_fwd = fwd; cc_ret = ret; param += par
+                cc_fwd = fwd; cc_bwd = bwd; cc_ret = ret; param += par
         fwd_sum = eu_fwd + co_fwd + cc_fwd
+        bwd_sum = eu_bwd + co_bwd + cc_bwd
         ret_sum = eu_ret + co_ret + cc_ret
-        total_fwd_sum += fwd_sum
+        peak = max(fwd_sum, bwd_sum)
+        total = peak + ret_sum + param
         table.append({
             "scale_idx": s, "length": L,
             "eu_fwd": eu_fwd, "co_fwd": co_fwd, "cc_fwd": cc_fwd, "fwd_sum": fwd_sum,
+            "eu_bwd": eu_bwd, "co_bwd": co_bwd, "cc_bwd": cc_bwd, "bwd_sum": bwd_sum,
             "eu_ret": eu_ret, "co_ret": co_ret, "cc_ret": cc_ret, "ret_sum": ret_sum,
-            "param": param,
+            "peak": peak, "param": param, "total": total,
         })
-
-    # Split global backward peak proportionally by forward peak
-    for r in table:
-        ratio = r["fwd_sum"] / total_fwd_sum if total_fwd_sum > 0 else 0.0
-        bwd_share = global_bwd_peak_mb * ratio
-        r["eu_bwd"] = bwd_share * (r["eu_fwd"] / r["fwd_sum"]) if r["fwd_sum"] > 0 else 0.0
-        r["co_bwd"] = bwd_share * (r["co_fwd"] / r["fwd_sum"]) if r["fwd_sum"] > 0 else 0.0
-        r["cc_bwd"] = bwd_share * (r["cc_fwd"] / r["fwd_sum"]) if r["fwd_sum"] > 0 else 0.0
-        r["bwd_sum"] = bwd_share
-        fwd_sum = r["fwd_sum"]; bwd_sum = r["bwd_sum"]; ret_sum = r["ret_sum"]; param = r["param"]
-        r["peak"] = max(fwd_sum, bwd_sum)
-        r["total"] = r["peak"] + ret_sum + param
 
     # ── Print tables ──
     lines = []
@@ -887,11 +879,8 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
     lines.append(sep)
 
-    # -- Table 2: Backward Peaks (proportional split of global peak) --
-    lines += ["", sep,
-        f"[scale-memory] 表2: Backward Peak (MB) — 全局反向峰值 {global_bwd_peak_mb:.1f} MB 按 forward 比例分配",
-        f"  (hooks fired: {bwd_fired}/{num_scales * 3 if has_mix else num_scales})",
-        COL]
+    # -- Table 2: Backward Peaks (per-block, MAST wrapper measured) --
+    lines += ["", sep, "[scale-memory] 表2: Backward Peak (MB) — 每个 block 反向峰值 delta (MAST wrapper)", COL]
     s_eu=0; s_co=0; s_cc=0; s_sum=0
     for r in table:
         lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_bwd']:>10.2f}  {r['co_bwd']:>10.2f}  {r['cc_bwd']:>10.2f}  {r['bwd_sum']:>10.2f}")

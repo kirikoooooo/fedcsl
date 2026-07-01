@@ -110,6 +110,10 @@ class MinEuclideanDistBlock(nn.Module):
         # unfold time series to emulate sliding window
         x = x.unfold(2, self.shapelets_size, 1).contiguous()
 
+        # Record retained activation: unfold output, saved by cdist backward
+        if self.to_cuda and not self._peak_mem_measured:
+            self._retained_activation_bytes = x.numel() * x.element_size()
+
         # calculate euclidean distance
         x = torch.cdist(x, self.shapelets, p=2, compute_mode='donot_use_mm_for_euclid_dist')
 
@@ -127,8 +131,6 @@ class MinEuclideanDistBlock(nn.Module):
                 int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
             )
             self._peak_mem_measured = True
-            # Record retained activation size (output tensor that stays alive for backward)
-            self._retained_activation_bytes = x.numel() * x.element_size()
 
         return x
 
@@ -213,6 +215,10 @@ class MaxCosineSimilarityBlock(nn.Module):
 
         x = x.unfold(2, self.shapelets_size, 1).contiguous()
 
+        # Record retained activation: unfold output, saved by matmul backward
+        if self.to_cuda and not self._peak_mem_measured:
+            self._retained_activation_bytes = x.numel() * x.element_size()
+
         x = x / x.norm(p=2, dim=3, keepdim=True).clamp(min=1e-8)
 
         shapelets_norm = (self.shapelets / self.shapelets.norm(p=2, dim=2, keepdim=True).clamp(min=1e-8))
@@ -233,7 +239,6 @@ class MaxCosineSimilarityBlock(nn.Module):
                 int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
             )
             self._peak_mem_measured = True
-            self._retained_activation_bytes = x.numel() * x.element_size()
 
         return x
 
@@ -301,6 +306,11 @@ class MaxCrossCorrelationBlock(nn.Module):
             pre_mem = torch.cuda.memory_allocated(self.device)
 
         x = self.shapelets(x)
+
+        # Record retained activation: Conv1d output, saved by max backward
+        if self.to_cuda and not self._peak_mem_measured:
+            self._retained_activation_bytes = x.numel() * x.element_size()
+
         if masking:
             mask = generate_binomial_mask(x.shape, device=x.device)
             x *= mask
@@ -313,7 +323,6 @@ class MaxCrossCorrelationBlock(nn.Module):
                 int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
             )
             self._peak_mem_measured = True
-            self._retained_activation_bytes = x.numel() * x.element_size()
 
         return x.transpose(2, 1)
 

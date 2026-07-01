@@ -804,12 +804,17 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     torch.cuda.synchronize(device)
 
     # ── 2) Backward — per-block BW peaks measured by MAST wrappers ──
+    torch.cuda.reset_peak_memory_stats(device)
+    global_bwd_pre = torch.cuda.memory_allocated(device)
     loss = full_out.sum()
     try:
         loss.backward()
     except Exception as e:
         print(f"[scale-memory] backward 失败: {e}", flush=True)
     torch.cuda.synchronize(device)
+    global_bwd_peak_mb = max(
+        float(torch.cuda.max_memory_allocated(device) - global_bwd_pre), 0.0
+    ) / (1024.0 * 1024.0)
 
     # ── restore grad flags, disable wrappers ──
     for branch_name in ['shapelets_euclidean', 'shapelets_cosine', 'shapelets_cross_correlation']:
@@ -853,6 +858,27 @@ def _collect_scale_memory_table(server_model, sample_data, device):
             "eu_ret": eu_ret, "co_ret": co_ret, "cc_ret": cc_ret, "ret_sum": ret_sum,
             "peak": peak, "param": param, "total": total,
         })
+
+    # ── MAST-style fallback: if any block bwd is 0, use global ratio ──
+    total_bwd_from_blocks = sum(r["bwd_sum"] for r in table)
+    total_fwd_from_blocks = sum(r["fwd_sum"] for r in table)
+    if total_bwd_from_blocks < 1.0 and total_fwd_from_blocks > 0:
+        ratio = global_bwd_peak_mb / total_fwd_from_blocks if total_fwd_from_blocks > 0 else 0.5
+        for r in table:
+            if r["bwd_sum"] < 1.0:
+                bwd = r["fwd_sum"] * ratio
+                r["eu_bwd"] = r["eu_fwd"] * ratio
+                r["co_bwd"] = r["co_fwd"] * ratio
+                r["cc_bwd"] = r["cc_fwd"] * ratio
+                r["bwd_sum"] = bwd
+                r["peak"] = max(r["fwd_sum"], r["bwd_sum"])
+                r["total"] = r["peak"] + r["ret_sum"] + r["param"]
+        print(
+            f"[scale-memory] per-block bwd 全 0, 使用 fallback: "
+            f"global_bwd={global_bwd_peak_mb:.1f}MB / total_fwd={total_fwd_from_blocks:.1f}MB "
+            f"→ ratio={ratio:.3f}",
+            flush=True,
+        )
 
     # ── Print tables ──
     lines = []

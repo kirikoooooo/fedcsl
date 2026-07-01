@@ -33,13 +33,16 @@ class _BwRangeIn(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         module = ctx.module
-        if getattr(module, 'to_cuda', False) and not module._bw_peak_mem_measured:
+        if getattr(module, 'to_cuda', False):
             torch.cuda.synchronize(module.device)
             pre = getattr(module, '_bw_pre_mem', 0)
             if pre > 0:
-                module._bw_peak_mem_delta_bytes = max(
+                delta = max(
                     int(torch.cuda.max_memory_allocated(module.device) - pre), 0
                 )
+                # Keep the maximum across multiple backward passes
+                if delta > module._bw_peak_mem_delta_bytes:
+                    module._bw_peak_mem_delta_bytes = delta
             module._bw_peak_mem_measured = True
         return grad_output, None
 
@@ -55,7 +58,7 @@ class _BwRangeOut(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         module = ctx.module
-        if getattr(module, 'to_cuda', False) and not module._bw_peak_mem_measured:
+        if getattr(module, 'to_cuda', False):
             torch.cuda.synchronize(module.device)
             torch.cuda.reset_peak_memory_stats(module.device)
             module._bw_pre_mem = torch.cuda.memory_allocated(module.device)

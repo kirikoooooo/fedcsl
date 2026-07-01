@@ -701,19 +701,15 @@ def _spilter_knapsack_lagrangian_params(config, override_memory_budget=None):
 # 服务端集中式显存采集（MAST-style：一次 full forward，每个 block 自测峰值）
 # ---------------------------------------------------------------------------
 def _collect_scale_memory_table(server_model, sample_data, device):
-    """MAST-style per-scale memory: one full forward, read per-block peak deltas.
+    """MAST-style 全量显存采集：一次 forward+backward，收集 fwd/bwd/retain。
 
-    Each block in blocks.py already measures its own forward peak memory delta
-    (``_peak_mem_delta_bytes`` / ``_peak_mem_measured``) on its first forward
-    pass — identical to MAST's blocks_MAST.py approach.  We simply run one
-    full forward pass through all scales and branches, then collect the
-    measured values from all 8×3=24 blocks.
+    24 个 block 各自测量：
+      - forward peak delta（blocks.py 自测）
+      - backward peak delta（backward pre/post hook 实测）
+      - retained activation（forward 输出张量大小）
 
-    Returns:
-        scale_costs: list[float] (R,) — per-scale total cost in MB (Eu+Co+CC sum).
-                     Used directly as ``scale_memory_costs_mb`` for knapsack.
-        table_rows:  list[dict] — {scale_idx, length, eu, co, cc, total_mb, param_mb}
-                     for printing the 2D table.
+    按 scale 聚合，最终输出 3 张表格 + 一张汇总表。
+    汇总 scale_costs[i] = max(fwd_sum, bwd_sum) + retain_sum + param
     """
     import gc as _gc
 
@@ -727,7 +723,7 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     lengths = list(server_model.shapelets_size_and_len.keys())
     has_mix = hasattr(server_model, 'shapelets_euclidean')
 
-    # ---- Helper: get all blocks ----
+    # ── Helper: iterate all blocks ──
     def _all_blocks(model):
         if hasattr(model, "shapelets_euclidean"):
             for b in model.shapelets_euclidean.blocks:
@@ -737,145 +733,180 @@ def _collect_scale_memory_table(server_model, sample_data, device):
             for b in model.shapelets_cross_correlation.blocks:
                 yield ("cross_corr", b)
         elif hasattr(model, "shapelets_blocks"):
-            for b in model.shapelets_blocks.blocks:
-                yield ("single", b)
+            sbd = model.shapelets_blocks
+            if sbd.dist_measure == "mix":
+                for i, b in enumerate(sbd.blocks):
+                    branch_id = i % 3
+                    yield ("euclidean" if branch_id == 0 else "cosine" if branch_id == 1 else "cross_corr", b)
+            else:
+                for b in sbd.blocks:
+                    yield ("single", b)
 
-    # ---- Reset all blocks' measurement flags ----
+    # ── Helper: get per-scale blocks (3 blocks for mix, 1 for single) ──
+    def _scale_blocks(model, s):
+        if has_mix:
+            return [
+                ("eu",  model.shapelets_euclidean.blocks[s]),
+                ("co",  model.shapelets_cosine.blocks[s]),
+                ("cc",  model.shapelets_cross_correlation.blocks[s]),
+            ]
+        sbd = model.shapelets_blocks
+        if sbd.dist_measure == "mix":
+            return [
+                ("eu", sbd.blocks[s * 3]),
+                ("co", sbd.blocks[s * 3 + 1]),
+                ("cc", sbd.blocks[s * 3 + 2]),
+            ]
+        return [("eu", sbd.blocks[s])]
+
+    # ── Reset all measurement flags ──
     for _br, blk in _all_blocks(server_model):
         blk._peak_mem_measured = False
         blk._peak_mem_delta_bytes = 0
+        blk._bw_peak_mem_measured = False
+        blk._bw_peak_mem_delta_bytes = 0
+        blk._bw_pre_mem = 0
+        blk._retained_activation_bytes = 0
 
-    # ---- Enable autograd on params (forward saves activations for backward) ----
+    # ── Enable autograd ──
     saved_grad_flags = {}
     for pname, p in server_model.named_parameters():
         saved_grad_flags[pname] = p.requires_grad
         p.requires_grad_(True)
 
-    # ---- One full forward pass ----
     x = torch.from_numpy(np.asarray(sample_data, dtype=np.float32)).float().to(device)
     torch.cuda.empty_cache()
+
+    # ── 1) Full forward pass (with autograd) ──
     try:
-        with torch.no_grad():
-            if has_mix:
-                server_model.shapelets_euclidean(x, masking=False)
-                server_model.shapelets_cosine(x, masking=False)
-                server_model.shapelets_cross_correlation(x, masking=False)
-            elif hasattr(server_model, 'shapelets_blocks'):
-                server_model.shapelets_blocks(x, masking=False)
-    finally:
+        if has_mix:
+            out_eu = server_model.shapelets_euclidean(x, masking=False)
+            out_co = server_model.shapelets_cosine(x, masking=False)
+            out_cc = server_model.shapelets_cross_correlation(x, masking=False)
+            # Dummy loss on full concatenated output
+            full_out = torch.cat([out_eu, out_co, out_cc], dim=2)
+        elif hasattr(server_model, 'shapelets_blocks'):
+            full_out = server_model.shapelets_blocks(x, masking=False)
+        else:
+            return None, []
+    except Exception as e:
+        print(f"[scale-memory] forward 失败: {e}", flush=True)
         for pname, p in server_model.named_parameters():
             p.requires_grad_(saved_grad_flags.get(pname, False))
+        return None, []
 
     torch.cuda.synchronize(device)
+
+    # ── 2) Backward ──
+    loss = full_out.sum()
+    try:
+        loss.backward()
+    except Exception as e:
+        print(f"[scale-memory] backward 失败: {e}", flush=True)
+
+    torch.cuda.synchronize(device)
+
+    # ── restore grad flags ──
+    for pname, p in server_model.named_parameters():
+        p.requires_grad_(saved_grad_flags.get(pname, False))
+    server_model.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     _gc.collect()
 
-    # ---- Collect per-block measurements → aggregate by scale ----
-    # Build per-scale per-branch dict: branch_peak[euclidean][scale_idx] = peak_mb
-    branch_peak = {}
-    for branch_name, blk in _all_blocks(server_model):
-        branch_peak.setdefault(branch_name, {})
-        # block index within its branch = scale index (mix model: R blocks per branch)
-        pass
-
-    # For mix model: blocks are in order, one per scale per branch
-    scale_costs = []
-    table_rows = []
+    # ── Collect per-scale data ──
+    table = []  # each row: dict with fwd/bwd/retain/param
     for s in range(num_scales):
         L = lengths[s]
-        eu_mb = 0.0
-        co_mb = 0.0
-        cc_mb = 0.0
-        param_mb = 0.0
-
-        if has_mix:
-            eu_blk = server_model.shapelets_euclidean.blocks[s]
-            co_blk = server_model.shapelets_cosine.blocks[s]
-            cc_blk = server_model.shapelets_cross_correlation.blocks[s]
-            eu_mb = eu_blk.peak_mem_mb
-            co_mb = co_blk.peak_mem_mb
-            cc_mb = cc_blk.peak_mem_mb
-            param_mb = (float(eu_blk.param_mem_bytes) +
-                        float(co_blk.param_mem_bytes) +
-                        float(cc_blk.param_mem_bytes)) / (1024.0 * 1024.0)
-        elif hasattr(server_model, "shapelets_blocks"):
-            sbd = server_model.shapelets_blocks
-            if sbd.dist_measure == "mix":
-                blk = sbd.blocks[s * 3]       # euclidean
-                eu_mb = blk.peak_mem_mb
-                param_mb += float(blk.param_mem_bytes) / (1024.0 * 1024.0)
-                blk = sbd.blocks[s * 3 + 1]   # cosine
-                co_mb = blk.peak_mem_mb
-                param_mb += float(blk.param_mem_bytes) / (1024.0 * 1024.0)
-                blk = sbd.blocks[s * 3 + 2]   # cross_corr
-                cc_mb = blk.peak_mem_mb
-                param_mb += float(blk.param_mem_bytes) / (1024.0 * 1024.0)
-            else:
-                blk = sbd.blocks[s]
-                eu_mb = blk.peak_mem_mb
-                param_mb = float(blk.param_mem_bytes) / (1024.0 * 1024.0)
-
-        total_mb = eu_mb + co_mb + cc_mb
-        scale_costs.append(total_mb)
-        table_rows.append({
-            "scale_idx": s,
-            "length": L,
-            "eu_mb": eu_mb,
-            "co_mb": co_mb,
-            "cc_mb": cc_mb,
-            "total_mb": total_mb,
-            "param_mb": param_mb,
+        eu_fwd = 0.0; co_fwd = 0.0; cc_fwd = 0.0
+        eu_bwd = 0.0; co_bwd = 0.0; cc_bwd = 0.0
+        eu_ret = 0.0; co_ret = 0.0; cc_ret = 0.0
+        param = 0.0
+        for blk_name, blk in _scale_blocks(server_model, s):
+            fwd = blk.peak_mem_mb
+            bwd = blk.bw_peak_mem_mb
+            ret = blk.retained_activation_mb
+            par = float(blk.param_mem_bytes) / (1024.0 * 1024.0)
+            if blk_name == "eu":
+                eu_fwd = fwd; eu_bwd = bwd; eu_ret = ret; param += par
+            elif blk_name == "co":
+                co_fwd = fwd; co_bwd = bwd; co_ret = ret; param += par
+            elif blk_name == "cc":
+                cc_fwd = fwd; cc_bwd = bwd; cc_ret = ret; param += par
+        fwd_sum = eu_fwd + co_fwd + cc_fwd
+        bwd_sum = eu_bwd + co_bwd + cc_bwd
+        ret_sum = eu_ret + co_ret + cc_ret
+        peak = max(fwd_sum, bwd_sum)
+        total = peak + ret_sum + param  # per-scale training cost
+        table.append({
+            "scale_idx": s, "length": L,
+            "eu_fwd": eu_fwd, "co_fwd": co_fwd, "cc_fwd": cc_fwd, "fwd_sum": fwd_sum,
+            "eu_bwd": eu_bwd, "co_bwd": co_bwd, "cc_bwd": cc_bwd, "bwd_sum": bwd_sum,
+            "eu_ret": eu_ret, "co_ret": co_ret, "cc_ret": cc_ret, "ret_sum": ret_sum,
+            "peak": peak, "param": param, "total": total,
         })
 
-    # ---- Print 2D table ----
-    sep = "=" * 92 if has_mix else "=" * 60
-    dash = "-" * 92 if has_mix else "-" * 60
-    lines = [
-        "",
-        sep,
-        "[scale-memory] MAST-style 显存采集（一次 full forward，24 blocks 自测）",
-        f"  device: {device}  batch: {x.shape}",
-    ]
-    if has_mix:
-        lines.append(
-            f"  {'Scale':>6s}  {'Length':>8s}  {'Eu(MB)':>10s}  {'Co(MB)':>10s}  "
-            f"{'CC(MB)':>10s}  {'Total(MB)':>10s}  {'Param(MB)':>10s}"
-        )
-        sum_eu = 0.0; sum_co = 0.0; sum_cc = 0.0; sum_total = 0.0; sum_param = 0.0
-        for row in table_rows:
-            s = row["scale_idx"]; L = row["length"]
-            eu = row["eu_mb"]; co = row["co_mb"]; cc = row["cc_mb"]
-            tot = row["total_mb"]; par = row["param_mb"]
-            sum_eu += eu; sum_co += co; sum_cc += cc; sum_total += tot; sum_param += par
-            lines.append(
-                f"  {s:>6d}  {L:>8d}  {eu:>10.2f}  {co:>10.2f}  "
-                f"{cc:>10.2f}  {tot:>10.2f}  {par:>10.2f}"
-            )
+    # ── Print tables ──
+    lines = []
+    HDR_EU = "Eu(MB)"; HDR_CO = "Co(MB)"; HDR_CC = "CC(MB)"; HDR_SUM = "Sum(MB)"
+    COL = f"  {'Scale':>6s}  {'Length':>8s}  {HDR_EU:>10s}  {HDR_CO:>10s}  {HDR_CC:>10s}  {HDR_SUM:>10s}"
+
+    sep = "=" * 90
+    dash = "-" * 90
+
+    def _sum_row(s_eu, s_co, s_cc, s_sum, label="SUM"):
         lines.append(dash)
-        lines.append(
-            f"  {'SUM':>6s}  {'':>8s}  {sum_eu:>10.2f}  {sum_co:>10.2f}  "
-            f"{sum_cc:>10.2f}  {sum_total:>10.2f}  {sum_param:>10.2f}"
-        )
-        if sum_total > 0:
-            lines.append(
-                f"  {'%':>6s}  {'':>8s}  {sum_eu/sum_total*100:>9.1f}%  "
-                f"{sum_co/sum_total*100:>9.1f}%  "
-                f"{sum_cc/sum_total*100:>9.1f}%"
-            )
-    else:
-        lines.append(
-            f"  {'Scale':>6s}  {'Length':>8s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}"
-        )
-        for row in table_rows:
-            s = row["scale_idx"]; L = row["length"]
-            tot = row["total_mb"]; par = row["param_mb"]
-            lines.append(
-                f"  {s:>6d}  {L:>8d}  {tot:>10.2f}  {par:>10.2f}"
-            )
+        lines.append(f"  {label:>6s}  {'':>8s}  {s_eu:>10.2f}  {s_co:>10.2f}  {s_cc:>10.2f}  {s_sum:>10.2f}")
+
+    def _pct_row(s_eu, s_co, s_cc, s_sum):
+        if s_sum > 0:
+            lines.append(f"  {'%':>6s}  {'':>8s}  {s_eu/s_sum*100:>9.1f}%  {s_co/s_sum*100:>9.1f}%  {s_cc/s_sum*100:>9.1f}%")
+
+    # -- Table 1: Forward Peaks --
+    lines += ["", sep, "[scale-memory] 表1: Forward Peak (MB) — 每个 block 前向峰值 delta", COL]
+    s_eu=0; s_co=0; s_cc=0; s_sum=0
+    for r in table:
+        lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_fwd']:>10.2f}  {r['co_fwd']:>10.2f}  {r['cc_fwd']:>10.2f}  {r['fwd_sum']:>10.2f}")
+        s_eu+=r['eu_fwd']; s_co+=r['co_fwd']; s_cc+=r['cc_fwd']; s_sum+=r['fwd_sum']
+    _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
     lines.append(sep)
+
+    # -- Table 2: Backward Peaks --
+    lines += ["", sep, "[scale-memory] 表2: Backward Peak (MB) — 每个 block 反向峰值 delta", COL]
+    s_eu=0; s_co=0; s_cc=0; s_sum=0
+    for r in table:
+        lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_bwd']:>10.2f}  {r['co_bwd']:>10.2f}  {r['cc_bwd']:>10.2f}  {r['bwd_sum']:>10.2f}")
+        s_eu+=r['eu_bwd']; s_co+=r['co_bwd']; s_cc+=r['cc_bwd']; s_sum+=r['bwd_sum']
+    _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
+    lines.append(sep)
+
+    # -- Table 3: Retained Activations --
+    lines += ["", sep, "[scale-memory] 表3: Retained Activation (MB) — forward 输出张量大小", COL]
+    s_eu=0; s_co=0; s_cc=0; s_sum=0
+    for r in table:
+        lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_ret']:>10.2f}  {r['co_ret']:>10.2f}  {r['cc_ret']:>10.2f}  {r['ret_sum']:>10.2f}")
+        s_eu+=r['eu_ret']; s_co+=r['co_ret']; s_cc+=r['cc_ret']; s_sum+=r['ret_sum']
+    _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
+    lines.append(sep)
+
+    # -- Table 4: Summary (per-scale total = max(fwd,bwd) + retain + param) --
+    COL2 = (f"  {'Scale':>6s}  {'Length':>8s}  {'Fwd(MB)':>10s}  {'Bwd(MB)':>10s}  "
+            f"{'Peak(MB)':>10s}  {'Ret(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}")
+    lines += ["", sep, "[scale-memory] 表4: Per-Scale 总代价 (peak=max(fwd,bwd); total=peak+ret+param)", COL2]
+    s_f=0; s_b=0; s_p=0; s_r=0; s_par=0; s_tot=0
+    for r in table:
+        lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['fwd_sum']:>10.2f}  {r['bwd_sum']:>10.2f}  "
+                     f"{r['peak']:>10.2f}  {r['ret_sum']:>10.2f}  {r['param']:>10.2f}  {r['total']:>10.2f}")
+        s_f+=r['fwd_sum']; s_b+=r['bwd_sum']; s_p+=r['peak']
+        s_r+=r['ret_sum']; s_par+=r['param']; s_tot+=r['total']
+    lines.append(dash)
+    lines.append(f"  {'SUM':>6s}  {'':>8s}  {s_f:>10.2f}  {s_b:>10.2f}  {s_p:>10.2f}  {s_r:>10.2f}  {s_par:>10.2f}  {s_tot:>10.2f}")
+    lines.append(sep)
+
     print("\n".join(lines), flush=True)
 
-    return scale_costs, table_rows
+    # Return scale_costs (total per-scale cost) for knapsack scheduling
+    scale_costs = [r["total"] for r in table]
+    return scale_costs, table
 
 
 def _plan_topm_then_local_knapsack_client_scales(

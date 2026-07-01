@@ -16,6 +16,28 @@ def _resolve_device(to_cuda=True, device=None):
     return torch.device("cpu")
 
 
+# ---------------------------------------------------------------------------
+# 统一的 backward hook（MAST-style：pre-hook 记录基线 + reset peak，
+# post-hook 取峰值 delta）
+# ---------------------------------------------------------------------------
+def _bw_pre_hook(module, grad_output):
+    if getattr(module, 'to_cuda', False) and not module._bw_peak_mem_measured:
+        torch.cuda.synchronize(module.device)
+        torch.cuda.reset_peak_memory_stats(module.device)
+        module._bw_pre_mem = torch.cuda.memory_allocated(module.device)
+
+
+def _bw_post_hook(module, grad_input, grad_output):
+    if getattr(module, 'to_cuda', False) and not module._bw_peak_mem_measured:
+        torch.cuda.synchronize(module.device)
+        pre = getattr(module, '_bw_pre_mem', 0)
+        if pre > 0:
+            module._bw_peak_mem_delta_bytes = max(
+                int(torch.cuda.max_memory_allocated(module.device) - pre), 0
+            )
+        module._bw_peak_mem_measured = True
+
+
 class MinEuclideanDistBlock(nn.Module):
 
     def __init__(self, shapelets_size, num_shapelets, in_channels=1, to_cuda=True, device=None):
@@ -25,9 +47,19 @@ class MinEuclideanDistBlock(nn.Module):
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
         self.in_channels = in_channels
-        # Per-block memory tracking (peak delta in bytes, measured once on first forward)
+        # Per-block forward memory tracking (peak delta in bytes, measured once on first forward)
         self._peak_mem_delta_bytes: int = 0
         self._peak_mem_measured: bool = False
+        # Per-block backward memory tracking (measured on first backward pass)
+        self._bw_peak_mem_delta_bytes: int = 0
+        self._bw_peak_mem_measured: bool = False
+        self._bw_pre_mem: int = 0
+        # Retained activation size (output tensor bytes)
+        self._retained_activation_bytes: int = 0
+
+        # Register backward hooks
+        self.register_full_backward_pre_hook(_bw_pre_hook)
+        self.register_full_backward_hook(_bw_post_hook)
 
         # if not registered as parameter, the optimizer will not be able to see the parameters
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True,
@@ -49,6 +81,18 @@ class MinEuclideanDistBlock(nn.Module):
         return float(self._peak_mem_delta_bytes) / (1024.0 * 1024.0)
 
     @property
+    def bw_peak_mem_measured(self) -> bool:
+        return self._bw_peak_mem_measured
+
+    @property
+    def bw_peak_mem_mb(self) -> float:
+        return float(self._bw_peak_mem_delta_bytes) / (1024.0 * 1024.0)
+
+    @property
+    def retained_activation_mb(self) -> float:
+        return float(self._retained_activation_bytes) / (1024.0 * 1024.0)
+
+    @property
     def param_mem_bytes(self) -> int:
         """Total parameter memory in bytes."""
         total = 0
@@ -68,41 +112,23 @@ class MinEuclideanDistBlock(nn.Module):
 
         # calculate euclidean distance
         x = torch.cdist(x, self.shapelets, p=2, compute_mode='donot_use_mm_for_euclid_dist')
-        #x = torch.cdist(x, self.shapelets, p=2)
 
         # add up the distances of the channels in case of
         # multivariate time series
-        # Corresponds to the approach 1 and 3 here: https://stats.stackexchange.com/questions/184977/multivariate-time-series-euclidean-distance
         x = torch.sum(x, dim=1, keepdim=True).transpose(2, 3)
-
-
-        """
-        n_dims = x.shape[1]
-        out = torch.zeros((x.shape[0],
-                           1,
-                           x.shape[2] - self.shapelets_size + 1,
-                           self.num_shapelets),
-                        dtype=torch.float)
-        if self.to_cuda:
-            out = out.cuda()
-        for i_dim in range(n_dims):
-            x_dim = x[:, i_dim : i_dim + 1, :]
-            x_dim = x_dim.unfold(2, self.shapelets_size, 1).contiguous()
-            out += torch.cdist(x_dim, self.shapelets[i_dim : i_dim + 1, :, :], p=2, compute_mode='donot_use_mm_for_euclid_dist')
-        x = out
-        x = x.transpose(2, 3)
-        """
 
         # hard min compared to soft-min from the paper
         x, _ = torch.min(x, 3)
 
-        # ---- finalise memory measurement ----
+        # ---- finalise forward memory measurement ----
         if self.to_cuda and not self._peak_mem_measured:
             torch.cuda.synchronize(self.device)
             self._peak_mem_delta_bytes = max(
                 int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
             )
             self._peak_mem_measured = True
+            # Record retained activation size (output tensor that stays alive for backward)
+            self._retained_activation_bytes = x.numel() * x.element_size()
 
         return x
 
@@ -122,9 +148,19 @@ class MaxCosineSimilarityBlock(nn.Module):
         self.relu = nn.ReLU()
         self.mean = 0
         self.var  = 0
-        # Per-block memory tracking (peak delta in bytes, measured once on first forward)
+        # Per-block forward memory tracking (peak delta in bytes, measured once on first forward)
         self._peak_mem_delta_bytes: int = 0
         self._peak_mem_measured: bool = False
+        # Per-block backward memory tracking
+        self._bw_peak_mem_delta_bytes: int = 0
+        self._bw_peak_mem_measured: bool = False
+        self._bw_pre_mem: int = 0
+        # Retained activation size
+        self._retained_activation_bytes: int = 0
+
+        # Register backward hooks
+        self.register_full_backward_pre_hook(_bw_pre_hook)
+        self.register_full_backward_hook(_bw_post_hook)
 
         # if not registered as parameter, the optimizer will not be able to see the parameters
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True,
@@ -143,90 +179,63 @@ class MaxCosineSimilarityBlock(nn.Module):
 
     @property
     def peak_mem_measured(self) -> bool:
-        """Whether the forward peak memory has been measured on this block."""
         return self._peak_mem_measured
 
     @property
     def peak_mem_mb(self) -> float:
-        """Peak forward memory delta in MiB (0 if not measured yet or on CPU)."""
         return float(self._peak_mem_delta_bytes) / (1024.0 * 1024.0)
 
     @property
+    def bw_peak_mem_measured(self) -> bool:
+        return self._bw_peak_mem_measured
+
+    @property
+    def bw_peak_mem_mb(self) -> float:
+        return float(self._bw_peak_mem_delta_bytes) / (1024.0 * 1024.0)
+
+    @property
+    def retained_activation_mb(self) -> float:
+        return float(self._retained_activation_bytes) / (1024.0 * 1024.0)
+
+    @property
     def param_mem_bytes(self) -> int:
-        """Total parameter memory in bytes."""
         total = 0
         for p in self.parameters(recurse=True):
             total += p.numel() * p.element_size()
         return total
 
     def forward(self, x, masking=False):
-        # ---- per-block forward memory profiling (MAST-style, device-local) ----
+        # ---- per-block forward memory profiling ----
         if self.to_cuda and not self._peak_mem_measured:
             torch.cuda.synchronize(self.device)
             torch.cuda.reset_peak_memory_stats(self.device)
             pre_mem = torch.cuda.memory_allocated(self.device)
 
-        """
-        n_dims = x.shape[1]
-        shapelets_norm = self.shapelets / self.shapelets.norm(p=2, dim=2, keepdim=True).clamp(min=1e-8)
-        shapelets_norm = shapelets_norm.transpose(1, 2).half()
-        out = torch.zeros((x.shape[0],
-                           1,
-                           x.shape[2] - self.shapelets_size + 1,
-                           self.num_shapelets),
-                        dtype=torch.float)
-        if self.to_cuda:
-            out = out.cuda()
-        for i_dim in range(n_dims):
-            x_dim = x[:, i_dim : i_dim + 1, :].half()
-            x_dim = x_dim.unfold(2, self.shapelets_size, 1).contiguous()
-            x_dim = x_dim / x_dim.norm(p=2, dim=3, keepdim=True).clamp(min=1e-8)
-            out += torch.matmul(x_dim, shapelets_norm[i_dim : i_dim + 1, :, :]).float()
-
-        x = out.transpose(2, 3) / n_dims
-        """
-
-        # unfold time series to emulate sliding window
         x = x.unfold(2, self.shapelets_size, 1).contiguous()
 
-
-        # normalize with l2 norm
         x = x / x.norm(p=2, dim=3, keepdim=True).clamp(min=1e-8)
 
         shapelets_norm = (self.shapelets / self.shapelets.norm(p=2, dim=2, keepdim=True).clamp(min=1e-8))
-        # calculate cosine similarity via dot product on already normalized ts and shapelets
         x = torch.matmul(x, shapelets_norm.transpose(1, 2))
 
         gap_score_vector,gap_score = compute_gap_scores(x)
-        #print(gap_score_vector)
-        #print(gap_score)
 
-        #exit(0)
-        #print(x.shape)
-        # 多维时间序列的展平到1维
-        # add up the distances of the channels in case of
-        # multivariate time series
-        # Corresponds to the approach 1 and 3 here: https://stats.stackexchange.com/questions/184977/multivariate-time-series-euclidean-distance
         n_dims = x.shape[1]
         x = torch.sum(x, dim=1, keepdim=True).transpose(2, 3) / n_dims
 
-
-        # ignore negative distances
         x = self.relu(x)
         x, _ = torch.max(x, 3)
 
-        # concat之前 是否需要mlp？
-        #x = self.prodictor(x)
-
-        # ---- finalise memory measurement ----
+        # ---- finalise forward memory measurement ----
         if self.to_cuda and not self._peak_mem_measured:
             torch.cuda.synchronize(self.device)
             self._peak_mem_delta_bytes = max(
                 int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
             )
             self._peak_mem_measured = True
+            self._retained_activation_bytes = x.numel() * x.element_size()
 
-        return x #[8,1,40]
+        return x
 
 
 
@@ -240,32 +249,52 @@ class MaxCrossCorrelationBlock(nn.Module):
         self.num_shapelets = num_shapelets
         self.shapelets_size = shapelets_size
         self.to_cuda = self.device.type == "cuda"
-        # Per-block memory tracking (peak delta in bytes, measured once on first forward)
+        # Per-block forward memory tracking
         self._peak_mem_delta_bytes: int = 0
         self._peak_mem_measured: bool = False
+        # Per-block backward memory tracking
+        self._bw_peak_mem_delta_bytes: int = 0
+        self._bw_peak_mem_measured: bool = False
+        self._bw_pre_mem: int = 0
+        # Retained activation size
+        self._retained_activation_bytes: int = 0
+
+        # Register backward hooks
+        self.register_full_backward_pre_hook(_bw_pre_hook)
+        self.register_full_backward_hook(_bw_post_hook)
+
         if self.to_cuda:
             self.to(self.device)
 
     @property
     def peak_mem_measured(self) -> bool:
-        """Whether the forward peak memory has been measured on this block."""
         return self._peak_mem_measured
 
     @property
     def peak_mem_mb(self) -> float:
-        """Peak forward memory delta in MiB (0 if not measured yet or on CPU)."""
         return float(self._peak_mem_delta_bytes) / (1024.0 * 1024.0)
 
     @property
+    def bw_peak_mem_measured(self) -> bool:
+        return self._bw_peak_mem_measured
+
+    @property
+    def bw_peak_mem_mb(self) -> float:
+        return float(self._bw_peak_mem_delta_bytes) / (1024.0 * 1024.0)
+
+    @property
+    def retained_activation_mb(self) -> float:
+        return float(self._retained_activation_bytes) / (1024.0 * 1024.0)
+
+    @property
     def param_mem_bytes(self) -> int:
-        """Total parameter memory in bytes."""
         total = 0
         for p in self.parameters(recurse=True):
             total += p.numel() * p.element_size()
         return total
 
     def forward(self, x, masking=False):
-        # ---- per-block forward memory profiling (MAST-style, device-local) ----
+        # ---- per-block forward memory profiling ----
         if self.to_cuda and not self._peak_mem_measured:
             torch.cuda.synchronize(self.device)
             torch.cuda.reset_peak_memory_stats(self.device)
@@ -277,13 +306,14 @@ class MaxCrossCorrelationBlock(nn.Module):
             x *= mask
         x, _ = torch.max(x, 2, keepdim=True)
 
-        # ---- finalise memory measurement ----
+        # ---- finalise forward memory measurement ----
         if self.to_cuda and not self._peak_mem_measured:
             torch.cuda.synchronize(self.device)
             self._peak_mem_delta_bytes = max(
                 int(torch.cuda.max_memory_allocated(self.device) - pre_mem), 0
             )
             self._peak_mem_measured = True
+            self._retained_activation_bytes = x.numel() * x.element_size()
 
         return x.transpose(2, 1)
 

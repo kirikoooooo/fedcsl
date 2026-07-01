@@ -1179,32 +1179,13 @@ def _server_collect_scale_memory(server_model, X_fed, device, batch_size,
     g_0 = float(np.min(g_r_raw)) * 0.5  # 保守估算
     g_r_marginal = np.maximum(g_r_raw - g_0, 1.0)
 
-    # ---- 打印采集结果表 ----
-    sep = "=" * 78
-    lines = [
-        "",
-        sep,
-        "[scale-memory] 服务端集中式显存采集结果",
-        f"  device: {device}  batch: {x.shape}  dataset: {dataset_tag}",
-        f"  {'Scale':>6s}  {'Length':>8s}  {'Raw(MB)':>10s}  {'Marg(MB)':>10s}  {'Param(MB)':>10s}",
-    ]
-    for s in range(num_scales):
-        lines.append(
-            f"  {s:>6d}  {lengths[s]:>8d}  {g_r_raw[s]:>10.2f}  "
-            f"{g_r_marginal[s]:>10.2f}  {per_scale_param_mb[s]:>10.2f}"
-        )
-    lines.append(f"  {'g_0':>6s}  {'—':>8s}  {g_0:>10.2f}  {'(base overhead)':>10s}")
-    if has_mix:
-        lines.append(f"  {'':>6s}  {'分支分解':>8s}  {'Eu/Co/CC (MB)'}")
-        for s in range(num_scales):
-            L = lengths[s]
-            eu = per_branch_peak["euclidean"].get(L, 0.0)
-            co = per_branch_peak["cosine"].get(L, 0.0)
-            cc = per_branch_peak["cross_corr"].get(L, 0.0)
-            lines.append(f"  {s:>6d}  {L:>8d}  {eu:>6.2f} / {co:>6.2f} / {cc:>6.2f}")
-    lines.append(sep)
-    out_str = "\n".join(lines)
-    print(out_str, flush=True)
+    # ---- 简短摘要（详细表格由 round-0 报告输出） ----
+    print(
+        f"[scale-memory] 采集完成: g_0={g_0:.1f}MB, "
+        f"g_r={[f'{v:.1f}' for v in g_r_marginal]} MB "
+        f"(共 {num_scales} 个 scale, device={device})",
+        flush=True,
+    )
 
     # ---- 持久化 ----
     info = {

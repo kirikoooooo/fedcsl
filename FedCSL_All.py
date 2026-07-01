@@ -703,6 +703,12 @@ def _spilter_knapsack_lagrangian_params(config, override_memory_budget=None):
 _KNAPSACK_CALIBRATION_DIR = os.path.join("data", "knapsack_calibration")
 os.makedirs(_KNAPSACK_CALIBRATION_DIR, exist_ok=True)
 
+# ---------------------------------------------------------------------------
+# 服务端集中式显存采集：持久化目录
+# ---------------------------------------------------------------------------
+_SCALE_MEMORY_DIR = os.path.join("data", "scale_memory")
+os.makedirs(_SCALE_MEMORY_DIR, exist_ok=True)
+
 
 def _calibrate_per_scale_memory_mb(X_fed, model, device, batch_size,
                                      in_channels, num_classes, dist_measure,
@@ -1037,6 +1043,199 @@ def _measure_server_gpu_peak_mb(server_model, sample_data, device):
     print(out_str, flush=True)
 
     return g_r_marginal, g_0
+
+
+def _server_collect_scale_memory(server_model, X_fed, device, batch_size,
+                                  dataset_tag, dist_measure="mix"):
+    """服务端集中式显存采集：逐尺度隔离测量 → 持久化到文件。
+
+    这是 FedCSL-Spilter 唯一的显存采集入口。后续训练直接从持久化文件
+    读取各尺度显存数据进行调度（knapsack / budget 分配）。
+
+    测量方法：
+      每个 scale 独立 reset peak → forward（启用 autograd，记录激活显存）
+      → max_memory_allocated。只使用服务端模型，不创建新模型实例。
+
+    持久化路径：``data/scale_memory/<dataset>_scale_memory.json``
+
+    Returns:
+        g_r: np.ndarray [R] — 每个 scale 的边际显存开销 (MB)
+        g_0: float — 基础开销估算 (MB)
+        info: dict — 完整采集信息（含 per_branch 分解、参数显存等）
+    """
+    import json as _json
+
+    if device is None or device.type != "cuda":
+        return None, 0.0, {}
+
+    cache_path = os.path.join(
+        _SCALE_MEMORY_DIR, f"{dataset_tag}_scale_memory.json"
+    )
+
+    # ---- 优先从持久化文件加载 ----
+    if os.path.isfile(cache_path):
+        try:
+            cached = _json.loads(open(cache_path, encoding="utf-8").read())
+            g_r = np.asarray(cached["g_r_mb"], dtype=np.float64)
+            g_0 = float(cached.get("g_0_mb", 0.0))
+            print(
+                f"[scale-memory] 从持久化文件加载: {cache_path}\n"
+                f"  g_0={g_0:.1f}MB, g_r={[f'{v:.1f}' for v in g_r]} MB",
+                flush=True,
+            )
+            return g_r, g_0, cached
+        except Exception:
+            print(f"[scale-memory] 缓存文件损坏，重新采集: {cache_path}", flush=True)
+
+    # ---- 服务端逐尺度采集 ----
+    print(
+        "[scale-memory] 服务端集中式显存采集（逐尺度隔离 forward）...",
+        flush=True,
+    )
+
+    # 采样数据
+    sample_data = None
+    for client_x in X_fed:
+        if len(client_x) >= batch_size:
+            sample_data = client_x[:batch_size]
+            break
+    if sample_data is None:
+        print("[scale-memory] WARNING: 无有效样本数据，跳过采集", flush=True)
+        return None, 0.0, {}
+
+    num_scales = len(server_model.shapelets_size_and_len)
+    lengths = list(server_model.shapelets_size_and_len.keys())
+    x = torch.from_numpy(np.asarray(sample_data, dtype=np.float32)).float().to(device)
+
+    # 临时启用 autograd（forward 期间需要记录激活用于反向传播的显存）
+    saved_grad_flags = {}
+    for pname, p in server_model.named_parameters():
+        saved_grad_flags[pname] = p.requires_grad
+        p.requires_grad_(True)
+
+    # 判断模型类型
+    has_mix = hasattr(server_model, 'shapelets_euclidean')
+
+    per_scale_raw_mb = []       # 每个 scale 独立 forward 的总峰值
+    per_scale_param_mb = []     # 每个 scale 的参数显存
+    per_branch_peak = {         # mix 模型：每个分支的 peak
+        "euclidean": {},
+        "cosine": {},
+        "cross_corr": {},
+    }
+
+    try:
+        for s in range(num_scales):
+            L = lengths[s]
+
+            # ---- 参数显存（该 scale 的所有参数） ----
+            try:
+                scale_sd = server_model.scale_state_dict(s, clone=False, cpu=False)
+                param_bytes = sum(
+                    int(v.numel()) * v.element_size()
+                    for v in scale_sd.values() if hasattr(v, "numel")
+                )
+            except Exception:
+                param_bytes = 0
+            per_scale_param_mb.append(float(param_bytes) / (1024.0 * 1024.0))
+
+            # ---- 峰值显存：reset → forward scale → measure ----
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats(device)
+
+            if has_mix:
+                server_model.shapelets_euclidean.forward_scale(x, s, masking=False)
+                server_model.shapelets_cosine.forward_scale(x, s, masking=False)
+                server_model.shapelets_cross_correlation.forward_scale(x, s, masking=False)
+            elif hasattr(server_model, 'shapelets_blocks'):
+                server_model.shapelets_blocks.forward_scale(x, s, masking=False)
+            else:
+                continue
+
+            torch.cuda.synchronize(device)
+            peak_mb = float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0)
+            per_scale_raw_mb.append(peak_mb)
+
+            # ---- 分分支 peak（mix 模型） ----
+            if has_mix:
+                for branch_name, branch in [
+                    ("euclidean", server_model.shapelets_euclidean),
+                    ("cosine", server_model.shapelets_cosine),
+                    ("cross_corr", server_model.shapelets_cross_correlation),
+                ]:
+                    if s < len(branch.blocks):
+                        blk = branch.blocks[s]
+                        per_branch_peak[branch_name][L] = blk.peak_mem_mb
+    finally:
+        for pname, p in server_model.named_parameters():
+            p.requires_grad_(saved_grad_flags.get(pname, False))
+        torch.cuda.empty_cache()
+
+    if len(per_scale_raw_mb) != num_scales:
+        print("[scale-memory] WARNING: 采集不完整，跳过持久化", flush=True)
+        return None, 0.0, {}
+
+    g_r_raw = np.asarray(per_scale_raw_mb, dtype=np.float64)
+    g_0 = float(np.min(g_r_raw)) * 0.5  # 保守估算
+    g_r_marginal = np.maximum(g_r_raw - g_0, 1.0)
+
+    # ---- 打印采集结果表 ----
+    sep = "=" * 78
+    lines = [
+        "",
+        sep,
+        "[scale-memory] 服务端集中式显存采集结果",
+        f"  device: {device}  batch: {x.shape}  dataset: {dataset_tag}",
+        f"  {'Scale':>6s}  {'Length':>8s}  {'Raw(MB)':>10s}  {'Marg(MB)':>10s}  {'Param(MB)':>10s}",
+    ]
+    for s in range(num_scales):
+        lines.append(
+            f"  {s:>6d}  {lengths[s]:>8d}  {g_r_raw[s]:>10.2f}  "
+            f"{g_r_marginal[s]:>10.2f}  {per_scale_param_mb[s]:>10.2f}"
+        )
+    lines.append(f"  {'g_0':>6s}  {'—':>8s}  {g_0:>10.2f}  {'(base overhead)':>10s}")
+    if has_mix:
+        lines.append(f"  {'':>6s}  {'分支分解':>8s}  {'Eu/Co/CC (MB)'}")
+        for s in range(num_scales):
+            L = lengths[s]
+            eu = per_branch_peak["euclidean"].get(L, 0.0)
+            co = per_branch_peak["cosine"].get(L, 0.0)
+            cc = per_branch_peak["cross_corr"].get(L, 0.0)
+            lines.append(f"  {s:>6d}  {L:>8d}  {eu:>6.2f} / {co:>6.2f} / {cc:>6.2f}")
+    lines.append(sep)
+    out_str = "\n".join(lines)
+    print(out_str, flush=True)
+
+    # ---- 持久化 ----
+    info = {
+        "dataset": dataset_tag,
+        "g_0_mb": g_0,
+        "g_r_mb": g_r_marginal.tolist(),
+        "g_r_raw_mb": g_r_raw.tolist(),
+        "param_mem_mb": per_scale_param_mb,
+        "scale_lengths": lengths,
+        "num_scales": num_scales,
+        "collected_at": time.time(),
+        "device": str(device),
+        "batch_size": batch_size,
+        "dist_measure": dist_measure,
+        "method": "server_isolated_forward",
+    }
+    if has_mix:
+        info["per_branch_peak_mb"] = {
+            k: {str(L): v for L, v in branch.items()}
+            for k, branch in per_branch_peak.items()
+        }
+
+    try:
+        open(cache_path, "w", encoding="utf-8").write(
+            _json.dumps(info, indent=2, ensure_ascii=False)
+        )
+        print(f"[scale-memory] 已持久化到: {cache_path}", flush=True)
+    except Exception as e:
+        print(f"[scale-memory] WARNING: 持久化失败: {e}", flush=True)
+
+    return g_r_marginal, g_0, info
 
 
 def _plan_topm_then_local_knapsack_client_scales(
@@ -1528,56 +1727,10 @@ def _train_client_worker(
                 loss_all = 0.0
                 loss_breakdown["total"] = 0.0
 
-        # ---- round-0 per-scale memory collection (MAST-style) ----
+        # 显存采集已改为服务端集中式（_server_collect_scale_memory），
+        # 客户端不再自行采集，直接从持久化文件 data/scale_memory/ 读取。
         memory_summary = None
         actual_peak_mem_mb = None
-        if round_idx == 0 and use_scale_split_comm:
-            try:
-                memory_summary = c.model.get_per_scale_memory_summary()
-            except Exception:
-                memory_summary = None
-
-            # 补齐未训练尺度的显存数据：对所有尺度跑一次 no_grad forward，
-            # 让每个模块都有 peak_mem_measured=True，确保统计表完整。
-            if device is not None and device.type == "cuda" and len(X_fed[idx]) >= batch_size:
-                try:
-                    num_scales = len(c.model.shapelets_size_and_len)
-                    all_scales = set(range(num_scales))
-                    trained_scales = set(
-                        i for i, L in enumerate(c.model.shapelets_size_and_len.keys())
-                        if memory_summary
-                        and memory_summary.get("per_scale_measured", {}).get(L, False)
-                    )
-                    missing_scales = sorted(all_scales - trained_scales)
-                    if missing_scales:
-                        sample_x = torch.from_numpy(
-                            np.asarray(X_fed[idx][:batch_size], dtype=np.float32)
-                        ).float().to(device)
-                        with torch.no_grad():
-                            if hasattr(c.model, 'shapelets_euclidean'):
-                                # Mix-distance 模型：每个 scale 要过 3 个分支
-                                for s in missing_scales:
-                                    c.model.shapelets_euclidean.forward_scale(sample_x, s, masking=False)
-                                    c.model.shapelets_cosine.forward_scale(sample_x, s, masking=False)
-                                    c.model.shapelets_cross_correlation.forward_scale(sample_x, s, masking=False)
-                            elif hasattr(c.model, 'shapelets_blocks'):
-                                for s in missing_scales:
-                                    c.model.shapelets_blocks.forward_scale(sample_x, s, masking=False)
-                        # 重新收集（现在所有 scale 都有数据了）
-                        try:
-                            memory_summary = c.model.get_per_scale_memory_summary()
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-            # 实测：整个 client 训练的 GPU 峰值显存（非模块累加）
-            if device is not None and device.type == "cuda":
-                try:
-                    torch.cuda.synchronize(device)
-                    actual_peak_mem_mb = float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0)
-                except Exception:
-                    actual_peak_mem_mb = None
 
         if _SPILTER_DEBUG and use_scale_split_comm:
             scale_ids = result.get("scale_indices") or []
@@ -2329,26 +2482,24 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         if args.description:
             config['description'] = args.description + "_knapsack"
 
-    # ----- 服务端逐尺度显存测量（正式训练前，每个 scale 隔离 forward 一次） -----
+    # ----- 服务端集中式显存采集（逐尺度隔离 forward → 持久化到文件） -----
+    # 后续训练直接从 data/scale_memory/<dataset>_scale_memory.json 读取
     server_scale_g_r = None
     server_scale_g_0 = 0.0
+    server_scale_mem_info = {}
     if _uses_scale_split_algo(algo) and server_device.type == "cuda":
-        _sample_data = None
-        for _cx in X_fed:
-            if len(_cx) >= batch_size:
-                _sample_data = _cx[:batch_size]
-                break
-        if _sample_data is not None:
-            _g_r_marg, _g_0_m = _measure_server_gpu_peak_mb(
-                server.model, _sample_data, server_device
-            )
-            if _g_r_marg is not None:
-                server_scale_g_r = _g_r_marg
-                server_scale_g_0 = _g_0_m
-                # 注入 config，knapsack 路径会从中读取 scale_memory_costs_mb
-                _sp_cfg = config.setdefault("spilter", {})
-                _sp_cfg["scale_memory_costs_mb"] = server_scale_g_r.tolist()
-                _sp_cfg["base_memory_mb"] = float(server_scale_g_0)
+        _g_r_marg, _g_0_m, _mem_info = _server_collect_scale_memory(
+            server.model, X_fed, server_device, batch_size,
+            dataset_tag=dataset, dist_measure=dist_measure,
+        )
+        if _g_r_marg is not None:
+            server_scale_g_r = _g_r_marg
+            server_scale_g_0 = _g_0_m
+            server_scale_mem_info = _mem_info
+            # 注入 config，knapsack 路径会从中读取 scale_memory_costs_mb
+            _sp_cfg = config.setdefault("spilter", {})
+            _sp_cfg["scale_memory_costs_mb"] = server_scale_g_r.tolist()
+            _sp_cfg["base_memory_mb"] = float(server_scale_g_0)
 
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
@@ -2559,179 +2710,89 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         }
         train_stage_sec = time.perf_counter() - train_stage_t0
 
-        # ----- round-0 per-scale memory report (client-level, pick strongest client) -----
+        # ----- round-0: 服务端集中式显存报告（基于 _server_collect_scale_memory 结果） -----
         if round == 0 and use_scale_split_comm:
-            # Collect all client memory summaries, pick the "strongest" one
-            # (most measured scales) for display.  Differences between clients
-            # are expected because each client only trains its assigned scales.
-            all_mem_results = []
-            for result_list in [future.result() for future in futures]:
-                for result in result_list:
-                    if result.get("memory_summary"):
-                        all_mem_results.append(result)
+            per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client") if cached_knapsack_info else None
 
-            if all_mem_results:
-                per_client_budgets = cached_knapsack_info.get("_budget_mb_per_client") if cached_knapsack_info else None
+            # --- 打印服务端采集的逐尺度显存表 ---
+            if server_scale_g_r is not None and server_scale_mem_info:
+                has_br = "per_branch_peak_mb" in server_scale_mem_info
+                sep = "=" * 94 if has_br else "=" * 72
+                dash = "-" * 94 if has_br else "-" * 72
+                lengths = server_scale_mem_info.get("scale_lengths", [])
+                param_mem = server_scale_mem_info.get("param_mem_mb", [])
 
-                # --- Print per-scale memory table for EVERY client ---
-                for result in sorted(all_mem_results, key=lambda r: r["idx"]):
-                    mem = result["memory_summary"]
-                    idx = result["idx"]
-                    scales = result.get("scale_indices", [])
-                    per_branch = mem.get("per_branch")
-                    has_br = bool(per_branch)
-                    n_measured = sum(1 for v in mem.get("per_scale_measured", {}).values() if v)
-                    acc_module_mb = sum(
-                        mem.get("total_mem_mb", {}).get(L, 0.0)
-                        for L, measured in mem.get("per_scale_measured", {}).items()
-                        if measured
+                lines_out = [
+                    "",
+                    sep,
+                    "[spilter-memory-budget] 服务端集中式显存采集结果（data/scale_memory/{}_scale_memory.json）".format(
+                        dataset
+                    ),
+                    "  g_0={:.1f}MB  g_r={} MB".format(
+                        server_scale_g_0,
+                        [f"{v:.1f}" for v in server_scale_g_r],
+                    ),
+                    dash,
+                ]
+
+                if has_br:
+                    br_peak = server_scale_mem_info["per_branch_peak_mb"]
+                    lines_out.append(
+                        f"{'Scale':>6s}  {'Length':>8s}  {'Eu(MB)':>8s}  {'Co(MB)':>8s}  {'CC(MB)':>8s}  "
+                        f"{'Marg(MB)':>10s}  {'Param(MB)':>10s}"
                     )
-                    c_budget = per_client_budgets[idx] if per_client_budgets and idx < len(per_client_budgets) else None
-                    actual_peak = result.get("actual_peak_mem_mb")
+                    for s, L in enumerate(lengths):
+                        L_str = str(L)
+                        eu = br_peak.get("euclidean", {}).get(L_str, 0.0)
+                        co = br_peak.get("cosine", {}).get(L_str, 0.0)
+                        cc = br_peak.get("cross_corr", {}).get(L_str, 0.0)
+                        param = param_mem[s] if s < len(param_mem) else 0.0
+                        lines_out.append(
+                            f"{s:>6d}  {L:>8d}  {eu:>8.2f}  {co:>8.2f}  {cc:>8.2f}  "
+                            f"{server_scale_g_r[s]:>10.2f}  {param:>10.2f}"
+                        )
+                else:
+                    lines_out.append(
+                        f"{'Scale':>6s}  {'Length':>8s}  {'Marg(MB)':>10s}  {'Param(MB)':>10s}"
+                    )
+                    for s, L in enumerate(lengths):
+                        param = param_mem[s] if s < len(param_mem) else 0.0
+                        lines_out.append(
+                            f"{s:>6d}  {L:>8d}  {server_scale_g_r[s]:>10.2f}  {param:>10.2f}"
+                        )
+                lines_out.append(sep)
+                out_str = "\n".join(lines_out)
+                print(out_str, flush=True)
+                with open(logTxt, mode="a+", encoding="utf-8") as f:
+                    f.write(out_str + "\n")
 
-                    if n_measured == 0:
-                        continue
-
-                    sep = "=" * 94 if has_br else "=" * 72
-                    dash = "-" * 94 if has_br else "-" * 72
-
-                    # Build budget + measured line
-                    budget_str = f"预算={c_budget:.1f}MB" if c_budget is not None and c_budget > 0 else "预算=无"
-                    acc_str = f"累加={acc_module_mb:.1f}MB"
-                    measured_str = f"实测={actual_peak:.1f}MB" if actual_peak is not None else "实测=N/A"
+            # --- 基于服务端数据的 per-client 累加显存（用于预算对比） ---
+            if server_scale_g_r is not None and client_scale_plans is not None:
+                _per_client_acc = {}
+                per_client_lines = []
+                for cid, scales in enumerate(client_scale_plans):
+                    c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
+                    acc = server_scale_g_0 + sum(
+                        server_scale_g_r[s] for s in scales if 0 <= s < len(server_scale_g_r)
+                    )
+                    _per_client_acc[cid] = acc
+                    budget_tag = f"预算={c_budget:.0f}MB" if c_budget is not None and c_budget > 0 else "预算=无"
+                    acc_tag = f"累加={acc:.1f}MB"
                     acc_vs_budget = ""
                     if c_budget is not None and c_budget > 0:
-                        acc_pct = acc_module_mb / c_budget * 100
-                        acc_vs_budget = f" (累加/预算={acc_pct:.0f}%)"
-                    measured_vs_budget = ""
-                    if c_budget is not None and c_budget > 0 and actual_peak is not None:
-                        measured_pct = actual_peak / c_budget * 100
-                        measured_vs_budget = f" (实测/预算={measured_pct:.0f}%)"
-
-                    # 服务端参考值：对该 client 所选 scales 按 g_r 累加
-                    server_ref_str = ""
-                    if server_scale_g_r is not None and scales:
-                        server_sum = server_scale_g_0 + sum(
-                            server_scale_g_r[s] for s in scales if 0 <= s < len(server_scale_g_r)
-                        )
-                        server_ref_str = f" 服务端参考={server_sum:.1f}MB"
-
-                    lines_out = [
-                        "",
-                        sep,
-                        "[spilter-memory-budget] client {} — {} of {} scales trained".format(
-                            idx, n_measured, len(mem.get("total_mem_mb", {}))
-                        ),
-                        "  scales: {} | {} | {} | {}{}{}{}".format(
-                            sorted(scales) if scales else "?",
-                            acc_str,
-                            measured_str,
-                            budget_str,
-                            acc_vs_budget,
-                            measured_vs_budget,
-                            server_ref_str,
-                        ),
-                    ]
-                    if actual_peak is not None and c_budget is not None and c_budget > 0 and actual_peak > c_budget:
-                        lines_out.append(
-                            "  ⚠ WARNING: 实测峰值 {:.1f} MB 超出预算 {:.1f} MB "
-                            "达 {:.1f} MB ({:.0f}%) — OOM 风险!".format(
-                                actual_peak, c_budget,
-                                actual_peak - c_budget,
-                                (actual_peak / c_budget - 1.0) * 100,
-                            )
-                        )
-                    if has_br:
-                        lines_out.append("  -> mix: Eu/Co/CC")
-                    lines_out.append(dash)
-
-                    sorted_lengths = sorted(mem.get("total_mem_mb", {}).keys())
-
-                    if has_br:
-                        lines_out.append(
-                            f"{'Scale':>6s}  {'Eu(MB)':>8s}  {'Co(MB)':>8s}  {'CC(MB)':>8s}  "
-                            f"{'SumPeak':>9s}  {'Param':>8s}  {'Total':>8s}"
-                        )
-                        eu_data = per_branch.get("euclidean", {})
-                        co_data = per_branch.get("cosine", {})
-                        cc_data = per_branch.get("cross_corr", {})
-                        sum_eu = 0.0; sum_co = 0.0; sum_cc = 0.0; sum_param = 0.0
-                        for L in sorted_lengths:
-                            eu_mb = eu_data.get("peak", {}).get(L, 0.0)
-                            co_mb = co_data.get("peak", {}).get(L, 0.0)
-                            cc_mb = cc_data.get("peak", {}).get(L, 0.0)
-                            peak_sum = eu_mb + co_mb + cc_mb
-                            param_mb = mem.get("param_mem_mb", {}).get(L, 0.0)
-                            total_mb = peak_sum + param_mb
-                            sum_eu += eu_mb; sum_co += co_mb; sum_cc += cc_mb; sum_param += param_mb
-                            lines_out.append(
-                                        f"{L:>6d}  {eu_mb:>8.2f}  {co_mb:>8.2f}  {cc_mb:>8.2f}  "
-                                        f"{peak_sum:>9.2f}  {param_mb:>8.2f}  {total_mb:>8.2f}"
-                            )
-                        sum_peak = sum_eu + sum_co + sum_cc
-                        sum_total = sum_peak + sum_param
-                        lines_out.append(dash)
-                        lines_out.append(
-                            f"{'SUM':>6s}  {sum_eu:>8.2f}  {sum_co:>8.2f}  {sum_cc:>8.2f}  "
-                            f"{sum_peak:>9.2f}  {sum_param:>8.2f}  {sum_total:>8.2f}"
-                        )
-                        if sum_peak > 0:
-                            lines_out.append(
-                                        f"{'%':>6s}  {sum_eu/sum_peak*100:>7.1f}%  {sum_co/sum_peak*100:>7.1f}%  "
-                                        f"{sum_cc/sum_peak*100:>7.1f}%"
-                            )
-                    else:
-                        lines_out.append(
-                            f"{'Scale Length':>14s}  {'Peak(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}"
-                        )
-                        total_peak = 0.0; total_param = 0.0
-                        for L in sorted_lengths:
-                            peak_mb = mem.get("peak_mem_mb", {}).get(L, 0.0)
-                            param_mb = mem.get("param_mem_mb", {}).get(L, 0.0)
-                            total_mb = mem.get("total_mem_mb", {}).get(L, 0.0)
-                            total_peak += peak_mb; total_param += param_mb
-                            lines_out.append(
-                                        f"{L:>14d}  {peak_mb:>10.2f}  {param_mb:>10.2f}  {total_mb:>10.2f}"
-                            )
-                        total_all = total_peak + total_param
-                        lines_out.append(dash)
-                        lines_out.append(
-                            f"{'SUM':>14s}  {total_peak:>10.2f}  {total_param:>10.2f}  {total_all:>10.2f}"
-                        )
-                    lines_out.append(sep)
-
-                    out_str = "\n".join(lines_out)
-                    print(out_str, flush=True)
-                    with open(logTxt, mode="a+", encoding="utf-8") as f:
-                        f.write(out_str + "\n")
-
-                # --- Scale coverage summary ---
-                scale_cov = {}
-                for r in all_mem_results:
-                    for L, measured in r["memory_summary"].get("per_scale_measured", {}).items():
-                        if measured:
-                            scale_cov[L] = scale_cov.get(L, 0) + 1
-                cov_str = " ".join(
-                    f"L{L}:{scale_cov.get(L, 0)}/{len(all_mem_results)}"
-                    for L in sorted(scale_cov.keys())
-                )
-                cov_line = "\n[spilter-memory-budget] scale coverage across {} clients: {}\n".format(
-                    len(all_mem_results), cov_str
+                        acc_vs_budget = f" (累加/预算={acc/c_budget*100:.0f}%)"
+                    per_client_lines.append(
+                        f"c{cid}: scales={sorted(scales)} | {acc_tag} | {budget_tag}{acc_vs_budget}"
+                    )
+                cov_line = (
+                    "\n[spilter-memory-budget] per-client 显存累加（基于服务端采集数据）:\n  "
+                    + "\n  ".join(per_client_lines)
+                    + "\n"
                 )
                 print(cov_line, flush=True)
                 with open(logTxt, mode="a+", encoding="utf-8") as f:
                     f.write(cov_line + "\n")
 
-                # Store per-client accumulated memory for subsequent round display
-                _per_client_acc = {}
-                for r in all_mem_results:
-                    mem = r["memory_summary"]
-                    acc = sum(
-                        mem.get("total_mem_mb", {}).get(L, 0.0)
-                        for L, measured in mem.get("per_scale_measured", {}).items()
-                        if measured
-                    )
-                    _per_client_acc[r["idx"]] = acc
                 if cached_knapsack_info is None:
                     cached_knapsack_info = {}
                 cached_knapsack_info["_per_client_acc_mem_mb"] = _per_client_acc

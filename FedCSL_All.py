@@ -1175,15 +1175,32 @@ def _server_collect_scale_memory(server_model, X_fed, device, batch_size,
         print("[scale-memory] WARNING: 采集不完整，跳过持久化", flush=True)
         return None, 0.0, {}
 
-    g_r_raw = np.asarray(per_scale_raw_mb, dtype=np.float64)
-    g_0 = float(np.min(g_r_raw)) * 0.5  # 保守估算
-    g_r_marginal = np.maximum(g_r_raw - g_0, 1.0)
+    # ---- 基于分支分解计算 g_r（Eu+Co+CC 之和 = 逐尺度真实显存开销） ----
+    # 单次隔离 forward 的 max_memory_allocated 只记录最后一个分支的峰值，
+    # 偏小不可用。分支分解中每个 block 独立测量 forward 峰值 delta，
+    # 三者累加才是训练该 scale 时 GPU 实际需要的显存。
+    if has_mix:
+        branch_sum_mb = []
+        for s in range(num_scales):
+            L = lengths[s]
+            eu = per_branch_peak["euclidean"].get(L, 0.0)
+            co = per_branch_peak["cosine"].get(L, 0.0)
+            cc = per_branch_peak["cross_corr"].get(L, 0.0)
+            branch_sum_mb.append(eu + co + cc)
+        g_r_raw = np.asarray(branch_sum_mb, dtype=np.float64)
+        # g_0 取最小分支峰值之和的一半作为保守基础开销
+        g_0 = float(np.min(g_r_raw)) * 0.5
+        g_r_marginal = g_r_raw  # 分支之和已是边际开销，无需再减 g_0
+    else:
+        g_r_raw = np.asarray(per_scale_raw_mb, dtype=np.float64)
+        g_0 = float(np.min(g_r_raw)) * 0.5
+        g_r_marginal = np.maximum(g_r_raw - g_0, 1.0)
 
     # ---- 简短摘要（详细表格由 round-0 报告输出） ----
     print(
         f"[scale-memory] 采集完成: g_0={g_0:.1f}MB, "
         f"g_r={[f'{v:.1f}' for v in g_r_marginal]} MB "
-        f"(共 {num_scales} 个 scale, device={device})",
+        f"(共 {num_scales} 个 scale, method=branch_decomposition, device={device})",
         flush=True,
     )
 
@@ -1200,7 +1217,7 @@ def _server_collect_scale_memory(server_model, X_fed, device, batch_size,
         "device": str(device),
         "batch_size": batch_size,
         "dist_measure": dist_measure,
-        "method": "server_isolated_forward",
+        "method": "branch_decomposition" if has_mix else "server_isolated_forward",
     }
     if has_mix:
         info["per_branch_peak_mb"] = {
@@ -2698,10 +2715,11 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             # --- 打印服务端采集的逐尺度显存表 ---
             if server_scale_g_r is not None and server_scale_mem_info:
                 has_br = "per_branch_peak_mb" in server_scale_mem_info
-                sep = "=" * 94 if has_br else "=" * 72
-                dash = "-" * 94 if has_br else "-" * 72
+                sep = "=" * 106 if has_br else "=" * 72
+                dash = "-" * 106 if has_br else "-" * 72
                 lengths = server_scale_mem_info.get("scale_lengths", [])
                 param_mem = server_scale_mem_info.get("param_mem_mb", [])
+                g_0_show = float(server_scale_g_0)
 
                 lines_out = [
                     "",
@@ -2719,19 +2737,49 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 if has_br:
                     br_peak = server_scale_mem_info["per_branch_peak_mb"]
                     lines_out.append(
-                        f"{'Scale':>6s}  {'Length':>8s}  {'Eu(MB)':>8s}  {'Co(MB)':>8s}  {'CC(MB)':>8s}  "
-                        f"{'Marg(MB)':>10s}  {'Param(MB)':>10s}"
+                        f"{'Scale':>14s}  {'Length':>8s}  {'Eu(MB)':>8s}  {'Co(MB)':>8s}  {'CC(MB)':>8s}  "
+                        f"{'Sum(MB)':>10s}  {'Param(MB)':>10s}  {'累加(MB)':>10s}"
                     )
+                    sum_eu = 0.0; sum_co = 0.0; sum_cc = 0.0
+                    sum_param = 0.0; sum_branch = 0.0
+                    running_acc = g_0_show  # 累加从 g_0 开始
                     for s, L in enumerate(lengths):
                         L_str = str(L)
                         eu = br_peak.get("euclidean", {}).get(L_str, 0.0)
                         co = br_peak.get("cosine", {}).get(L_str, 0.0)
                         cc = br_peak.get("cross_corr", {}).get(L_str, 0.0)
                         param = param_mem[s] if s < len(param_mem) else 0.0
+                        scale_sum = eu + co + cc
+                        running_acc += scale_sum
+                        sum_eu += eu; sum_co += co; sum_cc += cc
+                        sum_param += param; sum_branch += scale_sum
                         lines_out.append(
-                            f"{s:>6d}  {L:>8d}  {eu:>8.2f}  {co:>8.2f}  {cc:>8.2f}  "
-                            f"{server_scale_g_r[s]:>10.2f}  {param:>10.2f}"
+                            f"{s:>14d}  {L:>8d}  {eu:>8.2f}  {co:>8.2f}  {cc:>8.2f}  "
+                            f"{scale_sum:>10.2f}  {param:>10.2f}  {running_acc:>10.2f}"
                         )
+                    # 累加合计行
+                    lines_out.append(dash)
+                    lines_out.append(
+                        f"{'SUM':>14s}  {'':>8s}  {sum_eu:>8.2f}  {sum_co:>8.2f}  {sum_cc:>8.2f}  "
+                        f"{sum_branch:>10.2f}  {sum_param:>10.2f}"
+                    )
+                    if sum_branch > 0:
+                        lines_out.append(
+                            f"{'%':>14s}  {'':>8s}  {sum_eu/sum_branch*100:>7.1f}%  "
+                            f"{sum_co/sum_branch*100:>7.1f}%  "
+                            f"{sum_cc/sum_branch*100:>7.1f}%"
+                        )
+                    lines_out.append(
+                        f"{'g_0=' + f'{g_0_show:.1f}':>14s}  {'(base)':>8s}  "
+                        f"{'':>8s}  {'':>8s}  {'':>8s}  "
+                        f"{'':>10s}  {'':>10s}  {g_0_show:>10.2f}"
+                    )
+                    total_peak = g_0_show + sum_branch
+                    lines_out.append(
+                        f"{'TOTAL':>14s}  {'(g_0+Σ)':>8s}  "
+                        f"{'':>8s}  {'':>8s}  {'':>8s}  "
+                        f"{'':>10s}  {'':>10s}  {total_peak:>10.2f}"
+                    )
                 else:
                     lines_out.append(
                         f"{'Scale':>6s}  {'Length':>8s}  {'Marg(MB)':>10s}  {'Param(MB)':>10s}"

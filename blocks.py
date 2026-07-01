@@ -180,10 +180,6 @@ class MaxCosineSimilarityBlock(nn.Module):
         # Retained activation size
         self._retained_activation_bytes: int = 0
 
-        # Register backward hooks
-        self.register_full_backward_pre_hook(_bw_pre_hook)
-        self.register_full_backward_hook(_bw_post_hook)
-
         # if not registered as parameter, the optimizer will not be able to see the parameters
         shapelets = torch.randn(self.in_channels, self.num_shapelets, self.shapelets_size, requires_grad=True,
                                 dtype=torch.float)
@@ -283,10 +279,6 @@ class MaxCrossCorrelationBlock(nn.Module):
         self._bw_pre_mem: int = 0
         # Retained activation size
         self._retained_activation_bytes: int = 0
-
-        # Register backward hooks
-        self.register_full_backward_pre_hook(_bw_pre_hook)
-        self.register_full_backward_hook(_bw_post_hook)
 
         if self.to_cuda:
             self.to(self.device)

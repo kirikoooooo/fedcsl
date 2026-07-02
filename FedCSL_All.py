@@ -863,7 +863,7 @@ def _collect_scale_memory_table(server_model, sample_data, device):
             ret = blk.retained_activation_mb
             par = float(blk.param_mem_bytes) / (1024.0 * 1024.0)
             K = blk.shapelets_size
-            C = blk.in_channels
+            C = getattr(blk, 'in_channels', x.shape[1])
             s_num = blk.num_shapelets
             windows = max(seq_len - K + 1, 1)
             if blk_name == "eu":

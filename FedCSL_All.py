@@ -431,6 +431,144 @@ def _precompute_client_scale_scores(X_fed, model, beta, device=None, batch_size=
     return client_scores
 
 
+def _compute_client_nsv_scores(
+    period_scores,
+    scale_costs,
+    coverage_hist,
+    cum_loss,
+    cum_total,
+    round_idx,
+    *,
+    alpha_base=0.55,
+    beta_base=0.30,
+    gamma_max=0.15,
+    warmup_rounds=10,
+    coverage_target=None,
+    tau=0.3,
+):
+    """L1-A+: NSV + Coverage Boost + Loss Contribution.
+
+    client_score[c][s] = α × NSV_norm[s] + β × cov_boost[s] + γ × loss_contrib[c]
+
+    Three components all in [0,1], α+β+γ=1 (γ annealed from 0).
+
+    Returns:
+        client_scores: list[np.ndarray]  (numClients × R)
+        info: dict with per-component arrays for printing
+    """
+    num_clients = len(period_scores)
+    num_scales = len(period_scores[0]) if num_clients > 0 else 0
+    if num_scales <= 0:
+        return [], {}
+    scale_costs = np.asarray(scale_costs, dtype=np.float64)
+    gamma = min(gamma_max, gamma_max * round_idx / max(warmup_rounds, 1))
+    scale = 1.0 - gamma
+    alpha_eff = alpha_base * scale
+    beta_eff = beta_base * scale
+    if coverage_hist is not None:
+        coverage_hist = np.asarray(coverage_hist, dtype=np.float64)
+    else:
+        coverage_hist = np.zeros(num_scales, dtype=np.float64)
+    if coverage_target is None:
+        coverage_target = max(2, int(np.ceil(num_clients / num_scales)))
+    target_arr = np.full(num_scales, float(coverage_target), dtype=np.float64)
+
+    # ── 1) NSV per scale (global, shared by all clients) ──
+    global_nsv_norm = np.zeros(num_scales, dtype=np.float64)
+    # Use mean period_score across clients as global reference
+    for s in range(num_scales):
+        mean_score = np.mean([float(period_scores[c][s]) for c in range(num_clients)])
+        nsv = mean_score / max(float(scale_costs[s]), 1e-6)
+        global_nsv_norm[s] = nsv
+
+    nsv_min = global_nsv_norm.min()
+    nsv_max = global_nsv_norm.max()
+    if nsv_max > nsv_min:
+        global_nsv_norm = (global_nsv_norm - nsv_min) / (nsv_max - nsv_min)
+    else:
+        global_nsv_norm = np.ones(num_scales, dtype=np.float64) * 0.5
+
+    # ── 2) Coverage boost per scale (global) ──
+    diff = (target_arr - coverage_hist) / max(float(coverage_target), 1.0)
+    cov_boost = 1.0 / (1.0 + np.exp(-diff / tau))
+
+    # ── 3) Loss contribution per client ──
+    loss_contrib = np.ones(num_clients, dtype=np.float64) * 0.5  # default
+    if cum_loss is not None and cum_total is not None:
+        for c in range(num_clients):
+            if cum_total[c] > 0:
+                loss_contrib[c] = float(cum_loss[c]) / float(cum_total[c])
+    lc_min = loss_contrib.min()
+    lc_max = loss_contrib.max()
+    if lc_max > lc_min:
+        loss_contrib = (loss_contrib - lc_min) / (lc_max - lc_min)
+
+    # ── Fuse ──
+    client_scores = []
+    for c in range(num_clients):
+        raw = period_scores[c]
+        # per-client NSV (uses client's own period_score / global marginal)
+        c_nsv = np.zeros(num_scales, dtype=np.float64)
+        for s in range(num_scales):
+            c_nsv[s] = float(raw[s]) / max(float(scale_costs[s]), 1e-6)
+        c_min = c_nsv.min()
+        c_max = c_nsv.max()
+        if c_max > c_min:
+            c_nsv_norm = (c_nsv - c_min) / (c_max - c_min)
+        else:
+            c_nsv_norm = np.ones(num_scales, dtype=np.float64) * 0.5
+
+        score = alpha_eff * c_nsv_norm + beta_eff * cov_boost + gamma * loss_contrib[c]
+        score = np.clip(score, 0.0, 1.0)
+        client_scores.append(score.astype(np.float32))
+
+    info = {
+        "alpha_eff": alpha_eff,
+        "beta_eff": beta_eff,
+        "gamma": gamma,
+        "nsv_norm": global_nsv_norm,
+        "cov_boost": cov_boost,
+        "loss_contrib": loss_contrib,
+        "coverage_target": float(coverage_target),
+    }
+    return client_scores, info
+
+
+def _format_nsv_breakdown(nsv_info, client_scores, scale_costs, logTxt=None):
+    """Format NSV score breakdown table for logging."""
+    lines = []
+    sep = "=" * 90
+    lines.append("")
+    lines.append(sep)
+    lines.append(f"[nsv-score] L1-A+ 尺度得分分解 (α={nsv_info['alpha_eff']:.3f} β={nsv_info['beta_eff']:.3f} γ={nsv_info['gamma']:.3f})")
+    lines.append(dash := "-" * 90)
+
+    # Per-scale basis: NSV and Coverage
+    lines.append(f"  {'Scale':>6s}  {'cost(MB)':>10s}  {'NSV':>10s}  {'CovBoost':>10s}")
+    nsv = nsv_info["nsv_norm"]
+    cov = nsv_info["cov_boost"]
+    for s in range(len(nsv)):
+        lines.append(f"  {s:>6d}  {scale_costs[s]:>10.2f}  {nsv[s]:>10.4f}  {cov[s]:>10.4f}")
+    lines.append(dash)
+
+    # Per-client: Loss contribution + sample scores
+    lc = nsv_info["loss_contrib"]
+    num_clients = len(client_scores)
+    num_scales = len(nsv)
+    R_show = min(num_scales, 8)
+    header = f"  {'Client':>8s}  {'LossContr':>10s}  " + "  ".join(f"{'s'+str(i):>7s}" for i in range(R_show))
+    lines.append(header)
+    for c in range(num_clients):
+        score_str = "  ".join(f"{client_scores[c][s]:>7.4f}" for s in range(R_show))
+        lines.append(f"  {f'c{c}':>8s}  {lc[c]:>10.4f}  " + score_str)
+    lines.append(sep)
+    out = "\n".join(lines)
+    if logTxt:
+        with open(logTxt, mode="a+", encoding="utf-8") as f:
+            f.write(out + "\n")
+    return out
+
+
 def _normalize_positive_costs(values):
     values = np.asarray(values, dtype=np.float32)
     if values.size == 0:
@@ -2240,6 +2378,11 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     if not w_locals:
         w_locals = [_state_dict_to_cpu(c.model.state_dict()) for c in clientList]
 
+    # ── L1-A+: NSV score tracking ──
+    nsv_recalc_interval = 10  # recompute scores + replan every N rounds
+    client_cum_loss = np.zeros(numClient, dtype=np.float64)
+    client_cum_total = np.zeros(numClient, dtype=np.float64)
+    cached_nsv_info = None  # score breakdown from last recompute
     cached_client_scale_scores = None
     cached_client_scale_plans = None
     cached_scale_hist = None
@@ -2293,6 +2436,21 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 device=server_device,
                 batch_size=batch_size,
             )
+            # Save raw period scores for NSV periodic replan
+            cached_raw_period_scores = cached_client_scale_scores
+            # ── L1-A+: NSV enhance raw period scores ──
+            if scale_costs is not None and _uses_scale_split_algo(algo):
+                _nsv_scores, cached_nsv_info = _compute_client_nsv_scores(
+                    cached_client_scale_scores,
+                    scale_costs=scale_costs,
+                    coverage_hist=cached_scale_hist,
+                    cum_loss=client_cum_loss,
+                    cum_total=client_cum_total,
+                    round_idx=0,
+                )
+                cached_client_scale_scores = _nsv_scores
+                nsv_lines = _format_nsv_breakdown(cached_nsv_info, cached_client_scale_scores, scale_costs, logTxt)
+                print(nsv_lines, flush=True)
             if _uses_scale_split_algo(algo) and spilter_allocation_mode == "global_score_random_single":
                 cached_client_scale_plans, cached_scale_hist, cached_global_scale_probs = (
                     _plan_global_score_random_single_client_scales(
@@ -2659,6 +2817,63 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 flush=True,
             )
         round_total_sec = time.perf_counter() - round_t0
+
+        # ── L1-A+: update cum_loss / cum_total ──
+        for idx in range(numClient):
+            if client_losses[idx] > 0:
+                client_cum_loss[idx] += client_losses[idx]
+                client_cum_total[idx] += 1.0
+
+        # ── L1-A+: periodic NSV replan every nsv_recalc_interval rounds ──
+        if (round > 0 and round % nsv_recalc_interval == 0 and cached_client_scale_scores is not None
+                and scale_costs is not None and _uses_scale_split_algo(algo)):
+            _nsv_scores, cached_nsv_info = _compute_client_nsv_scores(
+                cached_raw_period_scores,
+                scale_costs=scale_costs,
+                coverage_hist=cached_scale_hist,
+                cum_loss=client_cum_loss,
+                cum_total=client_cum_total,
+                round_idx=round,
+            )
+            cached_client_scale_scores = _nsv_scores  # update for workers to use latest NSV
+            # Rerun planning with updated scores
+            if spilter_allocation_mode == "knapsack_lagrangian":
+                knap_params = _spilter_knapsack_lagrangian_params(config, override_memory_budget=args.spilter_memory_budget)
+                cached_client_scale_plans, cached_scale_hist, cached_knapsack_info = (
+                    _plan_topm_then_local_knapsack_client_scales(
+                        cached_client_scale_scores,
+                        server_model=server.model,
+                        top_m=4,
+                        X_fed=X_fed,
+                        device=server_device,
+                        batch_size=batch_size,
+                        seed=original_seed or 42,
+                        in_channels=n_channels,
+                        num_classes=num_classes,
+                        dist_measure=dist_measure,
+                        lr=lr, wd=wd,
+                        dataset_tag=dataset,
+                        **knap_params,
+                    )
+                )
+            elif spilter_allocation_mode == "local_score_topm":
+                local_top_m = _spilter_local_top_m(config, default=4)
+                cached_client_scale_plans, cached_scale_hist = _plan_local_score_topm_client_scales(
+                    cached_client_scale_scores, top_m=local_top_m,
+                )
+            elif spilter_allocation_mode == "local_score_random_topm":
+                local_top_m = _spilter_local_top_m(config, default=4)
+                cached_client_scale_plans, cached_scale_hist = _plan_local_score_random_topm_client_scales(
+                    cached_client_scale_scores, top_m=local_top_m, seed=original_seed or 42,
+                )
+            _nsv_lines = _format_nsv_breakdown(cached_nsv_info, cached_client_scale_scores, scale_costs, logTxt)
+            replan_msg = (
+                f"[round {round}] NSV replan: α={cached_nsv_info['alpha_eff']:.3f} "
+                f"β={cached_nsv_info['beta_eff']:.3f} γ={cached_nsv_info['gamma']:.3f} "
+                f"coverage={cached_scale_hist.tolist() if cached_scale_hist is not None else 'N/A'}"
+            )
+            print(replan_msg, flush=True)
+            print(_nsv_lines, flush=True)
 
         print(
             f"[round {round}] timing train={train_stage_sec:.3f}s "

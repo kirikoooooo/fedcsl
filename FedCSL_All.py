@@ -431,146 +431,130 @@ def _precompute_client_scale_scores(X_fed, model, beta, device=None, batch_size=
     return client_scores
 
 
-def _compute_client_nsv_scores(
-    period_scores,
-    scale_costs,
-    coverage_hist,
-    cum_loss,
-    cum_total,
-    round_idx,
-    *,
-    alpha_base=0.55,
-    beta_base=0.30,
-    gamma_max=0.15,
-    warmup_rounds=10,
-    coverage_target=None,
-    tau=0.3,
-):
-    """L1-A+: NSV + Coverage Boost + Loss Contribution.
+def _compute_nsv_scores(period_scores, scale_costs):
+    """Phase 1 Step 1: 计算 per-client NSV (单位显存周期价值)。
 
-    client_score[c][s] = α × NSV_norm[s] + β × cov_boost[s] + γ × loss_contrib[c]
-
-    Three components all in [0,1], α+β+γ=1 (γ annealed from 0).
+    NSV[c][s] = period_score[c][s] / (marginal_cost[s] + ε)
+    per-client min-max 归一化到 [0,1]。
 
     Returns:
-        client_scores: list[np.ndarray]  (numClients × R)
-        info: dict with per-component arrays for printing
+        nsv_scores: list[np.ndarray]  (numClients × R, per-client normalized)
     """
     num_clients = len(period_scores)
     num_scales = len(period_scores[0]) if num_clients > 0 else 0
     if num_scales <= 0:
-        return [], {}
+        return []
     scale_costs = np.asarray(scale_costs, dtype=np.float64)
-    gamma = min(gamma_max, gamma_max * round_idx / max(warmup_rounds, 1))
-    if coverage_hist is not None:
-        coverage_hist = np.asarray(coverage_hist, dtype=np.float64)
-    else:
-        coverage_hist = np.zeros(num_scales, dtype=np.float64)
-    if coverage_target is None:
-        coverage_target = max(2, int(np.ceil(num_clients / num_scales)))
-    target_arr = np.full(num_scales, float(coverage_target), dtype=np.float64)
-
-    # ── 1) NSV per scale (global, shared by all clients) ──
-    global_nsv_norm = np.zeros(num_scales, dtype=np.float64)
-    # Use mean period_score across clients as global reference
-    for s in range(num_scales):
-        mean_score = np.mean([float(period_scores[c][s]) for c in range(num_clients)])
-        nsv = mean_score / max(float(scale_costs[s]), 1e-6)
-        global_nsv_norm[s] = nsv
-
-    nsv_min = global_nsv_norm.min()
-    nsv_max = global_nsv_norm.max()
-    if nsv_max > nsv_min:
-        global_nsv_norm = (global_nsv_norm - nsv_min) / (nsv_max - nsv_min)
-    else:
-        global_nsv_norm = np.ones(num_scales, dtype=np.float64) * 0.5
-
-    # ── 2) Coverage boost per scale (global) ──
-    # round 0 无覆盖数据 → β=0 (权重并入 α), 后续 β 线性退火
-    has_coverage = coverage_hist is not None and coverage_hist.sum() > 0
-    if has_coverage:
-        diff = (target_arr - coverage_hist) / max(float(coverage_target), 1.0)
-        cov_boost = 1.0 / (1.0 + np.exp(-diff / tau))
-    else:
-        cov_boost = np.ones(num_scales, dtype=np.float64) * 0.5  # 等值, 会被 β=0 忽略
-
-    # β 退火: round 0 无覆盖数据时 β=0, 后续线性恢复
-    cov_warmup = warmup_rounds * 2  # coverage 退火比 loss 慢
-    beta_eff = 0.0 if not has_coverage else beta_base * min(1.0, round_idx / max(cov_warmup, 1))
-    # α 吸收未使用的 β
-    alpha_eff = alpha_base + (beta_base - beta_eff)
-
-    # ── 3) Loss contribution per client ──
-    loss_contrib = np.ones(num_clients, dtype=np.float64) * 0.5  # default
-    if cum_loss is not None and cum_total is not None:
-        for c in range(num_clients):
-            if cum_total[c] > 0:
-                loss_contrib[c] = float(cum_loss[c]) / float(cum_total[c])
-    lc_min = loss_contrib.min()
-    lc_max = loss_contrib.max()
-    if lc_max > lc_min:
-        loss_contrib = (loss_contrib - lc_min) / (lc_max - lc_min)
-
-    # ── Fuse ──
-    client_scores = []
+    nsv_scores = []
     for c in range(num_clients):
         raw = period_scores[c]
-        # per-client NSV (uses client's own period_score / global marginal)
-        c_nsv = np.zeros(num_scales, dtype=np.float64)
+        nsv = np.zeros(num_scales, dtype=np.float64)
         for s in range(num_scales):
-            c_nsv[s] = float(raw[s]) / max(float(scale_costs[s]), 1e-6)
-        c_min = c_nsv.min()
-        c_max = c_nsv.max()
+            nsv[s] = float(raw[s]) / max(float(scale_costs[s]), 1e-6)
+        c_min = nsv.min(); c_max = nsv.max()
         if c_max > c_min:
-            c_nsv_norm = (c_nsv - c_min) / (c_max - c_min)
+            nsv = (nsv - c_min) / (c_max - c_min)
         else:
-            c_nsv_norm = np.ones(num_scales, dtype=np.float64) * 0.5
-
-        score = alpha_eff * c_nsv_norm + beta_eff * cov_boost + gamma * loss_contrib[c]
-        score = np.clip(score, 0.0, 1.0)
-        client_scores.append(score.astype(np.float32))
-
-    info = {
-        "alpha_eff": alpha_eff,
-        "beta_eff": beta_eff,
-        "gamma": gamma,
-        "nsv_norm": global_nsv_norm,
-        "cov_boost": cov_boost,
-        "loss_contrib": loss_contrib,
-        "coverage_target": float(coverage_target),
-    }
-    return client_scores, info
+            nsv[:] = 0.5
+        nsv_scores.append(nsv.astype(np.float32))
+    return nsv_scores
 
 
-def _format_nsv_breakdown(nsv_info, client_scores, scale_costs, logTxt=None):
-    """Format NSV score breakdown table for logging."""
+def _balance_coverage_greedy_swap(
+    client_selected, nsv_scores, coverage_hist,
+    target_lo=None, target_hi=None, max_rounds=20,
+):
+    """Phase 1 Step 2: 最小 NSV 损失覆盖均衡。
+
+    对覆盖过多的 scale 和覆盖不足的 scale 做贪心 swap,
+    选择 NSV 损失最小的客户端进行 (over_s → under_s) 替换。
+
+    Returns:
+        client_selected: 均衡后的分配
+        final_coverage: 最终覆盖数组
+        swap_log: list[str] 记录每步 swap 详情
+    """
+    client_selected = [list(sel) for sel in client_selected]  # deep copy
+    coverage = np.asarray(coverage_hist, dtype=np.int64).copy()
+    num_scales = len(coverage)
+    num_clients = len(client_selected)
+    if target_lo is None or target_hi is None:
+        target = max(2, int(np.ceil(num_clients / num_scales)))
+        target_lo = target - 1
+        target_hi = target + 1
+    swap_log = []
+    for it in range(max_rounds):
+        overs  = [s for s in range(num_scales) if coverage[s] > target_hi]
+        unders = [s for s in range(num_scales) if coverage[s] < target_lo]
+        if not overs or not unders:
+            swap_log.append(f"  converge at iter={it}: coverage={coverage.tolist()}")
+            break
+        best_loss = float('inf')
+        best_swap = None
+        for over_s in overs:
+            for under_s in unders:
+                for cid, sel in enumerate(client_selected):
+                    if over_s not in sel or under_s in sel:
+                        continue
+                    loss = float(nsv_scores[cid][over_s]) - float(nsv_scores[cid][under_s])
+                    if loss < best_loss:
+                        best_loss = loss
+                        best_swap = (cid, over_s, under_s)
+        if best_swap is None:
+            swap_log.append(f"  stall at iter={it}: no feasible swap")
+            break
+        cid, over_s, under_s = best_swap
+        sel = client_selected[cid]
+        sel[sel.index(over_s)] = under_s
+        coverage[over_s] -= 1
+        coverage[under_s] += 1
+        swap_log.append(
+            f"  iter={it}: c{cid} {over_s}→{under_s} (ΔNSV={best_loss:+.4f}) "
+            f"coverage={coverage.tolist()}"
+        )
+    return client_selected, coverage, swap_log
+
+
+def _format_phase1_result(nsv_scores, scale_costs, client_plans, coverage_hist,
+                           swap_log, logTxt=None):
+    """Phase 1 完整结果表: NSV per-scale + per-client 分配 + swap log。"""
     lines = []
     sep = "=" * 90
+    dash = "-" * 90
+    num_clients = len(nsv_scores)
+    num_scales = len(scale_costs)
+
+    # ── Per-scale NSV summary ──
     lines.append("")
     lines.append(sep)
-    lines.append(f"[nsv-score] L1-A+ 尺度得分分解 (α={nsv_info['alpha_eff']:.3f} β={nsv_info['beta_eff']:.3f} γ={nsv_info['gamma']:.3f})")
-    lines.append(dash := "-" * 90)
-
-    # Per-scale basis: NSV and Coverage
-    lines.append(f"  {'Scale':>6s}  {'cost(MB)':>10s}  {'NSV':>10s}  {'CovBoost':>10s}")
-    nsv = nsv_info["nsv_norm"]
-    cov = nsv_info["cov_boost"]
-    for s in range(len(nsv)):
-        lines.append(f"  {s:>6d}  {scale_costs[s]:>10.2f}  {nsv[s]:>10.4f}  {cov[s]:>10.4f}")
+    lines.append("[nsv-score] Phase 1: 尺度选择 (NSV 背包 + 覆盖均衡)")
+    lines.append(dash)
+    lines.append(f"  {'Scale':>6s}  {'cost(MB)':>10s}  {'NSV(mean)':>10s}  {'Coverage':>10s}")
+    for s in range(num_scales):
+        mean_nsv = np.mean([float(nsv_scores[c][s]) for c in range(num_clients)])
+        cov = int(coverage_hist[s]) if coverage_hist is not None else 0
+        lines.append(f"  {s:>6d}  {scale_costs[s]:>10.2f}  {mean_nsv:>10.4f}  {cov:>10d}")
     lines.append(dash)
 
-    # Per-client: Loss contribution + sample scores
-    lc = nsv_info["loss_contrib"]
-    num_clients = len(client_scores)
-    num_scales = len(nsv)
+    # ── Per-client allocation ──
     R_show = min(num_scales, 8)
-    header = f"  {'Client':>8s}  {'LossContr':>10s}  " + "  ".join(f"{'s'+str(i):>7s}" for i in range(R_show))
+    header = f"  {'Client':>8s}  {'Scales':>30s}  " + "  ".join(f"{'s'+str(i):>7s}" for i in range(R_show))
     lines.append(header)
     for c in range(num_clients):
-        score_str = "  ".join(f"{client_scores[c][s]:>7.4f}" for s in range(R_show))
-        lines.append(f"  {f'c{c}':>8s}  {lc[c]:>10.4f}  " + score_str)
+        sel = sorted(client_plans[c]) if c < len(client_plans) else []
+        sel_str = str(sel)[:30]
+        score_str = "  ".join(f"{nsv_scores[c][s]:>7.4f}" for s in range(R_show))
+        lines.append(f"  {f'c{c}':>8s}  {sel_str:>30s}  " + score_str)
+    lines.append(dash)
+
+    # ── Swap log ──
+    if swap_log:
+        lines.append("  Greedy Swap 覆盖均衡:")
+        for log_line in swap_log:
+            lines.append(log_line)
     lines.append(sep)
     out = "\n".join(lines)
+    print(out, flush=True)
     if logTxt:
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(out + "\n")
@@ -2386,11 +2370,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     if not w_locals:
         w_locals = [_state_dict_to_cpu(c.model.state_dict()) for c in clientList]
 
-    # ── L1-A+: NSV score tracking ──
-    nsv_recalc_interval = 10  # recompute scores + replan every N rounds
+    # ── Phase 2: loss tracking for scale weighting ──
     client_cum_loss = np.zeros(numClient, dtype=np.float64)
     client_cum_total = np.zeros(numClient, dtype=np.float64)
-    cached_nsv_info = None  # score breakdown from last recompute
+    _nsv_scores = None  # stored for Phase 1 Step 2 (greedy swap)
     cached_client_scale_scores = None
     cached_client_scale_plans = None
     cached_scale_hist = None
@@ -2444,21 +2427,11 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 device=server_device,
                 batch_size=batch_size,
             )
-            # Save raw period scores for NSV periodic replan
-            cached_raw_period_scores = cached_client_scale_scores
-            # ── L1-A+: NSV enhance raw period scores ──
+            # ── Phase 1: NSV scores → knapsack → greedy swap coverage balancing ──
             if scale_costs is not None and _uses_scale_split_algo(algo):
-                _nsv_scores, cached_nsv_info = _compute_client_nsv_scores(
-                    cached_client_scale_scores,
-                    scale_costs=scale_costs,
-                    coverage_hist=cached_scale_hist,
-                    cum_loss=client_cum_loss,
-                    cum_total=client_cum_total,
-                    round_idx=0,
-                )
+                # Step 1: compute NSV scores and use them for planning
+                _nsv_scores = _compute_nsv_scores(cached_client_scale_scores, scale_costs)
                 cached_client_scale_scores = _nsv_scores
-                nsv_lines = _format_nsv_breakdown(cached_nsv_info, cached_client_scale_scores, scale_costs, logTxt)
-                print(nsv_lines, flush=True)
             if _uses_scale_split_algo(algo) and spilter_allocation_mode == "global_score_random_single":
                 cached_client_scale_plans, cached_scale_hist, cached_global_scale_probs = (
                     _plan_global_score_random_single_client_scales(
@@ -2556,6 +2529,16 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         print(prep_msg, flush=True)
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(prep_msg + "\n")
+
+        # ── Phase 1 Step 2: greedy swap coverage balancing ──
+        if (cached_client_scale_plans is not None and cached_scale_hist is not None
+                and _uses_scale_split_algo(algo) and _nsv_scores is not None):
+            _balanced, _bal_cov, _swap_log = _balance_coverage_greedy_swap(
+                cached_client_scale_plans, _nsv_scores, cached_scale_hist,
+            )
+            cached_client_scale_plans = _balanced
+            cached_scale_hist = _bal_cov
+            _format_phase1_result(_nsv_scores, scale_costs, _balanced, _bal_cov, _swap_log, logTxt)
 
     for round in range(start_round, numRound):
         round_t0 = time.perf_counter()
@@ -2831,57 +2814,6 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             if client_losses[idx] > 0:
                 client_cum_loss[idx] += client_losses[idx]
                 client_cum_total[idx] += 1.0
-
-        # ── L1-A+: periodic NSV replan every nsv_recalc_interval rounds ──
-        if (round > 0 and round % nsv_recalc_interval == 0 and cached_client_scale_scores is not None
-                and scale_costs is not None and _uses_scale_split_algo(algo)):
-            _nsv_scores, cached_nsv_info = _compute_client_nsv_scores(
-                cached_raw_period_scores,
-                scale_costs=scale_costs,
-                coverage_hist=cached_scale_hist,
-                cum_loss=client_cum_loss,
-                cum_total=client_cum_total,
-                round_idx=round,
-            )
-            cached_client_scale_scores = _nsv_scores  # update for workers to use latest NSV
-            # Rerun planning with updated scores
-            if spilter_allocation_mode == "knapsack_lagrangian":
-                knap_params = _spilter_knapsack_lagrangian_params(config, override_memory_budget=args.spilter_memory_budget)
-                cached_client_scale_plans, cached_scale_hist, cached_knapsack_info = (
-                    _plan_topm_then_local_knapsack_client_scales(
-                        cached_client_scale_scores,
-                        server_model=server.model,
-                        top_m=4,
-                        X_fed=X_fed,
-                        device=server_device,
-                        batch_size=batch_size,
-                        seed=original_seed or 42,
-                        in_channels=n_channels,
-                        num_classes=num_classes,
-                        dist_measure=dist_measure,
-                        lr=lr, wd=wd,
-                        dataset_tag=dataset,
-                        **knap_params,
-                    )
-                )
-            elif spilter_allocation_mode == "local_score_topm":
-                local_top_m = _spilter_local_top_m(config, default=4)
-                cached_client_scale_plans, cached_scale_hist = _plan_local_score_topm_client_scales(
-                    cached_client_scale_scores, top_m=local_top_m,
-                )
-            elif spilter_allocation_mode == "local_score_random_topm":
-                local_top_m = _spilter_local_top_m(config, default=4)
-                cached_client_scale_plans, cached_scale_hist = _plan_local_score_random_topm_client_scales(
-                    cached_client_scale_scores, top_m=local_top_m, seed=original_seed or 42,
-                )
-            _nsv_lines = _format_nsv_breakdown(cached_nsv_info, cached_client_scale_scores, scale_costs, logTxt)
-            replan_msg = (
-                f"[round {round}] NSV replan: α={cached_nsv_info['alpha_eff']:.3f} "
-                f"β={cached_nsv_info['beta_eff']:.3f} γ={cached_nsv_info['gamma']:.3f} "
-                f"coverage={cached_scale_hist.tolist() if cached_scale_hist is not None else 'N/A'}"
-            )
-            print(replan_msg, flush=True)
-            print(_nsv_lines, flush=True)
 
         print(
             f"[round {round}] timing train={train_stage_sec:.3f}s "

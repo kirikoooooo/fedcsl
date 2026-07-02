@@ -462,9 +462,6 @@ def _compute_client_nsv_scores(
         return [], {}
     scale_costs = np.asarray(scale_costs, dtype=np.float64)
     gamma = min(gamma_max, gamma_max * round_idx / max(warmup_rounds, 1))
-    scale = 1.0 - gamma
-    alpha_eff = alpha_base * scale
-    beta_eff = beta_base * scale
     if coverage_hist is not None:
         coverage_hist = np.asarray(coverage_hist, dtype=np.float64)
     else:
@@ -489,8 +486,19 @@ def _compute_client_nsv_scores(
         global_nsv_norm = np.ones(num_scales, dtype=np.float64) * 0.5
 
     # ── 2) Coverage boost per scale (global) ──
-    diff = (target_arr - coverage_hist) / max(float(coverage_target), 1.0)
-    cov_boost = 1.0 / (1.0 + np.exp(-diff / tau))
+    # round 0 无覆盖数据 → β=0 (权重并入 α), 后续 β 线性退火
+    has_coverage = coverage_hist is not None and coverage_hist.sum() > 0
+    if has_coverage:
+        diff = (target_arr - coverage_hist) / max(float(coverage_target), 1.0)
+        cov_boost = 1.0 / (1.0 + np.exp(-diff / tau))
+    else:
+        cov_boost = np.ones(num_scales, dtype=np.float64) * 0.5  # 等值, 会被 β=0 忽略
+
+    # β 退火: round 0 无覆盖数据时 β=0, 后续线性恢复
+    cov_warmup = warmup_rounds * 2  # coverage 退火比 loss 慢
+    beta_eff = 0.0 if not has_coverage else beta_base * min(1.0, round_idx / max(cov_warmup, 1))
+    # α 吸收未使用的 β
+    alpha_eff = alpha_base + (beta_base - beta_eff)
 
     # ── 3) Loss contribution per client ──
     loss_contrib = np.ones(num_clients, dtype=np.float64) * 0.5  # default

@@ -884,26 +884,19 @@ def _collect_scale_memory_table(server_model, sample_data, device):
         r["cc_bwd"] = r["cc_fwd"] * ratio
         r["bwd_sum"] = bwd
 
-    # ── FedCSL 真实训练代价公式：
-    #    scale_total = 分摊基线 + 2×(fwd+retain) + bwd + 2×param(参数+momentum)
-    #    (q/k 双通路各留一份激活, teacher no_grad 不保留激活,
-    #     SGD momentum buffer ≈ 参数量)
+    # ── 边际成本（knapsack 用）：base 是固定开销, per-scale 是增量 ──
+    #     scale_marginal = 2 × retain (q/k 双通路各留一份激活)
+    #                    + max(fwd, bwd)   (峰值取 max)
+    #                    + 2 × param       (参数 + SGD momentum buffer)
+    #   overhead_mb = 模型参数 + CUDA 上下文 (knapsack base_cost)
     # ──
-    overhead_mb = pre_forward_mb - global_baseline_mb  # 模型参数 + CUDA 上下文
-    overhead_per_scale = overhead_mb / num_scales if num_scales > 0 else 0.0
-    # LN + linear + predictor 等额外参数 (不在 blocks 中)
-    extra_param_mb = total_param_mb * 0.15  # 约 15% 为 LN/linear 等
+    overhead_mb = pre_forward_mb - global_baseline_mb
 
     for r in table:
-        r["pre_share"] = overhead_per_scale / num_scales if num_scales > 0 else 0.0
-        r["qk_factor"] = 2.0  # q/k 双通路
-        # 完整的 per-scale 训练代价
-        r["total"] = (
-            overhead_per_scale
-            + r["qk_factor"] * (r["fwd_sum"] + r["ret_sum"])   # q,k 各一趟
-            + max(r["fwd_sum"], r["bwd_sum"])                   # 峰值取 max
-            + r["param"] * 2.0                                   # 参数 + momentum
-        )
+        r["ret_x2"] = r["ret_sum"] * 2.0        # q/k 双通路激活
+        r["param_x2"] = r["param"] * 2.0         # 参数 + momentum
+        r["peak"] = max(r["fwd_sum"], r["bwd_sum"])
+        r["marginal"] = r["ret_x2"] + r["peak"] + r["param_x2"]
 
     if ratio > 0:
         print(
@@ -953,28 +946,25 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
     lines.append(sep)
 
-    # -- Table 4: Summary (FedCSL 训练真实代价) --
+    # -- Table 4: Per-Scale 边际成本 (knapsack 用) --
     COL4 = (f"  {'Scale':>6s}  {'Length':>8s}  {'Fwd(MB)':>10s}  {'Bwd(MB)':>10s}  "
-            f"{'Ret(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>12s}")
-    lines += ["", sep,
-        f"[scale-memory] 表4: Per-Scale 训练代价 (q/k ×2通路, 含optimizer)\n"
-        f"  pre_forward={overhead_mb:.1f}MB (模型/runtime), "
-        f"per_scale_share={overhead_per_scale:.1f}MB",
-        COL4]
-    s_f=0; s_b=0; s_r=0; s_par=0; s_tot=0
+            f"{'Ret×2(MB)':>10s}  {'Peak(MB)':>10s}  {'Param×2(MB)':>10s}  {'Marg(MB)':>10s}")
+    lines += ["", sep, "[scale-memory] 表4: Per-Scale 边际显存 (ret×2=q/k; param×2=参数+momentum)", COL4]
+    lines.append(f"  base={overhead_mb:.1f}MB (模型参数/CUDA开销, knapsack base_cost)")
+    s_f=0; s_b=0; s_r2=0; s_p=0; s_pa2=0; s_mar=0
     for r in table:
         lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['fwd_sum']:>10.2f}  {r['bwd_sum']:>10.2f}  "
-                     f"{r['ret_sum']:>10.2f}  {r['param']:>10.2f}  {r['total']:>12.2f}")
-        s_f+=r['fwd_sum']; s_b+=r['bwd_sum']; s_r+=r['ret_sum']
-        s_par+=r['param']; s_tot+=r['total']
+                     f"{r['ret_x2']:>10.2f}  {r['peak']:>10.2f}  {r['param_x2']:>10.2f}  {r['marginal']:>10.2f}")
+        s_f+=r['fwd_sum']; s_b+=r['bwd_sum']; s_r2+=r['ret_x2']
+        s_p+=r['peak']; s_pa2+=r['param_x2']; s_mar+=r['marginal']
     lines.append(dash)
-    lines.append(f"  {'SUM':>6s}  {'':>8s}  {s_f:>10.2f}  {s_b:>10.2f}  {s_r:>10.2f}  {s_par:>10.2f}  {s_tot:>12.2f}")
+    lines.append(f"  {'SUM':>6s}  {'':>8s}  {s_f:>10.2f}  {s_b:>10.2f}  {s_r2:>10.2f}  {s_p:>10.2f}  {s_pa2:>10.2f}  {s_mar:>10.2f}")
     lines.append(sep)
 
     print("\n".join(lines), flush=True)
 
-    scale_costs = [r["total"] for r in table]
-    return scale_costs, table
+    scale_costs = [r["marginal"] for r in table]
+    return overhead_mb, scale_costs, table
 
 
 def _plan_topm_then_local_knapsack_client_scales(
@@ -2207,6 +2197,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     # ----- 服务端集中式显存采集（MAST-style：一次 full forward，block 自测） -----
     scale_costs = None
+    overhead_base_mb = 0.0
     scale_mem_table = []
     if _uses_scale_split_algo(algo) and server_device.type == "cuda":
         _sample = None
@@ -2215,12 +2206,14 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 _sample = _cx[:batch_size]
                 break
         if _sample is not None:
-            scale_costs, scale_mem_table = _collect_scale_memory_table(
+            _overhead, scale_costs, scale_mem_table = _collect_scale_memory_table(
                 server.model, _sample, server_device,
             )
             if scale_costs is not None:
+                overhead_base_mb = float(_overhead)
                 _sp_cfg = config.setdefault("spilter", {})
                 _sp_cfg["scale_memory_costs_mb"] = scale_costs
+                _sp_cfg["base_memory_mb"] = overhead_base_mb
 
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
@@ -2461,7 +2454,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 per_client_lines = []
                 for cid, scales in enumerate(client_scale_plans):
                     c_budget = per_client_budgets[cid] if per_client_budgets and cid < len(per_client_budgets) else None
-                    acc = sum(
+                    acc = overhead_base_mb + sum(
                         scale_costs[s] for s in scales if 0 <= s < len(scale_costs)
                     )
                     _per_client_acc[cid] = acc

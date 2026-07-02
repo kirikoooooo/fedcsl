@@ -701,15 +701,29 @@ def _spilter_knapsack_lagrangian_params(config, override_memory_budget=None):
 # 服务端集中式显存采集（MAST-style：一次 full forward，每个 block 自测峰值）
 # ---------------------------------------------------------------------------
 def _collect_scale_memory_table(server_model, sample_data, device):
-    """MAST-style 全量显存采集：一次 forward+backward，收集 fwd/bwd/retain。
+    """MAST-style 全量显存采集：适配 FedCSL q/k 双通路 + teacher。
 
-    24 个 block 各自测量：
-      - forward peak delta（blocks.py 自测）
-      - backward peak delta（backward pre/post hook 实测）
-      - retained activation（forward 输出张量大小）
+    测量：
+      1. pre_forward_mem — 模型参数 + CUDA 运行时基线
+      2. fwd_peak per-block — 前向计算峰值 delta（blocks.py 自测）
+      3. retain per-block — 前向中间张量大小（unfold/Conv1d 输出 numel）
+      4. global_bwd_peak — 反向总增量（global_bwd/max_fwd × fwd_i 估算）
 
-    按 scale 聚合，最终输出 3 张表格 + 一张汇总表。
-    汇总 scale_costs[i] = max(fwd_sum, bwd_sum) + retain_sum + param
+    FedCSL 实际训练路径：
+      x_q → student.forward_subset(S) → retain_all_q
+      x_k → student.forward_subset(S) → retain_all_k
+      x_q → teacher.forward_subset(S) → no_retain (no_grad)
+      x_k → teacher.forward_subset(S) → no_retain (no_grad)
+      loss + backward
+
+    所以激活保留是 q/k 两份（×2），teacher 不保留。SGD momentum optimizer
+    额外占 param 等量 buffer。
+
+    Scale 训练总代价 = pre_forward / R  (分摊基线)
+                     + 2 × fwd_sum    (q/k 两趟)
+                     + 2 × ret_sum    (q/k 两份激活保留)
+                     + bwd_estimated
+                     + param_mem × 2  (参数 + optimizer momentum buffer)
     """
     import gc as _gc
 
@@ -719,11 +733,16 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     if sample_data is None or len(sample_data) == 0:
         return None, []
 
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize(device)
+    # ── 0) Measure global baseline before any model ops ──
+    global_baseline_mb = float(torch.cuda.memory_allocated(device)) / (1024.0 * 1024.0)
+
     num_scales = len(server_model.shapelets_size_and_len)
     lengths = list(server_model.shapelets_size_and_len.keys())
     has_mix = hasattr(server_model, 'shapelets_euclidean')
 
-    # ── Helper: iterate all blocks ──
+    # ── Helpers ──
     def _all_blocks(model):
         if hasattr(model, "shapelets_euclidean"):
             for b in model.shapelets_euclidean.blocks:
@@ -736,19 +755,17 @@ def _collect_scale_memory_table(server_model, sample_data, device):
             sbd = model.shapelets_blocks
             if sbd.dist_measure == "mix":
                 for i, b in enumerate(sbd.blocks):
-                    branch_id = i % 3
-                    yield ("euclidean" if branch_id == 0 else "cosine" if branch_id == 1 else "cross_corr", b)
+                    yield (["euclidean","cosine","cross_corr"][i%3], b)
             else:
                 for b in sbd.blocks:
                     yield ("single", b)
 
-    # ── Helper: get per-scale blocks (3 blocks for mix, 1 for single) ──
     def _scale_blocks(model, s):
         if has_mix:
             return [
-                ("eu",  model.shapelets_euclidean.blocks[s]),
-                ("co",  model.shapelets_cosine.blocks[s]),
-                ("cc",  model.shapelets_cross_correlation.blocks[s]),
+                ("eu", model.shapelets_euclidean.blocks[s]),
+                ("co", model.shapelets_cosine.blocks[s]),
+                ("cc", model.shapelets_cross_correlation.blocks[s]),
             ]
         sbd = model.shapelets_blocks
         if sbd.dist_measure == "mix":
@@ -768,7 +785,6 @@ def _collect_scale_memory_table(server_model, sample_data, device):
         blk._bw_pre_mem = 0
         blk._retained_activation_bytes = 0
 
-    # ── Enable BW profiling wrappers on all branch models ──
     for branch_name in ['shapelets_euclidean', 'shapelets_cosine', 'shapelets_cross_correlation']:
         branch = getattr(server_model, branch_name, None)
         if branch is not None:
@@ -780,16 +796,19 @@ def _collect_scale_memory_table(server_model, sample_data, device):
         saved_grad_flags[pname] = p.requires_grad
         p.requires_grad_(True)
 
+    # Measure pre-forward baseline (model params on GPU after to(device))
+    torch.cuda.synchronize(device)
+    pre_forward_mb = float(torch.cuda.memory_allocated(device)) / (1024.0 * 1024.0)
+
     x = torch.from_numpy(np.asarray(sample_data, dtype=np.float32)).float().to(device)
     torch.cuda.empty_cache()
 
-    # ── 1) Full forward pass (with autograd) ──
+    # ── 1) Full forward pass ──
     try:
         if has_mix:
             out_eu = server_model.shapelets_euclidean(x, masking=False)
             out_co = server_model.shapelets_cosine(x, masking=False)
             out_cc = server_model.shapelets_cross_correlation(x, masking=False)
-            # Dummy loss on full concatenated output
             full_out = torch.cat([out_eu, out_co, out_cc], dim=2)
         elif hasattr(server_model, 'shapelets_blocks'):
             full_out = server_model.shapelets_blocks(x, masking=False)
@@ -802,22 +821,21 @@ def _collect_scale_memory_table(server_model, sample_data, device):
         return None, []
 
     torch.cuda.synchronize(device)
+    fwd_final_mb = float(torch.cuda.memory_allocated(device)) / (1024.0 * 1024.0)
 
-    # ── 2) Backward: global peak after loss.backward() ──
+    # ── 2) Backward ──
     torch.cuda.reset_peak_memory_stats(device)
-    fwd_final_mem = torch.cuda.memory_allocated(device)
     loss = full_out.sum()
     try:
         loss.backward()
     except Exception as e:
         print(f"[scale-memory] backward 失败: {e}", flush=True)
     torch.cuda.synchronize(device)
-    # 反向期间总峰值增量 = max_allocated during backward - fwd 结束时的 allocated
     global_bwd_peak_mb = max(
-        float(torch.cuda.max_memory_allocated(device) - fwd_final_mem), 0.0
+        float(torch.cuda.max_memory_allocated(device) - fwd_final_mb), 0.0
     ) / (1024.0 * 1024.0)
 
-    # ── restore grad flags, disable wrappers ──
+    # ── Restore ──
     for branch_name in ['shapelets_euclidean', 'shapelets_cosine', 'shapelets_cross_correlation']:
         branch = getattr(server_model, branch_name, None)
         if branch is not None:
@@ -828,35 +846,35 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     torch.cuda.empty_cache()
     _gc.collect()
 
-    # ── Collect per-scale data ──
+    # ── Collect per-scale data + compute full formula ──
     table = []
+    total_param_mb = 0.0
     for s in range(num_scales):
         L = lengths[s]
         eu_fwd = 0.0; co_fwd = 0.0; cc_fwd = 0.0
         eu_ret = 0.0; co_ret = 0.0; cc_ret = 0.0
-        param = 0.0
+        param_s = 0.0
         for blk_name, blk in _scale_blocks(server_model, s):
             fwd = blk.peak_mem_mb
             ret = blk.retained_activation_mb
             par = float(blk.param_mem_bytes) / (1024.0 * 1024.0)
             if blk_name == "eu":
-                eu_fwd = fwd; eu_ret = ret; param += par
+                eu_fwd = fwd; eu_ret = ret; param_s += par
             elif blk_name == "co":
-                co_fwd = fwd; co_ret = ret; param += par
+                co_fwd = fwd; co_ret = ret; param_s += par
             elif blk_name == "cc":
-                cc_fwd = fwd; cc_ret = ret; param += par
+                cc_fwd = fwd; cc_ret = ret; param_s += par
         fwd_sum = eu_fwd + co_fwd + cc_fwd
         ret_sum = eu_ret + co_ret + cc_ret
+        total_param_mb += param_s
         table.append({
             "scale_idx": s, "length": L,
             "eu_fwd": eu_fwd, "co_fwd": co_fwd, "cc_fwd": cc_fwd, "fwd_sum": fwd_sum,
             "eu_ret": eu_ret, "co_ret": co_ret, "cc_ret": cc_ret, "ret_sum": ret_sum,
-            "param": param,
+            "param": param_s,
         })
 
     # ── MAST-style backward estimation ──
-    # per-block wrapper 无法正确测量（reset_peak 是 device-global，24 个 _BwRangeOut
-    # 连续调用互相覆盖）。MAST 本身也依赖 fallback：按 max_fwd 比例分配 global_bwd。
     max_fwd = max(r["fwd_sum"] for r in table) if table else 1.0
     ratio = global_bwd_peak_mb / max_fwd if max_fwd > 0 else 0.0
     for r in table:
@@ -865,8 +883,28 @@ def _collect_scale_memory_table(server_model, sample_data, device):
         r["co_bwd"] = r["co_fwd"] * ratio
         r["cc_bwd"] = r["cc_fwd"] * ratio
         r["bwd_sum"] = bwd
-        r["peak"] = max(r["fwd_sum"], r["bwd_sum"])
-        r["total"] = r["peak"] + r["ret_sum"] + r["param"]
+
+    # ── FedCSL 真实训练代价公式：
+    #    scale_total = 分摊基线 + 2×(fwd+retain) + bwd + 2×param(参数+momentum)
+    #    (q/k 双通路各留一份激活, teacher no_grad 不保留激活,
+    #     SGD momentum buffer ≈ 参数量)
+    # ──
+    overhead_mb = pre_forward_mb - global_baseline_mb  # 模型参数 + CUDA 上下文
+    overhead_per_scale = overhead_mb / num_scales if num_scales > 0 else 0.0
+    # LN + linear + predictor 等额外参数 (不在 blocks 中)
+    extra_param_mb = total_param_mb * 0.15  # 约 15% 为 LN/linear 等
+
+    for r in table:
+        r["pre_share"] = overhead_per_scale / num_scales if num_scales > 0 else 0.0
+        r["qk_factor"] = 2.0  # q/k 双通路
+        # 完整的 per-scale 训练代价
+        r["total"] = (
+            overhead_per_scale
+            + r["qk_factor"] * (r["fwd_sum"] + r["ret_sum"])   # q,k 各一趟
+            + max(r["fwd_sum"], r["bwd_sum"])                   # 峰值取 max
+            + r["param"] * 2.0                                   # 参数 + momentum
+        )
+
     if ratio > 0:
         print(
             f"[scale-memory] backward 估算: global_bwd={global_bwd_peak_mb:.1f}MB / "
@@ -876,9 +914,7 @@ def _collect_scale_memory_table(server_model, sample_data, device):
 
     # ── Print tables ──
     lines = []
-    HDR_EU = "Eu(MB)"; HDR_CO = "Co(MB)"; HDR_CC = "CC(MB)"; HDR_SUM = "Sum(MB)"
-    COL = f"  {'Scale':>6s}  {'Length':>8s}  {HDR_EU:>10s}  {HDR_CO:>10s}  {HDR_CC:>10s}  {HDR_SUM:>10s}"
-
+    HDR = f"  {'Scale':>6s}  {'Length':>8s}  {'Eu(MB)':>10s}  {'Co(MB)':>10s}  {'CC(MB)':>10s}  {'Sum(MB)':>10s}"
     sep = "=" * 90
     dash = "-" * 90
 
@@ -891,7 +927,7 @@ def _collect_scale_memory_table(server_model, sample_data, device):
             lines.append(f"  {'%':>6s}  {'':>8s}  {s_eu/s_sum*100:>9.1f}%  {s_co/s_sum*100:>9.1f}%  {s_cc/s_sum*100:>9.1f}%")
 
     # -- Table 1: Forward Peaks --
-    lines += ["", sep, "[scale-memory] 表1: Forward Peak (MB) — 每个 block 前向峰值 delta", COL]
+    lines += ["", sep, "[scale-memory] 表1: Forward Peak (MB) — block 前向计算峰值 delta", HDR]
     s_eu=0; s_co=0; s_cc=0; s_sum=0
     for r in table:
         lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_fwd']:>10.2f}  {r['co_fwd']:>10.2f}  {r['cc_fwd']:>10.2f}  {r['fwd_sum']:>10.2f}")
@@ -899,10 +935,8 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
     lines.append(sep)
 
-    # -- Table 2: Backward Peaks (MAST estimation: global_bwd / max_fwd * fwd_i) --
-    lines += ["", sep,
-        f"[scale-memory] 表2: Backward Peak 估算 (MB) — global_bwd={global_bwd_peak_mb:.1f}MB / max_fwd={max_fwd:.1f}MB × fwd_i",
-        COL]
+    # -- Table 2: Backward (estimated) --
+    lines += ["", sep, f"[scale-memory] 表2: Backward Peak 估算 (MB) — ratio={ratio:.3f} (global_bwd/max_fwd)", HDR]
     s_eu=0; s_co=0; s_cc=0; s_sum=0
     for r in table:
         lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_bwd']:>10.2f}  {r['co_bwd']:>10.2f}  {r['cc_bwd']:>10.2f}  {r['bwd_sum']:>10.2f}")
@@ -911,7 +945,7 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     lines.append(sep)
 
     # -- Table 3: Retained Activations --
-    lines += ["", sep, "[scale-memory] 表3: Retained Activation (MB) — forward 输出张量大小", COL]
+    lines += ["", sep, "[scale-memory] 表3: Retained Activation (MB) — 中间张量(unfold/Conv1d)大小", HDR]
     s_eu=0; s_co=0; s_cc=0; s_sum=0
     for r in table:
         lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_ret']:>10.2f}  {r['co_ret']:>10.2f}  {r['cc_ret']:>10.2f}  {r['ret_sum']:>10.2f}")
@@ -919,23 +953,26 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
     lines.append(sep)
 
-    # -- Table 4: Summary (per-scale total = max(fwd,bwd) + retain + param) --
-    COL2 = (f"  {'Scale':>6s}  {'Length':>8s}  {'Fwd(MB)':>10s}  {'Bwd(MB)':>10s}  "
-            f"{'Peak(MB)':>10s}  {'Ret(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>10s}")
-    lines += ["", sep, "[scale-memory] 表4: Per-Scale 总代价 (peak=max(fwd,bwd); total=peak+ret+param)", COL2]
-    s_f=0; s_b=0; s_p=0; s_r=0; s_par=0; s_tot=0
+    # -- Table 4: Summary (FedCSL 训练真实代价) --
+    COL4 = (f"  {'Scale':>6s}  {'Length':>8s}  {'Fwd(MB)':>10s}  {'Bwd(MB)':>10s}  "
+            f"{'Ret(MB)':>10s}  {'Param(MB)':>10s}  {'Total(MB)':>12s}")
+    lines += ["", sep,
+        f"[scale-memory] 表4: Per-Scale 训练代价 (q/k ×2通路, 含optimizer)\n"
+        f"  pre_forward={overhead_mb:.1f}MB (模型/runtime), "
+        f"per_scale_share={overhead_per_scale:.1f}MB",
+        COL4]
+    s_f=0; s_b=0; s_r=0; s_par=0; s_tot=0
     for r in table:
         lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['fwd_sum']:>10.2f}  {r['bwd_sum']:>10.2f}  "
-                     f"{r['peak']:>10.2f}  {r['ret_sum']:>10.2f}  {r['param']:>10.2f}  {r['total']:>10.2f}")
-        s_f+=r['fwd_sum']; s_b+=r['bwd_sum']; s_p+=r['peak']
-        s_r+=r['ret_sum']; s_par+=r['param']; s_tot+=r['total']
+                     f"{r['ret_sum']:>10.2f}  {r['param']:>10.2f}  {r['total']:>12.2f}")
+        s_f+=r['fwd_sum']; s_b+=r['bwd_sum']; s_r+=r['ret_sum']
+        s_par+=r['param']; s_tot+=r['total']
     lines.append(dash)
-    lines.append(f"  {'SUM':>6s}  {'':>8s}  {s_f:>10.2f}  {s_b:>10.2f}  {s_p:>10.2f}  {s_r:>10.2f}  {s_par:>10.2f}  {s_tot:>10.2f}")
+    lines.append(f"  {'SUM':>6s}  {'':>8s}  {s_f:>10.2f}  {s_b:>10.2f}  {s_r:>10.2f}  {s_par:>10.2f}  {s_tot:>12.2f}")
     lines.append(sep)
 
     print("\n".join(lines), flush=True)
 
-    # Return scale_costs (total per-scale cost) for knapsack scheduling
     scale_costs = [r["total"] for r in table]
     return scale_costs, table
 

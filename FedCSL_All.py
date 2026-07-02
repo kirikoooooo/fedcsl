@@ -913,6 +913,33 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     # ──
     overhead_mb = pre_forward_mb - global_baseline_mb
 
+    # ── MAST 估算: 非 scale 级共享层的激活保留 ──
+    # LayerNorm 反向需要保存输入, q/k 双通路各留一份
+    shared_retain_mb = 0.0
+    extra_rows = []
+    if has_mix and hasattr(server_model, 'ln1'):
+        _n12 = sum(num // 3 for num in server_model.shapelets_size_and_len.values())
+        _n3 = sum(num - 2 * (num // 3) for num in server_model.shapelets_size_and_len.values())
+        ret_ln1 = (B * _n12 * 4.0) / (1024.0 * 1024.0)
+        ret_ln2 = (B * _n12 * 4.0) / (1024.0 * 1024.0)
+        ret_ln3 = (B * _n3 * 4.0) / (1024.0 * 1024.0)
+        # linear.weight 不在 blocks 中, 参数显存需额外计入
+        lin_param = 0.0
+        for name, p in server_model.named_parameters():
+            if name.startswith('linear.'):
+                lin_param += float(p.numel() * p.element_size()) / (1024.0 * 1024.0)
+        shared_retain_1pass = ret_ln1 + ret_ln2 + ret_ln3
+        # autograd 保留: 3 个 LN 输入 (q/k 双通路 ×2) + linear 输入 (1 pass, 共享)
+        shared_retain_mb = shared_retain_1pass * 2.0  # q/k 双通路
+        extra_rows = [
+            {"label": "LN1",  "est": ret_ln1, "desc": f"LayerNorm(in={_n12})"},
+            {"label": "LN2",  "est": ret_ln2, "desc": f"LayerNorm(in={_n12})"},
+            {"label": "LN3",  "est": ret_ln3, "desc": f"LayerNorm(in={_n3})"},
+        ]
+        if lin_param > 0:
+            extra_rows.append({"label": "linear(W)", "est": lin_param, "desc": f"linear 参数 ({lin_param:.2f}MB)"})
+        overhead_mb += shared_retain_mb + lin_param
+
     for r in table:
         r["ret_x2"] = r["ret_sum"] * 2.0        # q/k 双通路激活
         r["param_x2"] = r["param"] * 2.0         # 参数 + momentum
@@ -972,13 +999,21 @@ def _collect_scale_memory_table(server_model, sample_data, device):
         s_eu+=r['eu_ret']; s_co+=r['co_ret']; s_cc+=r['cc_ret']; s_sum+=r['ret_sum']; s_mast+=r['mast_sum']
     lines.append(dash)
     lines.append(f"  {'SUM':>6s}  {'':>8s}  {s_eu:>10.2f}  {s_co:>10.2f}  {s_cc:>10.2f}  {s_sum:>10.2f}  {s_mast:>10.2f}")
+    # Extra rows: shared layers (not per-scale, MAST estimated)
+    if extra_rows:
+        for er in extra_rows:
+            lines.append(f"  {'':>6s}  {er['desc']:>58s}  {er['est']:>10.2f}")
+        lines.append(f"  {'sub':>6s}  {'q/k×2 共享激活保留':>58s}  {shared_retain_mb:>10.2f}")
     lines.append(sep)
 
     # -- Table 4: Per-Scale 边际成本 (knapsack 用) --
     COL4 = (f"  {'Scale':>6s}  {'Length':>8s}  {'Fwd(MB)':>10s}  {'Bwd(MB)':>10s}  "
             f"{'Ret×2(MB)':>10s}  {'Peak(MB)':>10s}  {'Param×2(MB)':>10s}  {'Marg(MB)':>10s}")
     lines += ["", sep, "[scale-memory] 表4: Per-Scale 边际显存 (ret×2=q/k; param×2=参数+momentum)", COL4]
-    lines.append(f"  base={overhead_mb:.1f}MB (模型参数/CUDA开销, knapsack base_cost)")
+    base_desc = f"base={overhead_mb:.1f}MB"
+    if shared_retain_mb > 0:
+        base_desc += f" (含LN×3激活保留×2={shared_retain_mb:.1f}MB)"
+    lines.append(f"  {base_desc} (knapsack base_cost)")
     s_f=0; s_b=0; s_r2=0; s_p=0; s_pa2=0; s_mar=0
     for r in table:
         lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['fwd_sum']:>10.2f}  {r['bwd_sum']:>10.2f}  "

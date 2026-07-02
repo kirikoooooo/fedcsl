@@ -1398,8 +1398,16 @@ def _train_client_worker(
                 for si in (result.get("scale_indices") or [])
             }
 
+        # ---- actual GPU peak memory during training ----
+        if device is not None and device.type == "cuda":
+            torch.cuda.synchronize(device)
+            torch.cuda.reset_peak_memory_stats(device)
         losses = c.train(X_fed[idx], epochs=numEpoch, batch_size=batch_size,
                          epoch_idx=-1, lr=lr)
+        actual_peak_mem_mb = None
+        if device is not None and device.type == "cuda":
+            torch.cuda.synchronize(device)
+            actual_peak_mem_mb = float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0)
         if not losses:
             loss_all = 0.0
             loss_breakdown = {key: 0.0 for key in _LOSS_KEYS}
@@ -1413,7 +1421,6 @@ def _train_client_worker(
 
         # 显存采集改为服务端集中式（_collect_scale_memory_table），客户端不再采集。
         memory_summary = None
-        actual_peak_mem_mb = None
 
         if _SPILTER_DEBUG and use_scale_split_comm:
             scale_ids = result.get("scale_indices") or []
@@ -2302,6 +2309,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         client_losses = [0.0] * numClient  # 供 Oort 更新 reward
         client_scale_states = [None] * numClient
         client_scale_indices = [[] for _ in range(numClient)]
+        client_actual_peaks = {i: None for i in range(numClient)}
 
         server_state_cpu = _state_dict_to_cpu(server.model.state_dict())
         client_scale_plans = cached_client_scale_plans
@@ -2389,7 +2397,27 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                             "scale_indices": list(result.get("scale_indices", [])),
                             "states": result["scale_states"],
                         }
+                    # Collect actual peak for per-round summary
+                    if result.get("actual_peak_mem_mb") is not None:
+                        client_actual_peaks[idx] = result["actual_peak_mem_mb"]
         train_stage_sec = time.perf_counter() - train_stage_t0
+
+        # ----- per-round actual GPU peak memory summary -----
+        if any(v is not None for v in client_actual_peaks.values()):
+            peaks = [v for v in client_actual_peaks.values() if v is not None]
+            peak_str = "  ".join(
+                f"c{cid}:{client_actual_peaks[cid]:.0f}MB"
+                if client_actual_peaks[cid] is not None else f"c{cid}:N/A"
+                for cid in sorted(client_actual_peaks)
+            )
+            max_peak = max(peaks) if peaks else 0
+            mem_line = (
+                f"[round {round}] GPU 显存峰值(实测): {peak_str}  "
+                f"| 最大={max_peak:.0f}MB  | 训练耗时={train_stage_sec:.1f}s"
+            )
+            print(mem_line, flush=True)
+            with open(logTxt, mode="a+", encoding="utf-8") as f:
+                f.write(mem_line + "\n")
 
         # ----- round-0: per-client 显存累加（基于 MAST 采集结果） -----
         if round == 0 and use_scale_split_comm:

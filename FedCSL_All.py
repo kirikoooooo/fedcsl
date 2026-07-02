@@ -803,17 +803,18 @@ def _collect_scale_memory_table(server_model, sample_data, device):
 
     torch.cuda.synchronize(device)
 
-    # ── 2) Backward — per-block BW peaks measured by MAST wrappers ──
+    # ── 2) Backward: global peak after loss.backward() ──
     torch.cuda.reset_peak_memory_stats(device)
-    global_bwd_pre = torch.cuda.memory_allocated(device)
+    fwd_final_mem = torch.cuda.memory_allocated(device)
     loss = full_out.sum()
     try:
         loss.backward()
     except Exception as e:
         print(f"[scale-memory] backward 失败: {e}", flush=True)
     torch.cuda.synchronize(device)
+    # 反向期间总峰值增量 = max_allocated during backward - fwd 结束时的 allocated
     global_bwd_peak_mb = max(
-        float(torch.cuda.max_memory_allocated(device) - global_bwd_pre), 0.0
+        float(torch.cuda.max_memory_allocated(device) - fwd_final_mem), 0.0
     ) / (1024.0 * 1024.0)
 
     # ── restore grad flags, disable wrappers ──
@@ -827,56 +828,49 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     torch.cuda.empty_cache()
     _gc.collect()
 
-    # ── Collect per-scale data (from per-block measurements) ──
+    # ── Collect per-scale data ──
     table = []
     for s in range(num_scales):
         L = lengths[s]
         eu_fwd = 0.0; co_fwd = 0.0; cc_fwd = 0.0
-        eu_bwd = 0.0; co_bwd = 0.0; cc_bwd = 0.0
         eu_ret = 0.0; co_ret = 0.0; cc_ret = 0.0
         param = 0.0
         for blk_name, blk in _scale_blocks(server_model, s):
             fwd = blk.peak_mem_mb
-            bwd = blk.bw_peak_mem_mb
             ret = blk.retained_activation_mb
             par = float(blk.param_mem_bytes) / (1024.0 * 1024.0)
             if blk_name == "eu":
-                eu_fwd = fwd; eu_bwd = bwd; eu_ret = ret; param += par
+                eu_fwd = fwd; eu_ret = ret; param += par
             elif blk_name == "co":
-                co_fwd = fwd; co_bwd = bwd; co_ret = ret; param += par
+                co_fwd = fwd; co_ret = ret; param += par
             elif blk_name == "cc":
-                cc_fwd = fwd; cc_bwd = bwd; cc_ret = ret; param += par
+                cc_fwd = fwd; cc_ret = ret; param += par
         fwd_sum = eu_fwd + co_fwd + cc_fwd
-        bwd_sum = eu_bwd + co_bwd + cc_bwd
         ret_sum = eu_ret + co_ret + cc_ret
-        peak = max(fwd_sum, bwd_sum)
-        total = peak + ret_sum + param
         table.append({
             "scale_idx": s, "length": L,
             "eu_fwd": eu_fwd, "co_fwd": co_fwd, "cc_fwd": cc_fwd, "fwd_sum": fwd_sum,
-            "eu_bwd": eu_bwd, "co_bwd": co_bwd, "cc_bwd": cc_bwd, "bwd_sum": bwd_sum,
             "eu_ret": eu_ret, "co_ret": co_ret, "cc_ret": cc_ret, "ret_sum": ret_sum,
-            "peak": peak, "param": param, "total": total,
+            "param": param,
         })
 
-    # ── MAST-style fallback: if any block bwd is 0, use global ratio ──
-    total_bwd_from_blocks = sum(r["bwd_sum"] for r in table)
-    total_fwd_from_blocks = sum(r["fwd_sum"] for r in table)
-    if total_bwd_from_blocks < 1.0 and total_fwd_from_blocks > 0:
-        ratio = global_bwd_peak_mb / total_fwd_from_blocks if total_fwd_from_blocks > 0 else 0.5
-        for r in table:
-            if r["bwd_sum"] < 1.0:
-                bwd = r["fwd_sum"] * ratio
-                r["eu_bwd"] = r["eu_fwd"] * ratio
-                r["co_bwd"] = r["co_fwd"] * ratio
-                r["cc_bwd"] = r["cc_fwd"] * ratio
-                r["bwd_sum"] = bwd
-                r["peak"] = max(r["fwd_sum"], r["bwd_sum"])
-                r["total"] = r["peak"] + r["ret_sum"] + r["param"]
+    # ── MAST-style backward estimation ──
+    # per-block wrapper 无法正确测量（reset_peak 是 device-global，24 个 _BwRangeOut
+    # 连续调用互相覆盖）。MAST 本身也依赖 fallback：按 max_fwd 比例分配 global_bwd。
+    max_fwd = max(r["fwd_sum"] for r in table) if table else 1.0
+    ratio = global_bwd_peak_mb / max_fwd if max_fwd > 0 else 0.0
+    for r in table:
+        bwd = r["fwd_sum"] * ratio
+        r["eu_bwd"] = r["eu_fwd"] * ratio
+        r["co_bwd"] = r["co_fwd"] * ratio
+        r["cc_bwd"] = r["cc_fwd"] * ratio
+        r["bwd_sum"] = bwd
+        r["peak"] = max(r["fwd_sum"], r["bwd_sum"])
+        r["total"] = r["peak"] + r["ret_sum"] + r["param"]
+    if ratio > 0:
         print(
-            f"[scale-memory] per-block bwd 全 0, 使用 fallback: "
-            f"global_bwd={global_bwd_peak_mb:.1f}MB / total_fwd={total_fwd_from_blocks:.1f}MB "
-            f"→ ratio={ratio:.3f}",
+            f"[scale-memory] backward 估算: global_bwd={global_bwd_peak_mb:.1f}MB / "
+            f"max_fwd={max_fwd:.1f}MB → ratio={ratio:.3f}",
             flush=True,
         )
 
@@ -905,8 +899,10 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
     lines.append(sep)
 
-    # -- Table 2: Backward Peaks (per-block, MAST wrapper measured) --
-    lines += ["", sep, "[scale-memory] 表2: Backward Peak (MB) — 每个 block 反向峰值 delta (MAST wrapper)", COL]
+    # -- Table 2: Backward Peaks (MAST estimation: global_bwd / max_fwd * fwd_i) --
+    lines += ["", sep,
+        f"[scale-memory] 表2: Backward Peak 估算 (MB) — global_bwd={global_bwd_peak_mb:.1f}MB / max_fwd={max_fwd:.1f}MB × fwd_i",
+        COL]
     s_eu=0; s_co=0; s_cc=0; s_sum=0
     for r in table:
         lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_bwd']:>10.2f}  {r['co_bwd']:>10.2f}  {r['cc_bwd']:>10.2f}  {r['bwd_sum']:>10.2f}")

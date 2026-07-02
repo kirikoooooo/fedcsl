@@ -846,31 +846,52 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     torch.cuda.empty_cache()
     _gc.collect()
 
-    # ── Collect per-scale data + compute full formula ──
+    # ── Collect per-scale data + MAST formula estimates ──
+    B = x.shape[0]
+    seq_len = x.shape[2]
+
     table = []
     total_param_mb = 0.0
     for s in range(num_scales):
         L = lengths[s]
         eu_fwd = 0.0; co_fwd = 0.0; cc_fwd = 0.0
         eu_ret = 0.0; co_ret = 0.0; cc_ret = 0.0
+        eu_mast = 0.0; co_mast = 0.0; cc_mast = 0.0
         param_s = 0.0
         for blk_name, blk in _scale_blocks(server_model, s):
             fwd = blk.peak_mem_mb
             ret = blk.retained_activation_mb
             par = float(blk.param_mem_bytes) / (1024.0 * 1024.0)
+            K = blk.shapelets_size
+            C = blk.in_channels
+            s_num = blk.num_shapelets
+            windows = max(seq_len - K + 1, 1)
             if blk_name == "eu":
                 eu_fwd = fwd; eu_ret = ret; param_s += par
+                # MAST get_M_e: 4*B*C*windows*K + cdist buffer
+                eu_mast = (4.0 * B * C * windows * K) / (1024.0 * 1024.0)
             elif blk_name == "co":
                 co_fwd = fwd; co_ret = ret; param_s += par
+                # MAST get_M_c: 4*(2*s*C + C*s*K + B*C*windows*K + B*s + B*windows*s)
+                co_mast = 4.0 * (
+                    2.0 * s_num * C + C * s_num * K + B * C * windows * K
+                    + B * s_num + B * windows * s_num
+                ) / (1024.0 * 1024.0)
             elif blk_name == "cc":
                 cc_fwd = fwd; cc_ret = ret; param_s += par
+                # MAST get_M_x: 4*(B * s_num * windows + C * s_num * K + B * s_num)
+                cc_mast = 4.0 * (
+                    B * s_num * windows + C * s_num * K + B * s_num
+                ) / (1024.0 * 1024.0)
         fwd_sum = eu_fwd + co_fwd + cc_fwd
         ret_sum = eu_ret + co_ret + cc_ret
+        mast_sum = eu_mast + co_mast + cc_mast
         total_param_mb += param_s
         table.append({
             "scale_idx": s, "length": L,
             "eu_fwd": eu_fwd, "co_fwd": co_fwd, "cc_fwd": cc_fwd, "fwd_sum": fwd_sum,
             "eu_ret": eu_ret, "co_ret": co_ret, "cc_ret": cc_ret, "ret_sum": ret_sum,
+            "eu_mast": eu_mast, "co_mast": co_mast, "cc_mast": cc_mast, "mast_sum": mast_sum,
             "param": param_s,
         })
 
@@ -937,13 +958,20 @@ def _collect_scale_memory_table(server_model, sample_data, device):
     _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
     lines.append(sep)
 
-    # -- Table 3: Retained Activations --
-    lines += ["", sep, "[scale-memory] 表3: Retained Activation (MB) — 中间张量(unfold/Conv1d)大小", HDR]
-    s_eu=0; s_co=0; s_cc=0; s_sum=0
+    # -- Table 3: Retained Activations (实测 vs MAST 公式估算) --
+    HDR3 = (f"  {'Scale':>6s}  {'Length':>8s}  {'Eu(MB)':>10s}  {'Co(MB)':>10s}  {'CC(MB)':>10s}  "
+            f"{'Sum(MB)':>10s}  {'MAST(MB)':>10s}")
+    lines += ["", sep,
+        "[scale-memory] 表3: Retained Activation (MB) — 实测(numel) vs MAST公式估算",
+        f"  B={B}  C={x.shape[1]}  L={seq_len}  (实测=unfold/Conv1d输出numel, MAST=手写公式)",
+        HDR3]
+    s_eu=0; s_co=0; s_cc=0; s_sum=0; s_mast=0
     for r in table:
-        lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_ret']:>10.2f}  {r['co_ret']:>10.2f}  {r['cc_ret']:>10.2f}  {r['ret_sum']:>10.2f}")
-        s_eu+=r['eu_ret']; s_co+=r['co_ret']; s_cc+=r['cc_ret']; s_sum+=r['ret_sum']
-    _sum_row(s_eu, s_co, s_cc, s_sum); _pct_row(s_eu, s_co, s_cc, s_sum)
+        lines.append(f"  {r['scale_idx']:>6d}  {r['length']:>8d}  {r['eu_ret']:>10.2f}  {r['co_ret']:>10.2f}  "
+                     f"{r['cc_ret']:>10.2f}  {r['ret_sum']:>10.2f}  {r['mast_sum']:>10.2f}")
+        s_eu+=r['eu_ret']; s_co+=r['co_ret']; s_cc+=r['cc_ret']; s_sum+=r['ret_sum']; s_mast+=r['mast_sum']
+    lines.append(dash)
+    lines.append(f"  {'SUM':>6s}  {'':>8s}  {s_eu:>10.2f}  {s_co:>10.2f}  {s_cc:>10.2f}  {s_sum:>10.2f}  {s_mast:>10.2f}")
     lines.append(sep)
 
     # -- Table 4: Per-Scale 边际成本 (knapsack 用) --

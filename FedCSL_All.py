@@ -466,21 +466,138 @@ def _compute_nsv_scores(period_scores, scale_costs):
     return nsv_scores
 
 
-def _balance_coverage_greedy_swap(
+def _balance_coverage_optimal(
     client_selected, nsv_scores, coverage_hist,
-    target_lo=None, target_hi=None, max_rounds=20,
+    target_lo=None, target_hi=None,
 ):
-    """Phase 1 Step 2: 最小 NSV 损失覆盖均衡。
+    """Phase 1 Step 2: 全局最优覆盖均衡 (DFS branch-and-bound)。
 
-    对覆盖过多的 scale 和覆盖不足的 scale 做贪心 swap,
-    选择 NSV 损失最小的客户端进行 (over_s → under_s) 替换。
+    问题：对覆盖过多/不足的 scale 做 swap 调整，全局最小化 KSV 总损失。
+    N≤10, R≤8 时搜索空间很小, DFS + 剪枝可达全局最优。
 
     Returns:
         client_selected: 均衡后的分配
         final_coverage: 最终覆盖数组
-        swap_log: list[str] 记录每步 swap 详情
+        swap_log: list[str]
     """
     client_selected = [list(sel) for sel in client_selected]  # deep copy
+    num_scales = len(coverage_hist)
+    num_clients = len(client_selected)
+    if target_lo is None or target_hi is None:
+        target = max(2, int(np.ceil(num_clients / num_scales)))
+        target_lo = target - 1
+        target_hi = target + 1
+
+    # ── Check if already balanced ──
+    coverage = list(int(c) for c in coverage_hist)
+    overs  = [s for s in range(num_scales) if coverage[s] > target_hi]
+    unders = [s for s in range(num_scales) if coverage[s] < target_lo]
+    if not overs or not unders:
+        swap_log = [f"  already balanced: coverage={coverage}"]
+        return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
+
+    # ── Build candidate swaps ──
+    swaps = []  # (cid, s_out, s_in, cost)   cost = KSV[c][s_out] - KSV[c][s_in]
+    for cid, sel in enumerate(client_selected):
+        for s_out in sel:
+            if coverage[s_out] <= target_hi:
+                continue
+            for s_in in range(num_scales):
+                if s_in in sel or coverage[s_in] >= target_lo:
+                    continue
+                cost = float(nsv_scores[cid][s_out]) - float(nsv_scores[cid][s_in])
+                swaps.append((cid, s_out, s_in, cost))
+
+    if not swaps:
+        swap_log = [f"  no feasible swap: coverage={coverage}, overs={overs}, unders={unders}"]
+        return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
+
+    # Sort by cost ascending (DFS prunes faster)
+    swaps.sort(key=lambda x: x[3])
+
+    # ── Compute required changes ──
+    need_remove = {s: max(0, coverage[s] - target_hi) for s in range(num_scales)}
+    need_add = {s: max(0, target_lo - coverage[s]) for s in range(num_scales)}
+    total_removes_needed = sum(need_remove.values())
+
+    # ── DFS with branch-and-bound ──
+    best_cost = float('inf')
+    best_set = []  # list of swap indices
+
+    def _dfs(idx, cov, used_clients, cur_cost, cur_set):
+        nonlocal best_cost, best_set
+        # Prune: cost already worse
+        if cur_cost >= best_cost:
+            return
+        # Check if coverage satisfied
+        ok = True
+        for s in range(num_scales):
+            if cov[s] > target_hi or cov[s] < target_lo:
+                ok = False
+                break
+        if ok:
+            if cur_cost < best_cost:
+                best_cost = cur_cost
+                best_set = list(cur_set)
+            return
+        if idx >= len(swaps):
+            return
+        cid, s_out, s_in, cost = swaps[idx]
+
+        # Option 1: skip
+        _dfs(idx + 1, cov, used_clients, cur_cost, cur_set)
+
+        # Option 2: take (only if still needed and client not used)
+        if (cid not in used_clients
+                and cov[s_out] > target_hi
+                and cov[s_in] < target_lo
+                and cur_cost + cost < best_cost):
+            new_cov = list(cov)
+            new_cov[s_out] -= 1
+            new_cov[s_in] += 1
+            _dfs(idx + 1, new_cov, used_clients | {cid}, cur_cost + cost, cur_set + [idx])
+
+    _dfs(0, coverage, set(), 0.0, [])
+
+    # ── Apply optimal swaps ──
+    swap_log = []
+    if best_set:
+        total_saved = 0.0
+        for si in best_set:
+            cid, s_out, s_in, cost = swaps[si]
+            sel = client_selected[cid]
+            sel[sel.index(s_out)] = s_in
+            coverage[s_out] -= 1
+            coverage[s_in] += 1
+            total_saved += float(nsv_scores[cid][s_in]) - float(nsv_scores[cid][s_out])
+            swap_log.append(
+                f"  c{cid} {s_out}→{s_in} "
+                f"(ΔNSV={-cost:+.4f}) "
+                f"coverage={coverage}"
+            )
+        swap_log.append(
+            f"  optimal: {len(best_set)} swaps, "
+            f"total_NSV_gain={total_saved:+.4f}, "
+            f"final_coverage={coverage}"
+        )
+    else:
+        swap_log.append(f"  greedy fallback (DFS exhausted without solution)")
+        # Fallback to greedy for safety
+        return _balance_coverage_greedy_swap(
+            client_selected, nsv_scores,
+            np.asarray(coverage_hist, dtype=np.int64),
+            target_lo=target_lo, target_hi=target_hi,
+        )
+
+    return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
+
+
+def _balance_coverage_greedy_swap(
+    client_selected, nsv_scores, coverage_hist,
+    target_lo=None, target_hi=None, max_rounds=20,
+):
+    """Phase 1 Step 2 fallback: 贪心 swap (迭代选取局部最优交换)。"""
+    client_selected = [list(sel) for sel in client_selected]
     coverage = np.asarray(coverage_hist, dtype=np.int64).copy()
     num_scales = len(coverage)
     num_clients = len(client_selected)
@@ -2624,13 +2741,13 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     _cov_target = int(_env_ct)
             _tol = int(os.environ.get("COVERAGE_TOLERANCE", "1"))
             if _cov_target is not None:
-                _balanced, _bal_cov, _swap_log = _balance_coverage_greedy_swap(
+                _balanced, _bal_cov, _swap_log = _balance_coverage_optimal(
                     cached_client_scale_plans, _nsv_scores, cached_scale_hist,
                     target_lo=_cov_target - _tol,
                     target_hi=_cov_target + _tol,
                 )
             else:
-                _balanced, _bal_cov, _swap_log = _balance_coverage_greedy_swap(
+                _balanced, _bal_cov, _swap_log = _balance_coverage_optimal(
                     cached_client_scale_plans, _nsv_scores, cached_scale_hist,
                 )
             cached_client_scale_plans = _balanced

@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Coverage Sensitivity 实验：greedy swap 的 coverage_target 参数敏感度分析。
+# Coverage Sensitivity 实验：覆盖均衡参数敏感度分析。
 #
-# 对每个 coverage_target 做一次独立 run，使用持久化显存数据避免并行 GPU 冲突。
+# 对每个 coverage_target 做一次独立 run (strength=1 硬约束, tolerance=0 精确),
+# 使用持久化显存数据避免并行 GPU 冲突。
 #
 # 用法（网格）：
-#   COVERAGE_TARGET="1,2,3,4,5" DIR_ALPHA="0.1,0.5,1.0" DATASET=HAR \
+#   COVERAGE_TARGET="1,2,3,4,5" DIR_ALPHA="0.1,0.5" DATASET=HAR \
 #     bash scripts/coverage_sensitivity.sh
-#
-# 用法（单次，默认 cov=1..5 alpha=0.5）：
-#   bash scripts/coverage_sensitivity.sh
 
 set -euo pipefail
 
@@ -32,7 +30,8 @@ for alpha in "${ALPHAS[@]}"; do
       --description "${DATASET}_spilter_cov${c}_dir${a}" \
       --spilter-knapsack \
       --scale-memory-cache \
-      --coverage-target "${c}" &
+      --coverage-target "${c}" \
+      --coverage-strength 1 &
   done
 done
 wait

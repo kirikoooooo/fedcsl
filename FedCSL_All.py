@@ -107,6 +107,8 @@ parser.add_argument('--scale-memory-cache', action='store_true', default=False,
                     help='Use persisted scale memory from data/scale_memory/<dataset>_scale_memory.json (skip GPU collection, safe for parallel runs)')
 parser.add_argument('--coverage-target', type=int, default=None,
                     help='Per-scale coverage target for optimal swap balancing (default avg coverage = round(sum_assignments/R))')
+parser.add_argument('--coverage-strength', type=float, default=None,
+                    help='Coverage balancing strength 0-1 (0=no swap, 0.5=balanced, 1=max uniformity; default 0.5)')
 
 args = parser.parse_args()
 
@@ -469,89 +471,95 @@ def _compute_nsv_scores(period_scores, scale_costs):
 def _balance_coverage_optimal(
     client_selected, nsv_scores, coverage_hist,
     target_lo=None, target_hi=None,
+    strength=0.5,
 ):
-    """Phase 1 Step 2: 全局最优覆盖均衡 (DFS branch-and-bound)。
+    """Phase 1 Step 2: 带覆盖强度控制的全局最优 swap (DFS branch-and-bound)。
 
-    问题：对覆盖过多/不足的 scale 做 swap 调整，全局最小化 KSV 总损失。
-    N≤10, R≤8 时搜索空间很小, DFS + 剪枝可达全局最优。
+    strength ∈ [0,1]:
+      0   = 不 swap（保持 knapsack 结果）
+      (0,1) = NSV 损失 + 覆盖偏差惩罚，DFS 全局最优
+      1   = 硬约束（coverage ∈ [lo, hi]），达到可达成的最均匀
 
-    Returns:
-        client_selected: 均衡后的分配
-        final_coverage: 最终覆盖数组
-        swap_log: list[str]
+    objective:
+      cost = Σ NSV_delta + penalty_weight × Σ max(0, gap)²
+      penalty_weight = strength / max(1 - strength, ε)
     """
-    client_selected = [list(sel) for sel in client_selected]  # deep copy
+    client_selected = [list(sel) for sel in client_selected]
     num_scales = len(coverage_hist)
-    num_clients = len(client_selected)
     coverage = list(int(c) for c in coverage_hist)
     if target_lo is None or target_hi is None:
-        # target = average coverage rounded (matches actual total assignments)
         total_assignments = sum(coverage)
         target = max(2, int(round(total_assignments / num_scales)))
         target_lo = target - 1
         target_hi = target + 1
 
-    # ── Check if already balanced ──
-    overs  = [s for s in range(num_scales) if coverage[s] > target_hi]
-    unders = [s for s in range(num_scales) if coverage[s] < target_lo]
-    if not overs or not unders:
-        swap_log = [f"  already balanced: coverage={coverage}"]
+    # ── strength=0: skip balancing entirely ──
+    strength = max(0.0, min(1.0, float(strength)))
+    if strength < 1e-6:
+        swap_log = [f"  strength=0: no coverage balancing, keep knapsack result. coverage={coverage}"]
         return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
 
-    # ── Build candidate swaps ──
-    swaps = []  # (cid, s_out, s_in, cost)   cost = KSV[c][s_out] - KSV[c][s_in]
+    # ── Build ALL candidate swaps (not just constrained ones) ──
+    swaps = []
     for cid, sel in enumerate(client_selected):
         for s_out in sel:
-            if coverage[s_out] <= target_hi:
-                continue
             for s_in in range(num_scales):
-                if s_in in sel or coverage[s_in] >= target_lo:
+                if s_in in sel:
                     continue
-                cost = float(nsv_scores[cid][s_out]) - float(nsv_scores[cid][s_in])
-                swaps.append((cid, s_out, s_in, cost))
-
-    if not swaps:
-        swap_log = [f"  no feasible swap: coverage={coverage}, overs={overs}, unders={unders}"]
-        return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
-
-    # Sort by cost ascending (DFS prunes faster)
+                delta = float(nsv_scores[cid][s_out]) - float(nsv_scores[cid][s_in])
+                swaps.append((cid, s_out, s_in, delta))
     swaps.sort(key=lambda x: x[3])
+    penalty_weight = strength / max(1.0 - strength, 1e-6)
 
-    # ── Compute required changes ──
-    need_remove = {s: max(0, coverage[s] - target_hi) for s in range(num_scales)}
-    need_add = {s: max(0, target_lo - coverage[s]) for s in range(num_scales)}
-    total_removes_needed = sum(need_remove.values())
-
-    # ── DFS with branch-and-bound ──
-    best_cost = float('inf')
-    best_set = []  # list of swap indices
-
-    def _dfs(idx, cov, cur_cost, cur_set):
-        nonlocal best_cost, best_set
-        if cur_cost >= best_cost:
-            return
-        ok = True
+    def _imbalance(cov):
+        """Squared penalty for deviation from [lo, hi]."""
+        p = 0.0
         for s in range(num_scales):
-            if cov[s] > target_hi or cov[s] < target_lo:
-                ok = False
-                break
-        if ok:
-            if cur_cost < best_cost:
-                best_cost = cur_cost
-                best_set = list(cur_set)
+            if cov[s] < target_lo:
+                d = float(target_lo - cov[s])
+                p += d * d
+            elif cov[s] > target_hi:
+                d = float(cov[s] - target_hi)
+                p += d * d
+        return p
+
+    initial_imbalance = _imbalance(coverage)
+
+    # ── DFS with penalty-based objective ──
+    best_cost = float('inf')
+    best_set = []
+
+    def _dfs(idx, cov, cur_nsv, cur_set):
+        nonlocal best_cost, best_set
+        total_cost = cur_nsv + penalty_weight * _imbalance(cov)
+        if total_cost >= best_cost:
             return
+        # Check if feasible (hard constraint only at strength=1)
+        if strength >= 0.999:
+            ok = True
+            for s in range(num_scales):
+                if cov[s] > target_hi or cov[s] < target_lo:
+                    ok = False
+                    break
+            if ok and cur_nsv < best_cost:
+                best_cost = cur_nsv
+                best_set = list(cur_set)
+            if ok:
+                return
+        else:
+            # Soft: update best if total_cost improved
+            if total_cost < best_cost:
+                # Only accept if imbalance improved (prevents no-op)
+                if _imbalance(cov) < initial_imbalance or len(cur_set) > 0:
+                    best_cost = total_cost
+                    best_set = list(cur_set)
         if idx >= len(swaps):
             return
-        cid, s_out, s_in, cost = swaps[idx]
-
-        # Option 1: skip
-        _dfs(idx + 1, cov, cur_cost, cur_set)
-
-        # Option 2: take (if still needed; client may participate multiple times)
-        if (cov[s_out] > target_hi
-                and cov[s_in] < target_lo
-                and cur_cost + cost < best_cost):
-            # Verify swap is still feasible given previous swaps in cur_set
+        cid, s_out, s_in, delta = swaps[idx]
+        # Skip
+        _dfs(idx + 1, cov, cur_nsv, cur_set)
+        # Take (verify feasibility within client's scale set)
+        if cur_nsv + delta + penalty_weight * (_imbalance(cov) * 0.5) < best_cost:
             c_scales = set(client_selected[cid])
             for prev_si in cur_set:
                 pcid, ps_out, ps_in, _ = swaps[prev_si]
@@ -562,38 +570,51 @@ def _balance_coverage_optimal(
                 new_cov = list(cov)
                 new_cov[s_out] -= 1
                 new_cov[s_in] += 1
-                _dfs(idx + 1, new_cov, cur_cost + cost, cur_set + [idx])
+                _dfs(idx + 1, new_cov, cur_nsv + delta, cur_set + [idx])
 
     _dfs(0, coverage, 0.0, [])
 
-    # ── Apply optimal swaps ──
-    swap_log = []
-    if best_set:
-        total_saved = 0.0
-        for si in best_set:
-            cid, s_out, s_in, cost = swaps[si]
-            sel = client_selected[cid]
-            sel[sel.index(s_out)] = s_in
-            coverage[s_out] -= 1
-            coverage[s_in] += 1
-            total_saved += float(nsv_scores[cid][s_in]) - float(nsv_scores[cid][s_out])
-            swap_log.append(
-                f"  c{cid} {s_out}→{s_in} "
-                f"(ΔNSV={-cost:+.4f}) "
+    # ── Handle empty best_set ──
+    if not best_set:
+        if strength >= 0.999:
+            raise RuntimeError(
+                f"_balance_coverage_optimal: DFS exhausted, no feasible swap set "
+                f"for hard constraints lo={target_lo} hi={target_hi}. "
                 f"coverage={coverage}"
             )
-        swap_log.append(
-            f"  optimal: {len(best_set)} swaps, "
-            f"total_NSV_gain={total_saved:+.4f}, "
-            f"final_coverage={coverage}"
-        )
-    else:
-        raise RuntimeError(
-            f"_balance_coverage_optimal: DFS exhausted without reaching coverage "
-            f"targets lo={target_lo} hi={target_hi}. "
-            f"No feasible swap set found."
-        )
+        else:
+            swap_log = [
+                f"  strength={strength:.2f}: no coverage-improving swap found "
+                f"(penalty_weight={penalty_weight:.1f}). "
+                f"keeping knapsack result. coverage={coverage}"
+            ]
+            return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
 
+    # ── Apply optimal swaps ──
+    swap_log = []
+    total_nsv_delta = 0.0
+    for si in best_set:
+        cid, s_out, s_in, delta = swaps[si]
+        sel = client_selected[cid]
+        sel[sel.index(s_out)] = s_in
+        coverage[s_out] -= 1
+        coverage[s_in] += 1
+        total_nsv_delta += delta
+        swap_log.append(
+            f"  c{cid} {s_out}→{s_in} "
+            f"(ΔNSV={delta:+.4f}) "
+            f"coverage={coverage}"
+        )
+    final_imbalance = _imbalance(coverage)
+    swap_log.insert(0,
+        f"  strength={strength:.2f} penalty_weight={penalty_weight:.1f} "
+        f"initial_imbalance={initial_imbalance:.1f} → final_imbalance={final_imbalance:.1f}"
+    )
+    swap_log.append(
+        f"  optimal: {len(best_set)} swaps, "
+        f"total_NSV_delta={total_nsv_delta:+.4f}, "
+        f"final_coverage={coverage}"
+    )
     return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
 
 
@@ -2699,15 +2720,22 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 if _env_ct:
                     _cov_target = int(_env_ct)
             _tol = int(os.environ.get("COVERAGE_TOLERANCE", "1"))
+            _strength = args.coverage_strength
+            if _strength is None:
+                _env_cs = os.environ.get("COVERAGE_STRENGTH", "").strip()
+                _strength = float(_env_cs) if _env_cs else 0.5
+            _strength = max(0.0, min(1.0, float(_strength)))
             if _cov_target is not None:
                 _balanced, _bal_cov, _swap_log = _balance_coverage_optimal(
                     cached_client_scale_plans, _nsv_scores, cached_scale_hist,
                     target_lo=_cov_target - _tol,
                     target_hi=_cov_target + _tol,
+                    strength=_strength,
                 )
             else:
                 _balanced, _bal_cov, _swap_log = _balance_coverage_optimal(
                     cached_client_scale_plans, _nsv_scores, cached_scale_hist,
+                    strength=_strength,
                 )
             cached_client_scale_plans = _balanced
             cached_scale_hist = _bal_cov

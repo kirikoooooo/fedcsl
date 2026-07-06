@@ -35,24 +35,33 @@ maximize Σ value[selected]  s.t.  Σ weight[selected] ≤ cap
 
 ## Phase 1 Step 2: 覆盖均衡
 
-目标：`coverage[s] ∈ [target_lo, target_hi]`，全局 NSV 总损失最小。
+目标：按可调节强度 `λ` 将覆盖分布向 `[target_lo, target_hi]` 拉近，
+同时全局 NSV 损失最小。
 
-**主算法**: `_balance_coverage_optimal` — DFS branch-and-bound 全局最优。
+**主算法**: `_balance_coverage_optimal` — 带惩罚项的 DFS branch-and-bound 全局最优。
 
-1. 枚举候选 swap: `(cid, s_out→s_in, cost = KSV[c][s_out] - KSV[c][s_in])`
-2. 按 cost 升序 + DFS + 剪枝（cost≥best → 跳过 / 覆盖已满足 → 终止）
-3. DFS 无解 → `raise RuntimeError`（不允许 fallback，必须排查原因）
-4. 一个客户端允许多次 swap（无 used_clients 限制），通过追踪当前路径的
-   实际 scale 集合验证可行性
+```
+objective = Σ NSV_delta + penalty_weight × Σ max(0, gap)²
 
-**复杂度**: N≤10, R≤8, 候选 swap ≤200, 因覆盖约束 DFS 快速收敛至 <1000 节点。
+penalty_weight = strength / (1 - strength)
+gap = |coverage[s] - target_lo|  if coverage[s] < target_lo
+    | coverage[s] - target_hi|   if coverage[s] > target_hi
+    0                            otherwise
+```
+
+**strength 控制覆盖强度**:
+
+| strength | penalty_weight | 效果 |
+|----------|---------------|------|
+| 0 | 0 | 不 swap，保留 knapsack 结果 |
+| 0.5 | 1 | 平衡 NSV 损失和覆盖均匀 |
+| 1 | ∞ | 硬约束（最大可达均匀度） |
 
 | 参数 | 默认值 | 含义 |
 |------|--------|------|
-| `COVERAGE_TARGET` | `max(2, round(sum(coverage)/R))` | 每 scale 目标覆盖数（基于实际总分配量） |
-| `COVERAGE_TOLERANCE` | 1 | 允许偏差 (±tol) |
-
-**默认 target 计算**: `target = round(Σ coverage / R)`。knapsack 输出总分配到各 scale 后，target 取实际均值保证数学可行。例: 10 clients × 平均 2.7 scales = 27 次分配，target = round(27/8) = 3, range = [2,4]。
+| `COVERAGE_TARGET` | `max(2, round(Σ coverage/R))` | 每 scale 目标覆盖数 |
+| `COVERAGE_STRENGTH` | 0.5 | 覆盖均衡强度 0-1 |
+| `COVERAGE_TOLERANCE` | 1 | gap 区间宽度 (±tol) |
 
 ---
 

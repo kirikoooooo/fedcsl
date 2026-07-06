@@ -524,12 +524,10 @@ def _balance_coverage_optimal(
     best_cost = float('inf')
     best_set = []  # list of swap indices
 
-    def _dfs(idx, cov, used_clients, cur_cost, cur_set):
+    def _dfs(idx, cov, cur_cost, cur_set):
         nonlocal best_cost, best_set
-        # Prune: cost already worse
         if cur_cost >= best_cost:
             return
-        # Check if coverage satisfied
         ok = True
         for s in range(num_scales):
             if cov[s] > target_hi or cov[s] < target_lo:
@@ -545,19 +543,26 @@ def _balance_coverage_optimal(
         cid, s_out, s_in, cost = swaps[idx]
 
         # Option 1: skip
-        _dfs(idx + 1, cov, used_clients, cur_cost, cur_set)
+        _dfs(idx + 1, cov, cur_cost, cur_set)
 
-        # Option 2: take (only if still needed and client not used)
-        if (cid not in used_clients
-                and cov[s_out] > target_hi
+        # Option 2: take (if still needed; client may participate multiple times)
+        if (cov[s_out] > target_hi
                 and cov[s_in] < target_lo
                 and cur_cost + cost < best_cost):
-            new_cov = list(cov)
-            new_cov[s_out] -= 1
-            new_cov[s_in] += 1
-            _dfs(idx + 1, new_cov, used_clients | {cid}, cur_cost + cost, cur_set + [idx])
+            # Verify swap is still feasible given previous swaps in cur_set
+            c_scales = set(client_selected[cid])
+            for prev_si in cur_set:
+                pcid, ps_out, ps_in, _ = swaps[prev_si]
+                if pcid == cid:
+                    c_scales.discard(ps_out)
+                    c_scales.add(ps_in)
+            if s_out in c_scales and s_in not in c_scales:
+                new_cov = list(cov)
+                new_cov[s_out] -= 1
+                new_cov[s_in] += 1
+                _dfs(idx + 1, new_cov, cur_cost + cost, cur_set + [idx])
 
-    _dfs(0, coverage, set(), 0.0, [])
+    _dfs(0, coverage, 0.0, [])
 
     # ── Apply optimal swaps ──
     swap_log = []

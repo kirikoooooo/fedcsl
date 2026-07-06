@@ -919,7 +919,7 @@ async function launchSelectedBaselines() {
           const perClientBudgets = computePerClientMemoryBudgets(nCli);
           envBase.SPILTER_MEMORY_BUDGETS = perClientBudgets.join(',');
         }
-        // Coverage Sensitivity: 每个 cov target 使用独立描述名
+        // Coverage Sensitivity: 变 coverage_target, 使用持久化显存(避免并行GPU冲突)
         const coverageSensChecked = document.getElementById('coverage-sensitivity-toggle')?.checked || false;
         if ((script === 'scripts/spilter_har.sh' || script === 'scripts/spilter_mixed_har.sh') && coverageSensChecked) {
           envBase.SPILTER_KNAPSACK = '1';
@@ -928,8 +928,7 @@ async function launchSelectedBaselines() {
           const end   = parseInt(document.getElementById('coverage-target-end')?.value) || 5;
           const step  = parseInt(document.getElementById('coverage-target-step')?.value) || 1;
           for (let cov = start; cov <= end; cov += step) {
-            const envCov = {...envBase, COVERAGE_TARGET: String(cov),
-              DESC: `${dataset}_spilter_knsap_cov${cov}_dir${alpha}`};
+            const envCov = {...envBase, COVERAGE_TARGET: String(cov)};
             const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs, envBase: envCov});
             const run = await api('/runs', {
               method: 'POST',

@@ -103,6 +103,10 @@ parser.add_argument('--spilter-memory-budget', type=float, default=None,
                     help='Per-client memory budget in MB for knapsack_lagrangian mode (overrides config spilter.memory_budget_mb)')
 parser.add_argument('--spilter-top-m', type=int, default=None,
                     help='Number of top scales per client (default 8, covers all scales; override for budget experiments)')
+parser.add_argument('--scale-memory-cache', action='store_true', default=False,
+                    help='Use persisted scale memory from data/scale_memory/<dataset>_scale_memory.json (skip GPU collection, safe for parallel runs)')
+parser.add_argument('--coverage-target', type=int, default=None,
+                    help='Per-scale coverage target for greedy swap balancing (default max(2, ceil(numClients/R)))')
 
 args = parser.parse_args()
 
@@ -1160,6 +1164,56 @@ def _collect_scale_memory_table(server_model, sample_data, device):
 
     scale_costs = [r["marginal"] for r in table]
     return overhead_mb, scale_costs, table
+
+
+def _save_scale_memory_cache(dataset_tag, overhead_mb, scale_costs, num_scales, lengths, device, batch_size):
+    """持久化 scale memory 到 data/scale_memory/<dataset>_scale_memory.json。"""
+    import json as _json
+    _cache_dir = os.path.join("data", "scale_memory")
+    os.makedirs(_cache_dir, exist_ok=True)
+    _cache_path = os.path.join(_cache_dir, f"{dataset_tag}_scale_memory.json")
+    _cache = {
+        "dataset": dataset_tag,
+        "overhead_mb": float(overhead_mb),
+        "scale_costs": scale_costs,
+        "num_scales": int(num_scales),
+        "scale_lengths": [int(k) for k in lengths],
+        "collected_at": time.time(),
+        "device": str(device),
+        "batch_size": int(batch_size),
+    }
+    try:
+        with open(_cache_path, "w", encoding="utf-8") as _f:
+            _json.dump(_cache, _f, indent=2, ensure_ascii=False)
+        print(f"[scale-memory] 已持久化: {_cache_path}", flush=True)
+    except Exception as e:
+        print(f"[scale-memory] 持久化失败: {e}", flush=True)
+
+
+def _load_scale_memory_cache(dataset_tag):
+    """从 data/scale_memory/<dataset>_scale_memory.json 加载持久化数据。
+
+    Returns (overhead_mb, scale_costs) or (None, None).
+    """
+    import json as _json
+    cache_path = os.path.join("data", "scale_memory", f"{dataset_tag}_scale_memory.json")
+    if not os.path.isfile(cache_path):
+        print(f"[scale-memory] 缓存文件不存在: {cache_path}", flush=True)
+        return None, None
+    try:
+        data = _json.loads(open(cache_path, encoding="utf-8").read())
+        overhead_mb = float(data["overhead_mb"])
+        scale_costs = data["scale_costs"]
+        print(
+            f"[scale-memory] 从缓存加载: {cache_path}\n"
+            f"  overhead={overhead_mb:.1f}MB  "
+            f"costs={[f'{v:.1f}' for v in scale_costs]} MB",
+            flush=True,
+        )
+        return overhead_mb, scale_costs
+    except Exception as e:
+        print(f"[scale-memory] 缓存加载失败: {e}", flush=True)
+        return None, None
 
 
 def _plan_topm_then_local_knapsack_client_scales(
@@ -2394,25 +2448,42 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         if args.description:
             config['description'] = args.description + "_knapsack"
 
-    # ----- 服务端集中式显存采集（MAST-style：一次 full forward，block 自测） -----
+    # ----- 显存采集：优先从缓存加载；否则实时采集并持久化 -----
     scale_costs = None
     overhead_base_mb = 0.0
     scale_mem_table = []
+    _use_cache = args.scale_memory_cache or os.environ.get("SCALE_MEMORY_CACHE", "").strip() == "1"
     if _uses_scale_split_algo(algo) and server_device.type == "cuda":
-        _sample = None
-        for _cx in X_fed:
-            if len(_cx) >= batch_size:
-                _sample = _cx[:batch_size]
-                break
-        if _sample is not None:
-            _overhead, scale_costs, scale_mem_table = _collect_scale_memory_table(
-                server.model, _sample, server_device,
-            )
-            if scale_costs is not None:
-                overhead_base_mb = float(_overhead)
-                _sp_cfg = config.setdefault("spilter", {})
-                _sp_cfg["scale_memory_costs_mb"] = scale_costs
-                _sp_cfg["base_memory_mb"] = overhead_base_mb
+        if _use_cache:
+            # 从数据文件加载，避免并行时 GPU 采集冲突
+            _cached_oh, _cached_sc = _load_scale_memory_cache(dataset)
+            if _cached_sc is not None:
+                overhead_base_mb = _cached_oh
+                scale_costs = _cached_sc
+        if scale_costs is None:
+            # 实时采集
+            _sample = None
+            for _cx in X_fed:
+                if len(_cx) >= batch_size:
+                    _sample = _cx[:batch_size]
+                    break
+            if _sample is not None:
+                _overhead, scale_costs, scale_mem_table = _collect_scale_memory_table(
+                    server.model, _sample, server_device,
+                )
+                if scale_costs is not None:
+                    overhead_base_mb = float(_overhead)
+                    # 持久化供后续并行实验复用
+                    _save_scale_memory_cache(
+                        dataset, overhead_base_mb, scale_costs,
+                        len(server.model.shapelets_size_and_len),
+                        list(server.model.shapelets_size_and_len.keys()),
+                        server_device, batch_size,
+                    )
+        if scale_costs is not None:
+            _sp_cfg = config.setdefault("spilter", {})
+            _sp_cfg["scale_memory_costs_mb"] = scale_costs
+            _sp_cfg["base_memory_mb"] = overhead_base_mb
     # Inject TopM into config (CLI > env > default 8)
     _top_m_val = args.spilter_top_m
     if _top_m_val is None:
@@ -2544,9 +2615,22 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         # ── Phase 1 Step 2: greedy swap coverage balancing ──
         if (cached_client_scale_plans is not None and cached_scale_hist is not None
                 and _uses_scale_split_algo(algo) and _nsv_scores is not None):
-            _balanced, _bal_cov, _swap_log = _balance_coverage_greedy_swap(
-                cached_client_scale_plans, _nsv_scores, cached_scale_hist,
-            )
+            _cov_target = args.coverage_target
+            if _cov_target is None:
+                _env_ct = os.environ.get("COVERAGE_TARGET", "").strip()
+                if _env_ct:
+                    _cov_target = int(_env_ct)
+            _tol = int(os.environ.get("COVERAGE_TOLERANCE", "1"))
+            if _cov_target is not None:
+                _balanced, _bal_cov, _swap_log = _balance_coverage_greedy_swap(
+                    cached_client_scale_plans, _nsv_scores, cached_scale_hist,
+                    target_lo=_cov_target - _tol,
+                    target_hi=_cov_target + _tol,
+                )
+            else:
+                _balanced, _bal_cov, _swap_log = _balance_coverage_greedy_swap(
+                    cached_client_scale_plans, _nsv_scores, cached_scale_hist,
+                )
             cached_client_scale_plans = _balanced
             cached_scale_hist = _bal_cov
             _format_phase1_result(_nsv_scores, scale_costs, _balanced, _bal_cov, _swap_log, logTxt)

@@ -233,6 +233,22 @@
               </div>
               <div id="memory-budget-summary" style="font-size:12px; color:var(--info); margin-top:6px;"></div>
             </div>
+            <label class="tag-check" style="margin-top:6px">
+              <input type="checkbox" id="coverage-sensitivity-toggle" onchange="updateCoverageSensitivitySection(); updateBaselineSummary();" />
+              <span>Coverage Sensitivity（覆盖度参数敏感度实验）</span>
+            </label>
+            <div id="coverage-sensitivity-section" style="display:none; margin-bottom:8px; padding:10px; background:var(--card); border:1px solid var(--border); border-radius:6px;">
+              <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">覆盖度参数 (使用持久化显存数据 data/scale_memory/&lt;dataset&gt;_scale_memory.json)</div>
+              <div class="form-row" style="display:flex; gap:8px; align-items:center;">
+                <label style="min-width:auto">Coverage Target:</label>
+                <input id="coverage-target-start" class="control" type="number" min="1" max="10" step="1" value="1" oninput="updateBaselineSummary()" style="width:55px" />
+                <span style="font-size:11px">→</span>
+                <input id="coverage-target-end" class="control" type="number" min="1" max="10" step="1" value="5" oninput="updateBaselineSummary()" style="width:55px" />
+                <span style="font-size:11px">step</span>
+                <input id="coverage-target-step" class="control" type="number" min="1" max="5" step="1" value="1" oninput="updateBaselineSummary()" style="width:55px" />
+              </div>
+              <div id="coverage-sensitivity-summary" style="font-size:12px; color:var(--info); margin-top:6px;"></div>
+            </div>
             <div class="form-row">
               <label>DIR_ALPHA</label>
               <select id="baseline-alpha" class="control" onchange="updateBaselineSummary()">
@@ -710,12 +726,23 @@ function selectedBaselineAlphas() {
 function updateMemoryBudgetSection() {
   const toggle = document.getElementById('spilter-memory-budget-toggle');
   const section = document.getElementById('memory-budget-section');
-  if (section && toggle) {
-    section.style.display = toggle.checked ? 'block' : 'none';
-  }
-  if (toggle && toggle.checked) {
-    _refreshMemoryBudgetSummary();
-  }
+  if (section && toggle) { section.style.display = toggle.checked ? 'block' : 'none'; }
+  if (toggle && toggle.checked) { _refreshMemoryBudgetSummary(); }
+}
+function updateCoverageSensitivitySection() {
+  const toggle = document.getElementById('coverage-sensitivity-toggle');
+  const section = document.getElementById('coverage-sensitivity-section');
+  if (section && toggle) { section.style.display = toggle.checked ? 'block' : 'none'; }
+  if (toggle && toggle.checked) { _refreshCoverageSensitivitySummary(); }
+}
+function _refreshCoverageSensitivitySummary() {
+  const start = parseInt(document.getElementById('coverage-target-start')?.value) || 1;
+  const end   = parseInt(document.getElementById('coverage-target-end')?.value) || 5;
+  const step  = parseInt(document.getElementById('coverage-target-step')?.value) || 1;
+  const vals  = [];
+  for (let v = start; v <= end; v += step) vals.push(v);
+  const el = document.getElementById('coverage-sensitivity-summary');
+  if (el) el.innerText = `将启动 ${vals.length} 个实验: target=[${vals.join(',')}] (每个使用持久化显存缓存)`;
 }
 function _memoryBudgetConfig() {
   const base = parseInt(document.getElementById('memory-budget-base')?.value) || 200;
@@ -891,6 +918,26 @@ async function launchSelectedBaselines() {
           const nCli = parseInt(numClient) || 10;
           const perClientBudgets = computePerClientMemoryBudgets(nCli);
           envBase.SPILTER_MEMORY_BUDGETS = perClientBudgets.join(',');
+        }
+        // Coverage Sensitivity: 变 coverage_target, 使用持久化显存(避免并行GPU冲突)
+        const coverageSensChecked = document.getElementById('coverage-sensitivity-toggle')?.checked || false;
+        if ((script === 'scripts/spilter_har.sh' || script === 'scripts/spilter_mixed_har.sh') && coverageSensChecked) {
+          envBase.SPILTER_KNAPSACK = '1';
+          envBase.SCALE_MEMORY_CACHE = '1';
+          const start = parseInt(document.getElementById('coverage-target-start')?.value) || 1;
+          const end   = parseInt(document.getElementById('coverage-target-end')?.value) || 5;
+          const step  = parseInt(document.getElementById('coverage-target-step')?.value) || 1;
+          for (let cov = start; cov <= end; cov += step) {
+            const envCov = {...envBase, COVERAGE_TARGET: String(cov)};
+            const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs, envBase: envCov});
+            const run = await api('/runs', {
+              method: 'POST',
+              headers: {'content-type':'application/json'},
+              body: JSON.stringify(payload),
+            });
+            started.push(run);
+          }
+          continue; // 跳过下面单次 launch
         }
         const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs, envBase});
         const run = await api('/runs', {

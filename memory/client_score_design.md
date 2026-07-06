@@ -93,7 +93,7 @@ cap = budget - base_cost
 
 ## Coverage Sensitivity 实验
 
-独立脚本 `scripts/coverage_sensitivity.sh`，对每个 `(cov, alpha)` 组合并行启动，使用持久化显存：
+独立脚本 `scripts/coverage_sensitivity.sh`，对每个 `(cov, alpha)` 组合使用 `--coverage-strength 1`（硬约束）并行启动：
 
 ```
 COVERAGE_TARGET="1,2,3,4,5" DIR_ALPHA="0.1,0.5" DATASET=HAR \
@@ -101,3 +101,5 @@ COVERAGE_TARGET="1,2,3,4,5" DIR_ALPHA="0.1,0.5" DATASET=HAR \
 ```
 
 命名：`HAR_spilter_cov2_dir0.5`。
+
+Dashboard 中可通过 `--coverage-strength` 值做敏感度分析。

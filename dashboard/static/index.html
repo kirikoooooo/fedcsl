@@ -233,6 +233,12 @@
               </div>
               <div id="memory-budget-summary" style="font-size:12px; color:var(--info); margin-top:6px;"></div>
             </div>
+            <div class="form-row" style="margin-bottom:6px">
+              <label>Coverage Strength</label>
+              <input id="coverage-strength" class="control" type="range" min="0" max="100" value="50" oninput="document.getElementById('coverage-strength-val').innerText=(this.value/100).toFixed(2); updateBaselineSummary();" style="width:160px" />
+              <span id="coverage-strength-val" style="font-size:12px">0.50</span>
+              <span style="font-size:11px; color:var(--muted)">(0=不均衡, 0.5=平衡, 1=硬约束)</span>
+            </div>
             <div class="form-row">
               <label>DIR_ALPHA</label>
               <select id="baseline-alpha" class="control" onchange="updateBaselineSummary()">
@@ -871,6 +877,9 @@ async function launchSelectedBaselines() {
         // TopM: 对所有 Spilter 脚本传递
         if (script === 'scripts/spilter_har.sh' || script === 'scripts/spilter_mixed_har.sh') {
           envBase.SPILTER_TOP_M = String(topM);
+          // Coverage Strength
+          const cs = parseFloat(document.getElementById('coverage-strength')?.value) || 50;
+          envBase.COVERAGE_STRENGTH = String((cs / 100).toFixed(2));
         }
         // 仅对 Spilter-Mixed 脚本生效随机选尺度选项
         if (script === 'scripts/spilter_mixed_har.sh' && randomChecked) {

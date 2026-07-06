@@ -581,61 +581,13 @@ def _balance_coverage_optimal(
             f"final_coverage={coverage}"
         )
     else:
-        swap_log.append(f"  greedy fallback (DFS exhausted without solution)")
-        # Fallback to greedy for safety
-        return _balance_coverage_greedy_swap(
-            client_selected, nsv_scores,
-            np.asarray(coverage_hist, dtype=np.int64),
-            target_lo=target_lo, target_hi=target_hi,
+        raise RuntimeError(
+            f"_balance_coverage_optimal: DFS exhausted without reaching coverage "
+            f"targets lo={target_lo} hi={target_hi}. "
+            f"No feasible swap set found."
         )
 
     return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
-
-
-def _balance_coverage_greedy_swap(
-    client_selected, nsv_scores, coverage_hist,
-    target_lo=None, target_hi=None, max_rounds=20,
-):
-    """Phase 1 Step 2 fallback: 贪心 swap (迭代选取局部最优交换)。"""
-    client_selected = [list(sel) for sel in client_selected]
-    coverage = np.asarray(coverage_hist, dtype=np.int64).copy()
-    num_scales = len(coverage)
-    num_clients = len(client_selected)
-    if target_lo is None or target_hi is None:
-        target = max(2, int(np.ceil(num_clients / num_scales)))
-        target_lo = target - 1
-        target_hi = target + 1
-    swap_log = []
-    for it in range(max_rounds):
-        overs  = [s for s in range(num_scales) if coverage[s] > target_hi]
-        unders = [s for s in range(num_scales) if coverage[s] < target_lo]
-        if not overs or not unders:
-            swap_log.append(f"  converge at iter={it}: coverage={coverage.tolist()}")
-            break
-        best_loss = float('inf')
-        best_swap = None
-        for over_s in overs:
-            for under_s in unders:
-                for cid, sel in enumerate(client_selected):
-                    if over_s not in sel or under_s in sel:
-                        continue
-                    loss = float(nsv_scores[cid][over_s]) - float(nsv_scores[cid][under_s])
-                    if loss < best_loss:
-                        best_loss = loss
-                        best_swap = (cid, over_s, under_s)
-        if best_swap is None:
-            swap_log.append(f"  stall at iter={it}: no feasible swap")
-            break
-        cid, over_s, under_s = best_swap
-        sel = client_selected[cid]
-        sel[sel.index(over_s)] = under_s
-        coverage[over_s] -= 1
-        coverage[under_s] += 1
-        swap_log.append(
-            f"  iter={it}: c{cid} {over_s}→{under_s} (ΔNSV={best_loss:+.4f}) "
-            f"coverage={coverage.tolist()}"
-        )
-    return client_selected, coverage, swap_log
 
 
 def _format_phase1_result(nsv_scores, scale_costs, client_plans, coverage_hist,

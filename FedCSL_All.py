@@ -106,7 +106,7 @@ parser.add_argument('--spilter-top-m', type=int, default=None,
 parser.add_argument('--scale-memory-cache', action='store_true', default=False,
                     help='Use persisted scale memory from data/scale_memory/<dataset>_scale_memory.json (skip GPU collection, safe for parallel runs)')
 parser.add_argument('--coverage-target', type=int, default=None,
-                    help='Per-scale coverage target for greedy swap balancing (default max(2, ceil(numClients/R)))')
+                    help='Per-scale coverage target for optimal swap balancing (default avg coverage = round(sum_assignments/R))')
 
 args = parser.parse_args()
 
@@ -483,13 +483,15 @@ def _balance_coverage_optimal(
     client_selected = [list(sel) for sel in client_selected]  # deep copy
     num_scales = len(coverage_hist)
     num_clients = len(client_selected)
+    coverage = list(int(c) for c in coverage_hist)
     if target_lo is None or target_hi is None:
-        target = max(2, int(np.ceil(num_clients / num_scales)))
+        # target = average coverage rounded (matches actual total assignments)
+        total_assignments = sum(coverage)
+        target = max(2, int(round(total_assignments / num_scales)))
         target_lo = target - 1
         target_hi = target + 1
 
     # ── Check if already balanced ──
-    coverage = list(int(c) for c in coverage_hist)
     overs  = [s for s in range(num_scales) if coverage[s] > target_hi]
     unders = [s for s in range(num_scales) if coverage[s] < target_lo]
     if not overs or not unders:

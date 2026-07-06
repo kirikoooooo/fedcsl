@@ -1167,11 +1167,12 @@ def _collect_scale_memory_table(server_model, sample_data, device):
 
 
 def _save_scale_memory_cache(dataset_tag, overhead_mb, scale_costs, num_scales, lengths, device, batch_size):
-    """持久化 scale memory 到 data/scale_memory/<dataset>_scale_memory.json。"""
-    import json as _json
+    """Persist per-scale memory to data/scale_memory/<safe_tag>_scale_memory.json."""
+    import json as _json, re as _re
+    _safe_tag = _re.sub(r"[^a-zA-Z0-9_-]", "_", str(dataset_tag))
     _cache_dir = os.path.join("data", "scale_memory")
     os.makedirs(_cache_dir, exist_ok=True)
-    _cache_path = os.path.join(_cache_dir, f"{dataset_tag}_scale_memory.json")
+    _cache_path = os.path.join(_cache_dir, f"{_safe_tag}_scale_memory.json")
     _cache = {
         "dataset": dataset_tag,
         "overhead_mb": float(overhead_mb),
@@ -1191,12 +1192,13 @@ def _save_scale_memory_cache(dataset_tag, overhead_mb, scale_costs, num_scales, 
 
 
 def _load_scale_memory_cache(dataset_tag):
-    """从 data/scale_memory/<dataset>_scale_memory.json 加载持久化数据。
+    """Load persisted scale memory from data/scale_memory/<safe_tag>_scale_memory.json.
 
     Returns (overhead_mb, scale_costs) or (None, None).
     """
-    import json as _json
-    cache_path = os.path.join("data", "scale_memory", f"{dataset_tag}_scale_memory.json")
+    import json as _json, re as _re
+    _safe_tag = _re.sub(r"[^a-zA-Z0-9_-]", "_", str(dataset_tag))
+    cache_path = os.path.join("data", "scale_memory", f"{_safe_tag}_scale_memory.json")
     if not os.path.isfile(cache_path):
         print(f"[scale-memory] 缓存文件不存在: {cache_path}", flush=True)
         return None, None

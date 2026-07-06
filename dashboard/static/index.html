@@ -206,6 +206,11 @@
                 <span>Spilter-memory-budget（显存预算实验）</span>
               </label>
             </div>
+            <div class="form-row" style="margin-bottom:6px">
+              <label>TopM（每客户端尺度数）</label>
+              <input id="spilter-top-m" class="control" type="number" min="1" max="8" step="1" value="8" oninput="updateBaselineSummary()" style="width:80px" />
+              <span style="font-size:11px; color:var(--muted); margin-left:4px">(默认8=全部尺度; 设4=仅top-4)</span>
+            </div>
             <div id="memory-budget-section" style="display:none; margin-bottom:8px; padding:10px; background:var(--card); border:1px solid var(--border); border-radius:6px;">
               <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">显存预算配置</div>
               <div class="form-row">
@@ -861,11 +866,16 @@ async function launchSelectedBaselines() {
   const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
   const knapsackChecked = document.getElementById('spilter-knapsack-toggle')?.checked || false;
   const memBudgetChecked = document.getElementById('spilter-memory-budget-toggle')?.checked || false;
+  const topM = document.getElementById('spilter-top-m')?.value || '8';
   const started = [];
   try {
     for (const script of scripts) {
       for (const alpha of alphas) {
         const envBase = {};
+        // TopM: 对所有 Spilter 脚本传递
+        if (script === 'scripts/spilter_har.sh' || script === 'scripts/spilter_mixed_har.sh') {
+          envBase.SPILTER_TOP_M = String(topM);
+        }
         // 仅对 Spilter-Mixed 脚本生效随机选尺度选项
         if (script === 'scripts/spilter_mixed_har.sh' && randomChecked) {
           envBase.SPILTER_RANDOM = '1';

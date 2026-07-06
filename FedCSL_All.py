@@ -101,6 +101,8 @@ parser.add_argument('--spilter-knapsack', action='store_true', default=False,
                     help='Use knapsack-lagrangian global-coverage-aware scale allocation (overrides config allocation_mode to knapsack_lagrangian)')
 parser.add_argument('--spilter-memory-budget', type=float, default=None,
                     help='Per-client memory budget in MB for knapsack_lagrangian mode (overrides config spilter.memory_budget_mb)')
+parser.add_argument('--spilter-top-m', type=int, default=None,
+                    help='Number of top scales per client (default 8, covers all scales; override for budget experiments)')
 
 args = parser.parse_args()
 
@@ -1442,7 +1444,7 @@ def _spilter_allocation_mode(config):
     return aliases.get(mode, mode)
 
 
-def _spilter_local_top_m(config, default=4):
+def _spilter_local_top_m(config, default=8):
     """读取 Spilter 的 local_top_m 参数，支持 int 或 list（per-client m 值）。"""
     spilter_cfg = config.get("spilter", {}) or {}
     for key in ("local_top_m", "top_m", "num_selected_scales"):
@@ -2411,6 +2413,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 _sp_cfg = config.setdefault("spilter", {})
                 _sp_cfg["scale_memory_costs_mb"] = scale_costs
                 _sp_cfg["base_memory_mb"] = overhead_base_mb
+    # Inject TopM into config (CLI > env > default 8)
+    _top_m_val = args.spilter_top_m
+    if _top_m_val is None:
+        _env_top_m = os.environ.get("SPILTER_TOP_M", "").strip()
+        if _env_top_m:
+            _top_m_val = int(_env_top_m)
+    if _top_m_val is not None:
+        _sp_cfg = config.setdefault("spilter", {})
+        _sp_cfg["local_top_m"] = _top_m_val
 
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
@@ -2441,13 +2452,13 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     )
                 )
             elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_topm":
-                local_top_m = _spilter_local_top_m(config, default=4)
+                local_top_m = _spilter_local_top_m(config, default=8)
                 cached_client_scale_plans, cached_scale_hist = _plan_local_score_topm_client_scales(
                     cached_client_scale_scores,
                     top_m=local_top_m,
                 )
             elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "local_score_random_topm":
-                local_top_m = _spilter_local_top_m(config, default=4)
+                local_top_m = _spilter_local_top_m(config, default=8)
                 cached_client_scale_plans, cached_scale_hist = _plan_local_score_random_topm_client_scales(
                     cached_client_scale_scores,
                     top_m=local_top_m,
@@ -2455,13 +2466,13 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 )
             elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "knapsack_lagrangian":
                 knap_params = _spilter_knapsack_lagrangian_params(config, override_memory_budget=args.spilter_memory_budget)
-                # Force top-4 for spilter-memory-budget experiment (config may
-                # set per-client values for other experiments; knapsack always uses 4)
+                # knapsack top-m from CLI --spilter-top-m or config spilter.local_top_m (default 8)
+                _knap_top_m = _spilter_local_top_m(config, default=8)
                 cached_client_scale_plans, cached_scale_hist, cached_knapsack_info = (
                     _plan_topm_then_local_knapsack_client_scales(
                         cached_client_scale_scores,
                         server_model=server.model,
-                        top_m=4,
+                        top_m=_knap_top_m,
                         X_fed=X_fed,
                         device=server_device,
                         batch_size=batch_size,

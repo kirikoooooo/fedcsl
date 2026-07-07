@@ -23,15 +23,15 @@
 
 ```
 x[c][s] ∈ {0,1}      客户端 c 是否选尺度 s (N×R, 最多 80 binary)
-sl_lo[s] ≥ 0         尺度 s 欠覆盖的松弛量 (R continuous)
-sl_hi[s] ≥ 0         尺度 s 过覆盖的松弛量 (R continuous)
+sl_lo[s] ∈ [0,∞)     尺度 s 欠覆盖的松弛量 (R continuous, 软约束)
+sl_hi[s] ∈ [0,∞)     尺度 s 过覆盖的松弛量 (R continuous, 软约束)
 ```
 
 ### 优化目标
 
 ```
 max  Σ NSV[c][s] · x[c][s]  −  λ · Σ (sl_lo[s] + sl_hi[s])
-                       s                      s
+     c,s                          s
 
 λ = strength / max(1 − strength, ε)
 ```
@@ -40,20 +40,22 @@ max  Σ NSV[c][s] · x[c][s]  −  λ · Σ (sl_lo[s] + sl_hi[s])
 |----------|---|------|
 | 0 | 0 | 纯 knapsack（不调覆盖） |
 | 0.5 | 1 | 平衡 NSV 和覆盖 |
-| 1 | ∞ | 硬约束（sl_lo/sl_hi 必须为 0，覆盖 ∈ [lo, hi]） |
+| 1 | ≈∞ | 强引导趋近 target（但非硬约束，sl_∗ 可无限大吸收偏差） |
 
 ### 约束
 
 ```
-(1) Σ weight[s] · x[c][s] ≤ budget[c]     ∀c  (per-client 显存)
+(1) Σ weight[s] · x[c][s] ≤ budget[c]     ∀c  (hard — 仅此硬约束)
     s
 
-(2) Σ x[c][s] + sl_lo[s] ≥ target_lo       ∀s  (覆盖下限)
+(2) Σ x[c][s] + sl_lo[s] ≥ target_lo       ∀s  (soft coupling → 目标函数)
     c
 
-(3) Σ x[c][s] − sl_hi[s] ≤ target_hi       ∀s  (覆盖上限)
+(3) Σ x[c][s] − sl_hi[s] ≤ target_hi       ∀s  (soft coupling → 目标函数)
     c
 ```
+
+sl_lo/sl_hi ∈ [0,∞)，所以 (2)/(3) 永远可行。覆盖引导完全通过目标函数的 λ 惩罚项实现，无硬限制。
 
 ### 求解
 

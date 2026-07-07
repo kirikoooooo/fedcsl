@@ -480,20 +480,22 @@ def _balance_coverage_optimal(
 
 
 def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, strength):
-    """Unified MILP: per-client budget + coverage balance in ONE optimization.
+    """Unified MILP: per-client budget (hard) + coverage balance (soft via slack).
 
-    max  Σ NSV[c][s] · x[c][s]  −  λ · Σ (slack_hi[s] + slack_lo[s])
+    max  Σ NSV[c][s]·x[c][s]  −  λ·Σ (sl_lo[s] + sl_hi[s])
 
-    s.t.  Σ weight[s] · x[c][s] ≤ budget[c]                ∀c
-          Σ_c x[c][s] + sl_lo[s] ≥ target_lo                ∀s
-          Σ_c x[c][s] − sl_hi[s] ≤ target_hi                ∀s
-          x[c][s] ∈ {0,1},  sl_∗[s] ≥ 0
+    s.t.  Σ weight[s]·x[c][s] ≤ budget[c]              (hard)
+          Σ_c x[c][s] + sl_lo[s] ≥ target_lo            (soft coupling)
+          Σ_c x[c][s] − sl_hi[s] ≤ target_hi            (soft coupling)
+          x[c][s] ∈ {0,1},  sl_∗[s] ∈ [0,∞)
 
-    λ = strength / max(1 − strength, ε).
-    strength=0 → pure knapsack; strength=1 → hard constraints.
+    sl_lo/sl_hi bounds are [0,∞), so coupling is always feasible.
+    Coverage penalty is entirely through λ in the objective.
+    λ = strength / max(1−strength, ε).
+    Only budget constraints are hard, MILP always feasible.
 
     Returns (client_selected, coverage, info_log).
-    On scipy import failure → None (caller should fall back to two-phase).
+    On scipy import failure → None (caller falls back to two-phase).
     """
     try:
         from scipy.optimize import milp, LinearConstraint, Bounds
@@ -537,41 +539,40 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
         c[n_x + s] = lam         # sl_lo
         c[n_x + R + s] = lam     # sl_hi
 
-    # Constraints: budget (N rows) + coverage_lo (R rows) + coverage_hi (R rows)
+    # Constraints: budget (N rows) + coupling (2R rows for slack↔coverage)
     n_con = N + 2 * R
-    # Use lil for efficient building, then convert to csc
     A_lil = lil_matrix((n_con, n_vars), dtype=np.float64)
     b_lo = np.zeros(n_con)
     b_hi = np.zeros(n_con)
     row = 0
-    # Budget constraints: Σ_s weight[s] × x[c][s] ≤ budget[c]
+    # Budget: Σ_s weight[s] × x[c][s] ≤ budget[c]  (hard)
     for cid in range(N):
         for s in range(R):
             A_lil[row, cid * R + s] = float(scale_costs[s])
         b_hi[row] = float(budgets[cid])
         b_lo[row] = -np.inf
         row += 1
-    # Coverage lo: Σ_c x[c][s] + sl_lo[s] ≥ target_lo
+    # Slack coupling: Σ_c x[c][s] + sl_lo[s] ≥ target_lo  (slack absorbs deviation)
     for s in range(R):
         for cid in range(N):
             A_lil[row, cid * R + s] = 1.0
-        A_lil[row, n_x + s] = 1.0  # sl_lo
+        A_lil[row, n_x + s] = 1.0
         b_lo[row] = float(target_lo)
         b_hi[row] = np.inf
         row += 1
-    # Coverage hi: Σ_c x[c][s] − sl_hi[s] ≤ target_hi
+    # Slack coupling: Σ_c x[c][s] − sl_hi[s] ≤ target_hi
     for s in range(R):
         for cid in range(N):
             A_lil[row, cid * R + s] = 1.0
-        A_lil[row, n_x + R + s] = -1.0  # sl_hi
+        A_lil[row, n_x + R + s] = -1.0
         b_lo[row] = -np.inf
         b_hi[row] = float(target_hi)
         row += 1
 
     A = csc_matrix(A_lil) if hasattr(A_lil, 'tocsc') else A_lil
     constraints = LinearConstraint(A, b_lo, b_hi)
-    bounds = Bounds(np.zeros(n_vars), np.ones(n_vars))
-    # Binary for x, [0, inf] for slack
+    # x: [0,1] binary; sl_lo/sl_hi: [0, inf) — soft coupling, no hard limit
+    bounds = Bounds([0.0]*n_x + [0.0]*n_sl, [1.0]*n_x + [np.inf]*n_sl)
     integrality = np.zeros(n_vars)
     integrality[:n_x] = 1  # binary
 

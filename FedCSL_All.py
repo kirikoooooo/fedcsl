@@ -468,17 +468,6 @@ def _compute_nsv_scores(period_scores, scale_costs):
     return nsv_scores
 
 
-def _balance_coverage_optimal(
-    client_selected, nsv_scores, coverage_hist,
-    target_lo=None, target_hi=None,
-    strength=0.5,
-):
-    """[已注释] Phase 1 Step 2: DFS swap 覆盖均衡 — 已被 _plan_unified_milp 替代。"""
-    raise RuntimeError(
-        "_balance_coverage_optimal is disabled. Use _plan_unified_milp instead."
-    )
-
-
 def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, strength):
     """Unified MILP: per-client budget (hard) + coverage balance (soft via slack).
 
@@ -2588,7 +2577,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     )
                     _budgets = knap_params.get("memory_budgets_mb")
                     if _budgets is None:
-                        _budgets = np.full(numClient, 1e9)  # no budget → large
+                        _budgets = np.full(numClient, 1e9)
                     elif isinstance(_budgets, (int, float)):
                         _budgets = np.full(numClient, float(_budgets))
                     _umilp = _plan_unified_milp(
@@ -2703,36 +2692,22 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(prep_msg + "\n")
 
-        # ── Phase 1 Step 2: coverage balancing (skip if unified MILP already did it) ──
+        # ── Phase 1 Step 2: coverage balancing (skip when strength=0 or MILP used) ──
         if (cached_client_scale_plans is not None and cached_scale_hist is not None
                 and _uses_scale_split_algo(algo) and _nsv_scores is not None
                 and not _unified_used):
-            _cov_target = args.coverage_target
-            if _cov_target is None:
-                _env_ct = os.environ.get("COVERAGE_TARGET", "").strip()
-                if _env_ct:
-                    _cov_target = int(_env_ct)
-            _tol = int(os.environ.get("COVERAGE_TOLERANCE", "1"))
             _strength = args.coverage_strength
             if _strength is None:
                 _env_cs = os.environ.get("COVERAGE_STRENGTH", "").strip()
                 _strength = float(_env_cs) if _env_cs else 0.5
             _strength = max(0.0, min(1.0, float(_strength)))
-            if _cov_target is not None:
-                _balanced, _bal_cov, _swap_log = _balance_coverage_optimal(
-                    cached_client_scale_plans, _nsv_scores, cached_scale_hist,
-                    target_lo=_cov_target - _tol,
-                    target_hi=_cov_target + _tol,
-                    strength=_strength,
-                )
+            if _strength < 1e-6:
+                print(f"[nsv-score] strength=0: skipping coverage balancing, keep knapsack result", flush=True)
             else:
-                _balanced, _bal_cov, _swap_log = _balance_coverage_optimal(
-                    cached_client_scale_plans, _nsv_scores, cached_scale_hist,
-                    strength=_strength,
-                )
-            cached_client_scale_plans = _balanced
-            cached_scale_hist = _bal_cov
-            _format_phase1_result(_nsv_scores, scale_costs, _balanced, _bal_cov, _swap_log, logTxt)
+                # Only reached if MILP was not available (gurobipy missing)
+                # with strength>0 — keep knapsack result unchanged
+                print(f"[nsv-score] Warning: coverage balancing skipped (gurobipy not available). "
+                      f"Keeping knapsack-only result.", flush=True)
 
     for round in range(start_round, numRound):
         round_t0 = time.perf_counter()

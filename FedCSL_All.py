@@ -473,149 +473,143 @@ def _balance_coverage_optimal(
     target_lo=None, target_hi=None,
     strength=0.5,
 ):
-    """Phase 1 Step 2: 带覆盖强度控制的全局最优 swap (DFS branch-and-bound)。
+    """[已注释] Phase 1 Step 2: DFS swap 覆盖均衡 — 已被 _plan_unified_milp 替代。"""
+    return client_selected, np.asarray(coverage_hist, dtype=np.int64), [
+        "  [disabled] _balance_coverage_optimal replaced by _plan_unified_milp"
+    ]
 
-    strength ∈ [0,1]:
-      0   = 不 swap（保持 knapsack 结果）
-      (0,1) = NSV 损失 + 覆盖偏差惩罚，DFS 全局最优
-      1   = 硬约束（coverage ∈ [lo, hi]），达到可达成的最均匀
 
-    objective:
-      cost = Σ NSV_delta + penalty_weight × Σ max(0, gap)²
-      penalty_weight = strength / max(1 - strength, ε)
+def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, strength):
+    """Unified MILP: per-client budget + coverage balance in ONE optimization.
+
+    max  Σ NSV[c][s] · x[c][s]  −  λ · Σ (slack_hi[s] + slack_lo[s])
+
+    s.t.  Σ weight[s] · x[c][s] ≤ budget[c]                ∀c
+          Σ_c x[c][s] + sl_lo[s] ≥ target_lo                ∀s
+          Σ_c x[c][s] − sl_hi[s] ≤ target_hi                ∀s
+          x[c][s] ∈ {0,1},  sl_∗[s] ≥ 0
+
+    λ = strength / max(1 − strength, ε).
+    strength=0 → pure knapsack; strength=1 → hard constraints.
+
+    Returns (client_selected, coverage, info_log).
+    On scipy import failure → None (caller should fall back to two-phase).
     """
-    client_selected = [list(sel) for sel in client_selected]
-    num_scales = len(coverage_hist)
-    coverage = list(int(c) for c in coverage_hist)
-    if target_lo is None or target_hi is None:
-        total_assignments = sum(coverage)
-        target = max(2, int(round(total_assignments / num_scales)))
-        target_lo = target - 1
-        target_hi = target + 1
+    try:
+        from scipy.optimize import milp, LinearConstraint, Bounds
+        from scipy.sparse import csc_matrix, lil_matrix
+    except ImportError:
+        return None  # caller fallback
 
-    # ── strength=0: skip balancing entirely ──
+    num_clients = len(nsv_scores)
+    num_scales = len(nsv_scores[0]) if num_clients > 0 else 0
+    if num_scales <= 0:
+        return []
+    scale_costs = np.asarray(scale_costs, dtype=np.float64)
+    budgets = np.asarray(budgets, dtype=np.float64)
+    if len(budgets) < num_clients:
+        budgets = np.full(num_clients, budgets[0] if len(budgets) > 0 else np.inf)
+    meant_cost = float(np.mean(scale_costs)) if scale_costs.sum() > 0 else 1.0
+    est_total = sum(min(budget / meant_cost, num_scales) for budget in budgets)
+    avg = max(2, int(round(est_total / num_scales)))
+    tol = int(os.environ.get("COVERAGE_TOLERANCE", "1"))
+    if coverage_target is not None:
+        target_lo = max(1, coverage_target - tol)
+        target_hi = coverage_target + tol
+    else:
+        target_lo = max(1, avg - tol)
+        target_hi = avg + tol
+
+    # ── Build sparse matrix ──
+    # Variables: x[c][s] (N×R binary), sl_lo[s] (R), sl_hi[s] (R)
+    N, R = num_clients, num_scales
+    n_x = N * R
+    n_sl = 2 * R
+    n_vars = n_x + n_sl  # total variables
+    # Objective: maximize NSV·x - λ·(sl_lo + sl_hi) → minimize -obj
+    c = np.zeros(n_vars)
+    for cid in range(N):
+        for s in range(R):
+            c[cid * R + s] = -float(nsv_scores[cid][s])  # negative for minimization
     strength = max(0.0, min(1.0, float(strength)))
-    if strength < 1e-6:
-        swap_log = [f"  strength=0: no coverage balancing, keep knapsack result. coverage={coverage}"]
-        return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
+    lam = strength / max(1.0 - strength, 1e-6)
+    for s in range(R):
+        c[n_x + s] = lam         # sl_lo
+        c[n_x + R + s] = lam     # sl_hi
 
-    # ── Build ALL candidate swaps (not just constrained ones) ──
-    swaps = []
-    for cid, sel in enumerate(client_selected):
-        for s_out in sel:
-            for s_in in range(num_scales):
-                if s_in in sel:
-                    continue
-                delta = float(nsv_scores[cid][s_out]) - float(nsv_scores[cid][s_in])
-                swaps.append((cid, s_out, s_in, delta))
-    swaps.sort(key=lambda x: x[3])
-    penalty_weight = strength / max(1.0 - strength, 1e-6)
+    # Constraints: budget (N rows) + coverage_lo (R rows) + coverage_hi (R rows)
+    n_con = N + 2 * R
+    # Use lil for efficient building, then convert to csc
+    A_lil = lil_matrix((n_con, n_vars), dtype=np.float64)
+    b_lo = np.zeros(n_con)
+    b_hi = np.zeros(n_con)
+    row = 0
+    # Budget constraints: Σ_s weight[s] × x[c][s] ≤ budget[c]
+    for cid in range(N):
+        for s in range(R):
+            A_lil[row, cid * R + s] = float(scale_costs[s])
+        b_hi[row] = float(budgets[cid])
+        b_lo[row] = -np.inf
+        row += 1
+    # Coverage lo: Σ_c x[c][s] + sl_lo[s] ≥ target_lo
+    for s in range(R):
+        for cid in range(N):
+            A_lil[row, cid * R + s] = 1.0
+        A_lil[row, n_x + s] = 1.0  # sl_lo
+        b_lo[row] = float(target_lo)
+        b_hi[row] = np.inf
+        row += 1
+    # Coverage hi: Σ_c x[c][s] − sl_hi[s] ≤ target_hi
+    for s in range(R):
+        for cid in range(N):
+            A_lil[row, cid * R + s] = 1.0
+        A_lil[row, n_x + R + s] = -1.0  # sl_hi
+        b_lo[row] = -np.inf
+        b_hi[row] = float(target_hi)
+        row += 1
 
-    def _imbalance(cov):
-        """Squared penalty for deviation from [lo, hi]."""
-        p = 0.0
-        for s in range(num_scales):
-            if cov[s] < target_lo:
-                d = float(target_lo - cov[s])
-                p += d * d
-            elif cov[s] > target_hi:
-                d = float(cov[s] - target_hi)
-                p += d * d
-        return p
+    A = csc_matrix(A_lil) if hasattr(A_lil, 'tocsc') else A_lil
+    constraints = LinearConstraint(A, b_lo, b_hi)
+    bounds = Bounds(np.zeros(n_vars), np.ones(n_vars))
+    # Binary for x, [0, inf] for slack
+    integrality = np.zeros(n_vars)
+    integrality[:n_x] = 1  # binary
 
-    initial_imbalance = _imbalance(coverage)
-
-    # ── DFS with penalty-based objective ──
-    best_cost = float('inf')
-    best_set = []
-
-    def _dfs(idx, cov, cur_nsv, cur_set):
-        nonlocal best_cost, best_set
-        total_cost = cur_nsv + penalty_weight * _imbalance(cov)
-        if total_cost >= best_cost:
-            return
-        # Check if feasible (hard constraint only at strength=1)
-        if strength >= 0.999:
-            ok = True
-            for s in range(num_scales):
-                if cov[s] > target_hi or cov[s] < target_lo:
-                    ok = False
-                    break
-            if ok and cur_nsv < best_cost:
-                best_cost = cur_nsv
-                best_set = list(cur_set)
-            if ok:
-                return
-        else:
-            # Soft: update best if total_cost improved
-            if total_cost < best_cost:
-                # Only accept if imbalance improved (prevents no-op)
-                if _imbalance(cov) < initial_imbalance or len(cur_set) > 0:
-                    best_cost = total_cost
-                    best_set = list(cur_set)
-        if idx >= len(swaps):
-            return
-        cid, s_out, s_in, delta = swaps[idx]
-        # Skip
-        _dfs(idx + 1, cov, cur_nsv, cur_set)
-        # Take (verify feasibility within client's scale set)
-        if cur_nsv + delta + penalty_weight * (_imbalance(cov) * 0.5) < best_cost:
-            c_scales = set(client_selected[cid])
-            for prev_si in cur_set:
-                pcid, ps_out, ps_in, _ = swaps[prev_si]
-                if pcid == cid:
-                    c_scales.discard(ps_out)
-                    c_scales.add(ps_in)
-            if s_out in c_scales and s_in not in c_scales:
-                new_cov = list(cov)
-                new_cov[s_out] -= 1
-                new_cov[s_in] += 1
-                _dfs(idx + 1, new_cov, cur_nsv + delta, cur_set + [idx])
-
-    _dfs(0, coverage, 0.0, [])
-
-    # ── Handle empty best_set ──
-    if not best_set:
-        if strength >= 0.999:
-            raise RuntimeError(
-                f"_balance_coverage_optimal: DFS exhausted, no feasible swap set "
-                f"for hard constraints lo={target_lo} hi={target_hi}. "
-                f"coverage={coverage}"
-            )
-        else:
-            swap_log = [
-                f"  strength={strength:.2f}: no coverage-improving swap found "
-                f"(penalty_weight={penalty_weight:.1f}). "
-                f"keeping knapsack result. coverage={coverage}"
-            ]
-            return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
-
-    # ── Apply optimal swaps ──
-    swap_log = []
-    total_nsv_delta = 0.0
-    for si in best_set:
-        cid, s_out, s_in, delta = swaps[si]
-        sel = client_selected[cid]
-        sel[sel.index(s_out)] = s_in
-        coverage[s_out] -= 1
-        coverage[s_in] += 1
-        total_nsv_delta += delta
-        swap_log.append(
-            f"  c{cid} {s_out}→{s_in} "
-            f"(ΔNSV={delta:+.4f}) "
-            f"coverage={coverage}"
+    try:
+        res = milp(
+            c, constraints=constraints, bounds=bounds,
+            integrality=integrality,
+            options={"disp": False, "time_limit": 5.0},
         )
-    final_imbalance = _imbalance(coverage)
-    swap_log.insert(0,
-        f"  strength={strength:.2f} penalty_weight={penalty_weight:.1f} "
-        f"initial_imbalance={initial_imbalance:.1f} → final_imbalance={final_imbalance:.1f}"
+    except Exception as e:
+        print(f"[unified-milp] scipy.milp failed: {e}", flush=True)
+        return None
+
+    if not res.success:
+        print(f"[unified-milp] MILP 无解 (status={res.status}), fallback to two-phase", flush=True)
+        return None
+
+    # ── Extract solution ──
+    x_flat = res.x[:n_x]
+    client_selected = [[] for _ in range(N)]
+    for cid in range(N):
+        for s in range(R):
+            if x_flat[cid * R + s] > 0.5:
+                client_selected[cid].append(s)
+    coverage = np.zeros(R, dtype=np.int64)
+    for sel in client_selected:
+        for s in sel:
+            coverage[s] += 1
+    total_value = sum(
+        nsv_scores[cid][s] for cid, sel in enumerate(client_selected) for s in sel
     )
-    swap_log.append(
-        f"  optimal: {len(best_set)} swaps, "
-        f"total_NSV_delta={total_nsv_delta:+.4f}, "
-        f"final_coverage={coverage}"
-    )
-    return client_selected, np.asarray(coverage, dtype=np.int64), swap_log
+    info_log = [
+        f"  unified-milp: strength={strength:.2f} lambda={lam:.1f} "
+        f"target=[{target_lo},{target_hi}]",
+        f"  final: coverage={coverage.tolist()} total_NSV={total_value:.4f} "
+        f"costs_per_client={[len(s) for s in client_selected]}",
+    ]
+    return client_selected, coverage, info_log
 
 
 def _format_phase1_result(nsv_scores, scale_costs, client_plans, coverage_hist,
@@ -2608,11 +2602,44 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 device=server_device,
                 batch_size=batch_size,
             )
-            # ── Phase 1: NSV scores → knapsack → greedy swap coverage balancing ──
+            # ── Phase 1: NSV scores → unified MILP (or two-phase fallback) ──
+            _unified_used = False
             if scale_costs is not None and _uses_scale_split_algo(algo):
-                # Step 1: compute NSV scores and use them for planning
                 _nsv_scores = _compute_nsv_scores(cached_client_scale_scores, scale_costs)
                 cached_client_scale_scores = _nsv_scores
+                _cov_target = args.coverage_target
+                if _cov_target is None:
+                    _env_ct = os.environ.get("COVERAGE_TARGET", "").strip()
+                    if _env_ct:
+                        _cov_target = int(_env_ct)
+                _strength = args.coverage_strength
+                if _strength is None:
+                    _env_cs = os.environ.get("COVERAGE_STRENGTH", "").strip()
+                    _strength = float(_env_cs) if _env_cs else 0.5
+                _strength = max(0.0, min(1.0, float(_strength)))
+                if _strength > 1e-6 and spilter_allocation_mode == "knapsack_lagrangian":
+                    knap_params = _spilter_knapsack_lagrangian_params(
+                        config, override_memory_budget=args.spilter_memory_budget
+                    )
+                    _budgets = knap_params.get("memory_budgets_mb")
+                    if _budgets is None:
+                        _budgets = np.full(numClient, 1e9)  # no budget → large
+                    elif isinstance(_budgets, (int, float)):
+                        _budgets = np.full(numClient, float(_budgets))
+                    _umilp = _plan_unified_milp(
+                        _nsv_scores, scale_costs, _budgets,
+                        coverage_target=_cov_target,
+                        strength=_strength,
+                    )
+                    if _umilp is not None:
+                        _balanced, _bal_cov, _milp_log = _umilp
+                        cached_client_scale_plans = _balanced
+                        cached_scale_hist = _bal_cov
+                        _unified_used = True
+                        _format_phase1_result(
+                            _nsv_scores, scale_costs, _balanced, _bal_cov, _milp_log, logTxt
+                        )
+
             if _uses_scale_split_algo(algo) and spilter_allocation_mode == "global_score_random_single":
                 cached_client_scale_plans, cached_scale_hist, cached_global_scale_probs = (
                     _plan_global_score_random_single_client_scales(
@@ -2634,7 +2661,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     top_m=local_top_m,
                     seed=original_seed or 42,
                 )
-            elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "knapsack_lagrangian":
+            elif _uses_scale_split_algo(algo) and spilter_allocation_mode == "knapsack_lagrangian" and not _unified_used:
                 knap_params = _spilter_knapsack_lagrangian_params(config, override_memory_budget=args.spilter_memory_budget)
                 # knapsack top-m from CLI --spilter-top-m or config spilter.local_top_m (default 8)
                 _knap_top_m = _spilter_local_top_m(config, default=8)
@@ -2711,9 +2738,10 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         with open(logTxt, mode="a+", encoding="utf-8") as f:
             f.write(prep_msg + "\n")
 
-        # ── Phase 1 Step 2: greedy swap coverage balancing ──
+        # ── Phase 1 Step 2: coverage balancing (skip if unified MILP already did it) ──
         if (cached_client_scale_plans is not None and cached_scale_hist is not None
-                and _uses_scale_split_algo(algo) and _nsv_scores is not None):
+                and _uses_scale_split_algo(algo) and _nsv_scores is not None
+                and not _unified_used):
             _cov_target = args.coverage_target
             if _cov_target is None:
                 _env_ct = os.environ.get("COVERAGE_TARGET", "").strip()

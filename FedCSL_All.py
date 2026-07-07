@@ -570,97 +570,11 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
         ]
         return client_selected, coverage, info_log
 
-    except ImportError:
-        pass  # fall through to scipy
-
-    # ── Fallback to scipy.milp (HiGHS) ──
-    try:
-        from scipy.optimize import milp, LinearConstraint, Bounds
-        from scipy.sparse import csc_matrix, lil_matrix
-    except ImportError:
+    except ImportError as e:
         raise RuntimeError(
-            "_plan_unified_milp: neither gurobipy nor scipy>=1.9 available. "
-            "Install one or disable knapsack_lagrangian mode."
-        )
-
-    n_x = N * R
-    n_sl = 2 * R
-    n_vars = n_x + n_sl
-    c_obj = np.zeros(n_vars)
-    for cid in range(N):
-        for s in range(R):
-            c_obj[cid * R + s] = -float(nsv_scores[cid][s])
-    for s in range(R):
-        c_obj[n_x + s] = lam
-        c_obj[n_x + R + s] = lam
-
-    n_con = N + 2 * R
-    A_lil = lil_matrix((n_con, n_vars), dtype=np.float64)
-    b_lo = np.zeros(n_con)
-    b_hi = np.zeros(n_con)
-    row = 0
-    for cid in range(N):
-        for s in range(R):
-            A_lil[row, cid * R + s] = float(scale_costs[s])
-        b_hi[row] = float(budgets[cid])
-        b_lo[row] = -np.inf
-        row += 1
-    for s in range(R):
-        for cid in range(N):
-            A_lil[row, cid * R + s] = 1.0
-        A_lil[row, n_x + s] = 1.0
-        b_lo[row] = float(target_lo)
-        b_hi[row] = np.inf
-        row += 1
-    for s in range(R):
-        for cid in range(N):
-            A_lil[row, cid * R + s] = 1.0
-        A_lil[row, n_x + R + s] = -1.0
-        b_lo[row] = -np.inf
-        b_hi[row] = float(target_hi)
-        row += 1
-
-    A = csc_matrix(A_lil) if hasattr(A_lil, 'tocsc') else A_lil
-    constraints = LinearConstraint(A, b_lo, b_hi)
-    bounds = Bounds([0.0]*n_x + [0.0]*n_sl, [1.0]*n_x + [np.inf]*n_sl)
-    integrality = np.zeros(n_vars)
-    integrality[:n_x] = 1
-
-    try:
-        res = milp(
-            c_obj, constraints=constraints, bounds=bounds,
-            integrality=integrality,
-            options={"disp": False, "time_limit": 5.0},
-        )
-    except Exception as e:
-        print(f"[unified-milp] scipy.milp failed: {e}", flush=True)
-        raise RuntimeError(f"_plan_unified_milp: scipy.milp failed: {e}") from e
-
-    if not res.success:
-        raise RuntimeError(
-            f"_plan_unified_milp: MILP infeasible "
-            f"(status={res.status}, message={res.message}). "
-            f"Check budget/costs constraints or widen coverage tolerance."
-        )
-
-    x_flat = res.x[:n_x]
-    client_selected = [[] for _ in range(N)]
-    for cid in range(N):
-        for s in range(R):
-            if x_flat[cid * R + s] > 0.5:
-                client_selected[cid].append(s)
-    coverage = np.zeros(R, dtype=np.int64)
-    for sel in client_selected:
-        for s in sel:
-            coverage[s] += 1
-    total_value = sum(nsv_scores[cid][s] for cid, sel in enumerate(client_selected) for s in sel)
-    info_log = [
-        f"  unified-milp (scipy.HiGHS): strength={strength:.2f} lambda={lam:.1f} "
-        f"target=[{target_lo},{target_hi}]",
-        f"  final: coverage={coverage.tolist()} total_NSV={total_value:.4f} "
-        f"costs_per_client={[len(s) for s in client_selected]}",
-    ]
-    return client_selected, coverage, info_log
+            f"_plan_unified_milp: gurobipy not available ({e}). "
+            f"Install gurobipy or disable knapsack_lagrangian mode."
+        ) from e
 
 
 def _format_phase1_result(nsv_scores, scale_costs, client_plans, coverage_hist,

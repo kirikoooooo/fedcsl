@@ -474,9 +474,9 @@ def _balance_coverage_optimal(
     strength=0.5,
 ):
     """[已注释] Phase 1 Step 2: DFS swap 覆盖均衡 — 已被 _plan_unified_milp 替代。"""
-    return client_selected, np.asarray(coverage_hist, dtype=np.int64), [
-        "  [disabled] _balance_coverage_optimal replaced by _plan_unified_milp"
-    ]
+    raise RuntimeError(
+        "_balance_coverage_optimal is disabled. Use _plan_unified_milp instead."
+    )
 
 
 def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, strength):
@@ -501,7 +501,10 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
         from scipy.optimize import milp, LinearConstraint, Bounds
         from scipy.sparse import csc_matrix, lil_matrix
     except ImportError:
-        return None  # caller fallback
+        raise RuntimeError(
+            "_plan_unified_milp: scipy not available. "
+            "Install scipy>=1.9 or disable knapsack_lagrangian mode."
+        )
 
     num_clients = len(nsv_scores)
     num_scales = len(nsv_scores[0]) if num_clients > 0 else 0
@@ -587,8 +590,11 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
         return None
 
     if not res.success:
-        print(f"[unified-milp] MILP 无解 (status={res.status}), fallback to two-phase", flush=True)
-        return None
+        raise RuntimeError(
+            f"_plan_unified_milp: MILP infeasible "
+            f"(status={res.status}, message={res.message}). "
+            f"Check budget/costs constraints or widen coverage tolerance."
+        )
 
     # ── Extract solution ──
     x_flat = res.x[:n_x]

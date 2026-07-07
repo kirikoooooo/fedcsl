@@ -482,41 +482,22 @@ def _balance_coverage_optimal(
 def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, strength):
     """Unified MILP: per-client budget (hard) + coverage balance (soft via slack).
 
-    max  Σ NSV[c][s]·x[c][s]  −  λ·Σ (sl_lo[s] + sl_hi[s])
-
-    s.t.  Σ weight[s]·x[c][s] ≤ budget[c]              (hard)
-          Σ_c x[c][s] + sl_lo[s] ≥ target_lo            (soft coupling)
-          Σ_c x[c][s] − sl_hi[s] ≤ target_hi            (soft coupling)
-          x[c][s] ∈ {0,1},  sl_∗[s] ∈ [0,∞)
-
-    sl_lo/sl_hi bounds are [0,∞), so coupling is always feasible.
-    Coverage penalty is entirely through λ in the objective.
-    λ = strength / max(1−strength, ε).
-    Only budget constraints are hard, MILP always feasible.
-
-    Returns (client_selected, coverage, info_log).
-    On scipy import failure → None (caller falls back to two-phase).
+    Tries gurobipy first (MAST-compatible), falls back to scipy.milp (HiGHS).
     """
-    try:
-        from scipy.optimize import milp, LinearConstraint, Bounds
-        from scipy.sparse import csc_matrix, lil_matrix
-    except ImportError:
-        raise RuntimeError(
-            "_plan_unified_milp: scipy not available. "
-            "Install scipy>=1.9 or disable knapsack_lagrangian mode."
-        )
-
     num_clients = len(nsv_scores)
     num_scales = len(nsv_scores[0]) if num_clients > 0 else 0
     if num_scales <= 0:
-        return []
+        return [[] for _ in range(num_clients)], np.zeros(0, dtype=np.int64), ["empty"]
+
+    N, R = num_clients, num_scales
     scale_costs = np.asarray(scale_costs, dtype=np.float64)
     budgets = np.asarray(budgets, dtype=np.float64)
-    if len(budgets) < num_clients:
-        budgets = np.full(num_clients, budgets[0] if len(budgets) > 0 else np.inf)
+    if len(budgets) < N:
+        budgets = np.full(N, budgets[0] if len(budgets) > 0 else np.inf)
+
     meant_cost = float(np.mean(scale_costs)) if scale_costs.sum() > 0 else 1.0
-    est_total = sum(min(budget / meant_cost, num_scales) for budget in budgets)
-    avg = max(2, int(round(est_total / num_scales)))
+    est_total = sum(min(b / meant_cost, R) for b in budgets)
+    avg = max(2, int(round(est_total / R)))
     tol = int(os.environ.get("COVERAGE_TOLERANCE", "1"))
     if coverage_target is not None:
         target_lo = max(1, coverage_target - tol)
@@ -525,37 +506,105 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
         target_lo = max(1, avg - tol)
         target_hi = avg + tol
 
-    # ── Build sparse matrix ──
-    # Variables: x[c][s] (N×R binary), sl_lo[s] (R), sl_hi[s] (R)
-    N, R = num_clients, num_scales
-    n_x = N * R
-    n_sl = 2 * R
-    n_vars = n_x + n_sl  # total variables
-    # Objective: maximize NSV·x - λ·(sl_lo + sl_hi) → minimize -obj
-    c = np.zeros(n_vars)
-    for cid in range(N):
-        for s in range(R):
-            c[cid * R + s] = -float(nsv_scores[cid][s])  # negative for minimization
     strength = max(0.0, min(1.0, float(strength)))
     lam = strength / max(1.0 - strength, 1e-6)
-    for s in range(R):
-        c[n_x + s] = lam         # sl_lo
-        c[n_x + R + s] = lam     # sl_hi
 
-    # Constraints: budget (N rows) + coupling (2R rows for slack↔coverage)
+    # ── Try gurobipy first ──
+    try:
+        import gurobipy as gp
+        from gurobipy import GRB
+
+        _env = gp.Env(empty=True)
+        _env.setParam("OutputFlag", 0)
+        _env.start()
+        m = gp.Model("unified_milp", env=_env)
+        m.setParam("TimeLimit", 5.0)
+
+        x = m.addVars(N, R, vtype=GRB.BINARY, name="x")
+        sl_lo = m.addVars(R, lb=0, name="sl_lo")
+        sl_hi = m.addVars(R, lb=0, name="sl_hi")
+
+        # Objective: maximize Σ NSV·x - λ·Σ (sl_lo+sl_hi)
+        obj = gp.quicksum(float(nsv_scores[c][s]) * x[c, s] for c in range(N) for s in range(R)) \
+            - lam * gp.quicksum(sl_lo[s] + sl_hi[s] for s in range(R))
+        m.setObjective(obj, GRB.MAXIMIZE)
+
+        # Budget constraints
+        for c in range(N):
+            m.addConstr(
+                gp.quicksum(float(scale_costs[s]) * x[c, s] for s in range(R)) <= float(budgets[c]),
+                name=f"budget_c{c}"
+            )
+
+        # Slack coupling
+        for s in range(R):
+            cov_expr = gp.quicksum(x[c, s] for c in range(N))
+            m.addConstr(cov_expr + sl_lo[s] >= float(target_lo), name=f"cov_lo_s{s}")
+            m.addConstr(cov_expr - sl_hi[s] <= float(target_hi), name=f"cov_hi_s{s}")
+
+        m.optimize()
+
+        if m.Status not in (GRB.OPTIMAL, GRB.SUBOPTIMAL, GRB.TIME_LIMIT):
+            raise RuntimeError(
+                f"_plan_unified_milp: Gurobi failed (status={m.Status}). "
+                f"Check budget/costs constraints."
+            )
+
+        client_selected = [[] for _ in range(N)]
+        for c in range(N):
+            for s in range(R):
+                if x[c, s].X > 0.5:
+                    client_selected[c].append(s)
+
+        coverage = np.zeros(R, dtype=np.int64)
+        for sel in client_selected:
+            for s in sel:
+                coverage[s] += 1
+
+        total_value = sum(nsv_scores[c][s] for c, sel in enumerate(client_selected) for s in sel)
+        info_log = [
+            f"  unified-milp (gurobipy): strength={strength:.2f} lambda={lam:.1f} "
+            f"target=[{target_lo},{target_hi}]",
+            f"  final: coverage={coverage.tolist()} total_NSV={total_value:.4f} "
+            f"costs_per_client={[len(s) for s in client_selected]}",
+        ]
+        return client_selected, coverage, info_log
+
+    except ImportError:
+        pass  # fall through to scipy
+
+    # ── Fallback to scipy.milp (HiGHS) ──
+    try:
+        from scipy.optimize import milp, LinearConstraint, Bounds
+        from scipy.sparse import csc_matrix, lil_matrix
+    except ImportError:
+        raise RuntimeError(
+            "_plan_unified_milp: neither gurobipy nor scipy>=1.9 available. "
+            "Install one or disable knapsack_lagrangian mode."
+        )
+
+    n_x = N * R
+    n_sl = 2 * R
+    n_vars = n_x + n_sl
+    c_obj = np.zeros(n_vars)
+    for cid in range(N):
+        for s in range(R):
+            c_obj[cid * R + s] = -float(nsv_scores[cid][s])
+    for s in range(R):
+        c_obj[n_x + s] = lam
+        c_obj[n_x + R + s] = lam
+
     n_con = N + 2 * R
     A_lil = lil_matrix((n_con, n_vars), dtype=np.float64)
     b_lo = np.zeros(n_con)
     b_hi = np.zeros(n_con)
     row = 0
-    # Budget: Σ_s weight[s] × x[c][s] ≤ budget[c]  (hard)
     for cid in range(N):
         for s in range(R):
             A_lil[row, cid * R + s] = float(scale_costs[s])
         b_hi[row] = float(budgets[cid])
         b_lo[row] = -np.inf
         row += 1
-    # Slack coupling: Σ_c x[c][s] + sl_lo[s] ≥ target_lo  (slack absorbs deviation)
     for s in range(R):
         for cid in range(N):
             A_lil[row, cid * R + s] = 1.0
@@ -563,7 +612,6 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
         b_lo[row] = float(target_lo)
         b_hi[row] = np.inf
         row += 1
-    # Slack coupling: Σ_c x[c][s] − sl_hi[s] ≤ target_hi
     for s in range(R):
         for cid in range(N):
             A_lil[row, cid * R + s] = 1.0
@@ -574,20 +622,19 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
 
     A = csc_matrix(A_lil) if hasattr(A_lil, 'tocsc') else A_lil
     constraints = LinearConstraint(A, b_lo, b_hi)
-    # x: [0,1] binary; sl_lo/sl_hi: [0, inf) — soft coupling, no hard limit
     bounds = Bounds([0.0]*n_x + [0.0]*n_sl, [1.0]*n_x + [np.inf]*n_sl)
     integrality = np.zeros(n_vars)
-    integrality[:n_x] = 1  # binary
+    integrality[:n_x] = 1
 
     try:
         res = milp(
-            c, constraints=constraints, bounds=bounds,
+            c_obj, constraints=constraints, bounds=bounds,
             integrality=integrality,
             options={"disp": False, "time_limit": 5.0},
         )
     except Exception as e:
         print(f"[unified-milp] scipy.milp failed: {e}", flush=True)
-        return None
+        raise RuntimeError(f"_plan_unified_milp: scipy.milp failed: {e}") from e
 
     if not res.success:
         raise RuntimeError(
@@ -596,7 +643,6 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
             f"Check budget/costs constraints or widen coverage tolerance."
         )
 
-    # ── Extract solution ──
     x_flat = res.x[:n_x]
     client_selected = [[] for _ in range(N)]
     for cid in range(N):
@@ -607,11 +653,9 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
     for sel in client_selected:
         for s in sel:
             coverage[s] += 1
-    total_value = sum(
-        nsv_scores[cid][s] for cid, sel in enumerate(client_selected) for s in sel
-    )
+    total_value = sum(nsv_scores[cid][s] for cid, sel in enumerate(client_selected) for s in sel)
     info_log = [
-        f"  unified-milp: strength={strength:.2f} lambda={lam:.1f} "
+        f"  unified-milp (scipy.HiGHS): strength={strength:.2f} lambda={lam:.1f} "
         f"target=[{target_lo},{target_hi}]",
         f"  final: coverage={coverage.tolist()} total_NSV={total_value:.4f} "
         f"costs_per_client={[len(s) for s in client_selected]}",

@@ -25,7 +25,7 @@ GitHub: kirikoooooo/fedcsl（feat/muti-routine 分支，dashboard/ 所在分支�
 本机 watcher（Windows 计划任务 FedCSLDeployWatcher，每分钟，pythonw 无窗口）
    1. 读 request.json → git fetch origin feat/muti-routine（绕过失效代理）
    2. 仅当 dashboard/ 有差异：git checkout FETCH_HEAD -- dashboard/
-   3. 按端口 8765 精确重启 dashboard 进程（不动训练等其他进程）
+   3. 每次部署请求都按端口 8765 精确重启 dashboard 进程（不动训练等其他进程）
    4. 健康检查 → 写 result.json
 ```
 
@@ -38,6 +38,7 @@ GitHub: kirikoooooo/fedcsl（feat/muti-routine 分支，dashboard/ 所在分支�
 | 任务由 init.groovy.d 创建，不用 JCasC jobs | JCasC 的 `jobs:` 根元素要求 Job DSL 插件且脚本为 Job DSL 语法；原生 API 不依赖额外插件 |
 | 部署执行端放本机 watcher | dashboard 必须留在 Windows 本机（要读 nvidia-smi、启动训练脚本），容器内无法管理宿主进程 |
 | 只更新 dashboard/ 子目录 | 工作区有大量未提交研究代码（FedCSL_All.py 等），`git checkout FETCH_HEAD -- dashboard/` 精准更新，互不干扰 |
+| 每次提交都重启 dashboard | 用户选择：任何被检测到的新提交都重启服务（即使 dashboard/ 无变化），保证提交与运行版本严格对应；重启约 5 秒 |
 | 部署源分支 feat/muti-routine | dashboard/ 只存在于该分支，main 上还没有（实测确认） |
 | 每次 git 操作绕过代理 | git 全局配置了 `http.proxy=127.0.0.1:7892`，该代理未运行；用 `-c http.proxy=` 直连 |
 | 计划任务用 pythonw.exe | python.exe 每分钟弹一次控制台窗口；pythonw 无窗口（实测已解决） |
@@ -214,9 +215,9 @@ unclassified:        # 注意：顶层键！
 ```python
 fetch = _git(["fetch", "origin", "feat/muti-routine"])          # 绕过失效代理
 diff  = _git(["diff", "--quiet", "FETCH_HEAD", "--", "dashboard/"])
-if diff.returncode == 0:  return "no_changes"                    # 无变化不重启
-co = _git(["checkout", "FETCH_HEAD", "--", "dashboard/"])        # 只更新 dashboard/
-_stop_dashboard()        # psutil 按端口 8765 精确定位 pid，terminate + 等端口释放
+if diff.returncode != 0:                                          # 仅文件更新做路径过滤
+    _git(["checkout", "FETCH_HEAD", "--", "dashboard/"])          # 只更新 dashboard/
+_stop_dashboard()        # 每次请求都重启；psutil 按端口 8765 精确定位 pid
 _start_dashboard()       # 新进程（CREATE_NEW_PROCESS_GROUP，pid 写 state/dashboard.pid）
 _wait_healthy(60)        # 轮询 http://127.0.0.1:8765/ 直到 200
 ```
@@ -292,7 +293,7 @@ schtasks /change /tn FedCSLDeployWatcher /enable    # 恢复自动部署
 ## 9. 已知限制与后续可选优化
 
 - **延迟**：最大约 16 分钟（轮询间隔 15 分钟 + watcher 1 分钟）。如需秒级，可加 GitHub webhook + 内网穿透。
-- **只部署 dashboard/**：其他代码改动不会触发部署（刻意设计，保护工作区研究代码）。
+- **每次提交都会重启 dashboard**：即使只改论文/实验代码（约 5 秒中断）；文件更新仍只限 `dashboard/` 目录，保护工作区研究代码。
 - **dashboard/requirements.txt 缺失**：README 引用了但仓库中没有；watcher 目前不做依赖安装，换机器时需手动 `pip install fastapi uvicorn psutil`。
 - **JCasC 每次启动强制覆盖**：`jenkins.yaml` 会覆盖 UI 上对账号/安全策略的修改；任务定义由 init.groovy.d 覆盖。改配置请改文件而非 UI。
 - **仅本机可访问**：如需局域网访问，把 `-p 127.0.0.1:8080:8080` 改为 `-p 8080:8080`，并务必先改强密码。

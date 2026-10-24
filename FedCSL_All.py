@@ -95,6 +95,17 @@ parser.add_argument('--eval-protocol', type=str, default=None, choices=['svm', '
                     help='Override downstream evaluation protocol: svm or linear_probe')
 parser.add_argument('--eval-every-n-rounds', type=int, default=None,
                     help='Run downstream SVM/linear-probe eval every N federated rounds (default: evaluation.round_eval_interval or 1)')
+# 下游微调消融（协议 A：冻结 encoder + 线性分类头，见 docs/downstream_finetuning_ablation.md）
+parser.add_argument('--ft-ratios', type=str, default=None,
+                    help='Comma-separated label ratios for the downstream fine-tuning ablation, '
+                         'e.g. "0.01,0.05,0.1,0.2,0.5,1.0". Disabled by default.')
+parser.add_argument('--ft-seeds', type=int, default=3,
+                    help='Number of stratified sampling seeds per ratio (default 3, report mean±std)')
+parser.add_argument('--ft-val-split', type=float, default=0.2,
+                    help='Validation split fraction within the labeled subset (fixed rule, default 0.2; '
+                         'only applied when the subset has >= --ft-min-samples samples)')
+parser.add_argument('--ft-min-samples', type=int, default=50,
+                    help='Minimum labeled subset size for enabling the val split (default 50)')
 parser.add_argument('--spilter-random', action='store_true', default=False,
                     help='Use random (non-topM) scale selection for spilter allocation (overrides config allocation_mode to local_score_random_topm)')
 parser.add_argument('--spilter-knapsack', action='store_true', default=False,
@@ -109,6 +120,8 @@ parser.add_argument('--coverage-target', type=int, default=None,
                     help='Per-scale coverage target for optimal swap balancing (default avg coverage = round(sum_assignments/R))')
 parser.add_argument('--coverage-strength', type=float, default=None,
                     help='Coverage balancing strength 0-1 (0=no swap, 0.5=balanced, 1=max uniformity; default 0.5)')
+parser.add_argument('--communication-penalty', type=float, default=None,
+                    help='Penalty weight for transmitted scale parameters (0 disables; overrides spilter.communication_penalty)')
 
 args = parser.parse_args()
 
@@ -468,8 +481,29 @@ def _compute_nsv_scores(period_scores, scale_costs):
     return nsv_scores
 
 
-def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, strength):
-    """Unified MILP: per-client budget (hard) + coverage balance (soft via slack).
+def _scale_communication_costs_bytes(model):
+    """Return bytes uploaded for each scale's actual aggregation state."""
+    num_scales = len(getattr(model, "shapelets_size_and_len", {}))
+    costs = np.zeros(num_scales, dtype=np.float64)
+    for scale_idx in range(num_scales):
+        state = model.scale_state_dict(scale_idx, clone=False, cpu=False)
+        costs[scale_idx] = sum(
+            int(tensor.numel()) * int(tensor.element_size())
+            for tensor in state.values()
+        )
+    return costs
+
+
+def _communication_penalty_from_config(config, cli_penalty):
+    """Resolve a non-negative, dimensionless scale-communication penalty."""
+    if cli_penalty is None:
+        cli_penalty = (config.get("spilter", {}) or {}).get("communication_penalty", 0.1)
+    return max(0.0, float(cli_penalty))
+
+
+def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, strength,
+                       communication_costs_bytes=None, communication_penalty=0.0):
+    """Unified MILP: memory budget (hard), coverage and communication (soft).
 
     Tries gurobipy first (MAST-compatible), falls back to scipy.milp (HiGHS).
     """
@@ -481,6 +515,14 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
     N, R = num_clients, num_scales
     scale_costs = np.asarray(scale_costs, dtype=np.float64)
     budgets = np.asarray(budgets, dtype=np.float64)
+    comm_costs = np.zeros(R, dtype=np.float64)
+    if communication_costs_bytes is not None:
+        comm_costs = np.asarray(communication_costs_bytes, dtype=np.float64)
+        if comm_costs.size != R:
+            raise ValueError(f"communication_costs_bytes length {comm_costs.size} != R={R}")
+        comm_costs = np.maximum(np.nan_to_num(comm_costs, nan=0.0), 0.0)
+    comm_norm = comm_costs / max(float(np.max(comm_costs)), 1.0)
+    communication_penalty = max(0.0, float(communication_penalty))
     if len(budgets) < N:
         budgets = np.full(N, budgets[0] if len(budgets) > 0 else np.inf)
 
@@ -513,8 +555,11 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
         sl_lo = m.addVars(R, lb=0, name="sl_lo")
         sl_hi = m.addVars(R, lb=0, name="sl_hi")
 
-        # Objective: maximize Σ NSV·x - λ·Σ (sl_lo+sl_hi)
-        obj = gp.quicksum(float(nsv_scores[c][s]) * x[c, s] for c in range(N) for s in range(R)) \
+        # The byte-normalized term uses the exact states that clients upload.
+        obj = gp.quicksum(
+            (float(nsv_scores[c][s]) - communication_penalty * float(comm_norm[s])) * x[c, s]
+            for c in range(N) for s in range(R)
+        ) \
             - lam * gp.quicksum(sl_lo[s] + sl_hi[s] for s in range(R))
         m.setObjective(obj, GRB.MAXIMIZE)
 
@@ -551,11 +596,14 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
                 coverage[s] += 1
 
         total_value = sum(nsv_scores[c][s] for c, sel in enumerate(client_selected) for s in sel)
+        total_upload_bytes = sum(comm_costs[s] for sel in client_selected for s in sel)
         info_log = [
             f"  unified-milp (gurobipy): strength={strength:.2f} lambda={lam:.1f} "
-            f"target=[{target_lo},{target_hi}]",
+            f"target=[{target_lo},{target_hi}] comm_penalty={communication_penalty:.3f}",
             f"  final: coverage={coverage.tolist()} total_NSV={total_value:.4f} "
             f"costs_per_client={[len(s) for s in client_selected]}",
+            f"  communication: upload={total_upload_bytes / 1024.0 / 1024.0:.3f}MiB "
+            f"round_trip={2.0 * total_upload_bytes / 1024.0 / 1024.0:.3f}MiB",
         ]
         return client_selected, coverage, info_log
 
@@ -567,7 +615,7 @@ def _plan_unified_milp(nsv_scores, scale_costs, budgets, coverage_target, streng
 
 
 def _format_phase1_result(nsv_scores, scale_costs, client_plans, coverage_hist,
-                           swap_log, logTxt=None):
+                           swap_log, logTxt=None, communication_costs_bytes=None):
     """Phase 1 完整结果表: NSV per-scale + per-client 分配 + swap log。"""
     lines = []
     sep = "=" * 90
@@ -580,11 +628,13 @@ def _format_phase1_result(nsv_scores, scale_costs, client_plans, coverage_hist,
     lines.append(sep)
     lines.append("[nsv-score] Phase 1: 尺度选择 (NSV 背包 + 覆盖均衡)")
     lines.append(dash)
-    lines.append(f"  {'Scale':>6s}  {'cost(MB)':>10s}  {'NSV(mean)':>10s}  {'Coverage':>10s}")
+    lines.append(f"  {'Scale':>6s}  {'cost(MB)':>10s}  {'Comm(KiB)':>10s}  {'NSV(mean)':>10s}  {'Coverage':>10s}")
     for s in range(num_scales):
         mean_nsv = np.mean([float(nsv_scores[c][s]) for c in range(num_clients)])
         cov = int(coverage_hist[s]) if coverage_hist is not None else 0
-        lines.append(f"  {s:>6d}  {scale_costs[s]:>10.2f}  {mean_nsv:>10.4f}  {cov:>10d}")
+        comm_kib = (float(communication_costs_bytes[s]) / 1024.0
+                    if communication_costs_bytes is not None else 0.0)
+        lines.append(f"  {s:>6d}  {scale_costs[s]:>10.2f}  {comm_kib:>10.2f}  {mean_nsv:>10.4f}  {cov:>10d}")
     lines.append(dash)
 
     # ── Per-client allocation ──
@@ -1910,16 +1960,22 @@ def _eval_svm_with_val(transformation_train, transformation_test, transformation
     return train_acc, test_acc
 
 
-def _linear_probe_eval(
-    transformation_train,
-    transformation_test,
-    y_train,
-    y_test,
+def _train_linear_head(
+    x_train,
+    y_train_enc,
+    x_test,
+    y_test_enc,
     *,
-    transformation_val=None,
-    y_val=None,
+    x_val=None,
+    y_val_enc=None,
+    num_classes=None,
     params=None,
 ):
+    """训练单层线性分类头（冻结表征之上），返回 (train_acc, test_acc)。
+
+    与下游微调消融协议 A 共用同一训练循环，保证口径一致。
+    早停口径：有验证集时在验证集上取 best；否则在训练集上取 best。
+    """
     params = params or {}
     lr = float(params.get("lr", 1e-3))
     wd = float(params.get("wd", 1e-4))
@@ -1932,27 +1988,21 @@ def _linear_probe_eval(
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    x_train = torch.as_tensor(np.asarray(transformation_train), dtype=torch.float32)
-    x_test = torch.as_tensor(np.asarray(transformation_test), dtype=torch.float32)
-    y_train_np = _to_numpy_labels(y_train)
-    y_test_np = _to_numpy_labels(y_test)
+    x_train = torch.as_tensor(np.asarray(x_train), dtype=torch.float32)
+    x_test = torch.as_tensor(np.asarray(x_test), dtype=torch.float32)
+    y_train_enc = torch.as_tensor(np.asarray(y_train_enc), dtype=torch.long)
+    y_test_enc = torch.as_tensor(np.asarray(y_test_enc), dtype=torch.long)
 
-    classes = np.unique(y_train_np)
-    class_to_idx = {c: i for i, c in enumerate(classes.tolist())}
-    y_train_enc = torch.as_tensor([class_to_idx[c] for c in y_train_np.tolist()], dtype=torch.long)
-    y_test_enc = torch.as_tensor([class_to_idx[c] for c in y_test_np.tolist()], dtype=torch.long)
-
-    has_val = transformation_val is not None and y_val is not None
+    has_val = x_val is not None and y_val_enc is not None
     if has_val:
-        x_val = torch.as_tensor(np.asarray(transformation_val), dtype=torch.float32)
-        y_val_np = _to_numpy_labels(y_val)
-        y_val_enc = torch.as_tensor([class_to_idx[c] for c in y_val_np.tolist()], dtype=torch.long)
-    else:
-        x_val = None
-        y_val_enc = None
+        x_val = torch.as_tensor(np.asarray(x_val), dtype=torch.float32)
+        y_val_enc = torch.as_tensor(np.asarray(y_val_enc), dtype=torch.long)
+
+    if num_classes is None:
+        num_classes = int(y_train_enc.max().item()) + 1
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    probe = nn.Linear(x_train.shape[1], len(classes)).to(device)
+    probe = nn.Linear(x_train.shape[1], num_classes).to(device)
     optimizer = optim.Adam(probe.parameters(), lr=lr, weight_decay=wd)
     criterion = nn.CrossEntropyLoss()
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -2014,6 +2064,125 @@ def _linear_probe_eval(
     train_acc = _accuracy(x_train, y_train_enc)
     test_acc = _accuracy(x_test, y_test_enc)
     return train_acc, test_acc
+
+
+def _linear_probe_eval(
+    transformation_train,
+    transformation_test,
+    y_train,
+    y_test,
+    *,
+    transformation_val=None,
+    y_val=None,
+    params=None,
+):
+    params = params or {}
+    seed = int(params.get("seed", 42))
+
+    x_train = np.asarray(transformation_train)
+    x_test = np.asarray(transformation_test)
+    y_train_np = _to_numpy_labels(y_train)
+    y_test_np = _to_numpy_labels(y_test)
+
+    classes = np.unique(y_train_np)
+    class_to_idx = {c: i for i, c in enumerate(classes.tolist())}
+    y_train_enc = np.asarray([class_to_idx[c] for c in y_train_np.tolist()], dtype=np.int64)
+    y_test_enc = np.asarray([class_to_idx[c] for c in y_test_np.tolist()], dtype=np.int64)
+
+    has_val = transformation_val is not None and y_val is not None
+    if has_val:
+        x_val = np.asarray(transformation_val)
+        y_val_np = _to_numpy_labels(y_val)
+        y_val_enc = np.asarray([class_to_idx[c] for c in y_val_np.tolist()], dtype=np.int64)
+    else:
+        x_val = None
+        y_val_enc = None
+
+    return _train_linear_head(
+        x_train, y_train_enc, x_test, y_test_enc,
+        x_val=x_val, y_val_enc=y_val_enc,
+        num_classes=len(classes),
+        params=params,
+    )
+
+
+def _stratified_subset_indices(y_np, ratio, rng, min_per_class=1):
+    """按类别分层抽取 ratio 比例的样本索引；每类至少 min_per_class 个（不足则全取）。"""
+    idx_parts = []
+    for c in np.unique(y_np):
+        c_idx = np.flatnonzero(y_np == c)
+        k = max(min_per_class, int(round(len(c_idx) * ratio)))
+        k = min(k, len(c_idx))
+        idx_parts.append(rng.choice(c_idx, size=k, replace=False))
+    idx = np.sort(np.concatenate(idx_parts))
+    if len(idx) == 0:
+        # 空标注集兜底：至少取 1 个样本
+        idx = np.asarray([rng.choice(len(y_np))], dtype=np.int64)
+    return idx
+
+
+def _finetune_subset_eval(
+    transformation,
+    transformation_test,
+    y_train,
+    y_test,
+    *,
+    ratios,
+    seeds=3,
+    val_split=0.2,
+    min_val_samples=50,
+    params=None,
+):
+    """下游微调消融（协议 A：冻结表征 + 线性分类头）。
+
+    对每个标注比例 ratio：按 seeds 个采样种子分层抽取标注子集，
+    训练单层线性头并在完整测试集上评估。
+
+    固定规则（docs/downstream_finetuning_ablation.md §5）：
+      * 子集 >= min_val_samples 时，子集内再按 8:2 分层划验证集用于早停；
+        否则退化为训练集上取 best（结果表需脚注说明）。
+      * 类别编码按完整训练集（不随子集变化），保证 num_classes 稳定。
+
+    Returns: {ratio: {seed: test_acc}}
+    """
+    params = params or {}
+    y_train_np = _to_numpy_labels(y_train)
+    y_test_np = _to_numpy_labels(y_test)
+    classes = np.unique(y_train_np)
+    class_to_idx = {c: i for i, c in enumerate(classes.tolist())}
+    y_train_enc_full = np.asarray([class_to_idx[c] for c in y_train_np.tolist()], dtype=np.int64)
+    y_test_enc = np.asarray([class_to_idx[c] for c in y_test_np.tolist()], dtype=np.int64)
+    x_all = np.asarray(transformation)
+    x_test = np.asarray(transformation_test)
+
+    results = {}
+    for ratio in ratios:
+        per_seed = {}
+        for seed in range(seeds):
+            rng = np.random.default_rng(seed)
+            idx = _stratified_subset_indices(y_train_np, ratio, rng)
+
+            x_sub = x_all[idx]
+            y_sub = y_train_enc_full[idx]
+            x_val = None
+            y_val_enc = None
+            if len(idx) >= min_val_samples and 0.0 < val_split < 1.0:
+                val_idx = _stratified_subset_indices(y_train_np[idx], val_split, rng)
+                rest_idx = np.setdiff1d(np.arange(len(idx)), val_idx, assume_unique=True)
+                x_val = x_sub[val_idx]
+                y_val_enc = y_sub[val_idx]
+                x_sub = x_sub[rest_idx]
+                y_sub = y_sub[rest_idx]
+
+            _, test_acc = _train_linear_head(
+                x_sub, y_sub, x_test, y_test_enc,
+                x_val=x_val, y_val_enc=y_val_enc,
+                num_classes=len(classes),
+                params=params,
+            )
+            per_seed[seed] = float(test_acc)
+        results[ratio] = per_seed
+    return results
 
 
 def _make_downstream_eval_fns(config, protocol_override=None):
@@ -2151,6 +2320,31 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     )
     round_eval_interval = _round_eval_interval(config, args)
     print(f"downstream evaluation: {eval_protocol_desc}; every {round_eval_interval} round(s)")
+
+    # ----- 下游微调消融（协议 A）参数：--ft-ratios 为空则禁用 -----
+    ft_ratios = None
+    if args.ft_ratios:
+        try:
+            ft_ratios = [float(v.strip()) for v in args.ft_ratios.split(',') if v.strip()]
+            if not ft_ratios or not all(0.0 < r <= 1.0 for r in ft_ratios):
+                raise ValueError
+        except ValueError:
+            raise SystemExit(
+                f"[ft-ablation] 非法 --ft-ratios: {args.ft_ratios!r}，"
+                "应为逗号分隔的 (0,1] 比例列表，如 0.01,0.05,0.1,0.2,0.5,1.0"
+            )
+    ft_seeds = max(1, int(args.ft_seeds))
+    ft_val_split = float(args.ft_val_split)
+    ft_min_samples = max(1, int(args.ft_min_samples))
+    if not 0.0 <= ft_val_split < 1.0:
+        raise SystemExit(f"[ft-ablation] --ft-val-split 必须在 [0,1) 内，收到 {ft_val_split}")
+    if ft_ratios is not None:
+        print(
+            f"[ft-ablation] enabled: ratios={ft_ratios} seeds={ft_seeds} "
+            f"val_split={ft_val_split} min_val_samples={ft_min_samples} "
+            "(frozen encoder + linear head, runs once after training on the final-round global model)",
+            flush=True,
+        )
     lr = model_cfg['lr']
     batch_size = args.batch_size if args.batch_size is not None else model_cfg['batch_size']
     wd = model_cfg.get('wd', 0.0001)
@@ -2245,6 +2439,15 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         f"effective_dataset: {dataset}",
         f"effective_dirichlet_alpha: {dirichlet_alpha}",
         f"effective_eval_every_n_rounds: {round_eval_interval}",
+    ]
+    if ft_ratios is not None:
+        header_lines += [
+            f"ft_ablation_ratios: {ft_ratios}",
+            f"ft_ablation_seeds: {ft_seeds}",
+            f"ft_ablation_val_split: {ft_val_split}",
+            f"ft_ablation_min_val_samples: {ft_min_samples}",
+        ]
+    header_lines += [
         yaml.dump(config).replace('\n', ''),
     ]
     _append_text_to_log(logTxt, "\n".join(header_lines) + "\n")
@@ -2497,6 +2700,7 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     # ----- 显存采集：优先从缓存加载；否则实时采集并持久化 -----
     scale_costs = None
+    scale_communication_costs_bytes = None
     overhead_base_mb = 0.0
     scale_mem_table = []
     _use_cache = args.scale_memory_cache or os.environ.get("SCALE_MEMORY_CACHE", "").strip() == "1"
@@ -2543,6 +2747,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
 
     if _uses_fedcsl_scale_scores(algo):
         scale_prep_t0 = time.perf_counter()
+        if _uses_scale_split_algo(algo):
+            scale_communication_costs_bytes = _scale_communication_costs_bytes(server.model)
         if _uses_scale_split_algo(algo) and spilter_allocation_mode == "uniform_single":
             cached_client_scale_plans, cached_scale_hist = _plan_uniform_single_client_scales(
                 len(X_fed),
@@ -2572,6 +2778,9 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                     _strength = float(_env_cs) if _env_cs else 0.5
                 _strength = max(0.0, min(1.0, float(_strength)))
                 if _strength > 1e-6 and spilter_allocation_mode == "knapsack_lagrangian":
+                    _comm_penalty = _communication_penalty_from_config(
+                        config, args.communication_penalty
+                    )
                     knap_params = _spilter_knapsack_lagrangian_params(
                         config, override_memory_budget=args.spilter_memory_budget
                     )
@@ -2584,6 +2793,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         _nsv_scores, scale_costs, _budgets,
                         coverage_target=_cov_target,
                         strength=_strength,
+                        communication_costs_bytes=scale_communication_costs_bytes,
+                        communication_penalty=_comm_penalty,
                     )
                     if _umilp is not None:
                         _balanced, _bal_cov, _milp_log = _umilp
@@ -2591,7 +2802,8 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                         cached_scale_hist = _bal_cov
                         _unified_used = True
                         _format_phase1_result(
-                            _nsv_scores, scale_costs, _balanced, _bal_cov, _milp_log, logTxt
+                            _nsv_scores, scale_costs, _balanced, _bal_cov, _milp_log, logTxt,
+                            communication_costs_bytes=scale_communication_costs_bytes,
                         )
 
             if _uses_scale_split_algo(algo) and spilter_allocation_mode == "global_score_random_single":
@@ -3028,6 +3240,61 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         save_model(best_state_dict, dataset, formatted_date)
     else:
         print("[warn] 没有任何一轮 test_acc > 0，跳过 best 模型保存")
+
+    # ----- 下游微调消融（协议 A：冻结表征 + 线性头）-----
+    # 固定规则：基于训练结束时的最后一轮全局模型执行一次，
+    # 各比例 x 各采样种子 分层抽样标注子集后训线性头（详见 docs/downstream_finetuning_ablation.md）。
+    if ft_ratios is not None:
+        print("[ft-ablation] 基于最后一轮全局模型执行下游微调消融...", flush=True)
+        ft_t0 = time.perf_counter()
+        # 保存最后一轮全局模型（协议 A 的 checkpoint 口径；best 模型另行保存，供 B 组对照）
+        try:
+            final_state = _state_dict_to_cpu(server.model.state_dict())
+            final_path = f"./checkpoint/{dataset}/{formatted_date}_{dataset}_model_final_round.pt"
+            os.makedirs(os.path.dirname(final_path), exist_ok=True)
+            torch.save(final_state, final_path)
+            print(f"[ft-ablation] final-round model saved to {final_path}", flush=True)
+        except Exception as e:  # 保存失败不阻断消融
+            print(f"[ft-ablation] 保存 final-round 模型失败: {e}", flush=True)
+        try:
+            transformation_ft = server.transform(X_all, result_type='numpy', normalize=True, batch_size=batch_size)
+            transformation_test_ft = server.transform(X_test, result_type='numpy', normalize=True, batch_size=batch_size)
+            scaler_ft = RobustScaler()
+            transformation_ft = scaler_ft.fit_transform(transformation_ft)
+            transformation_test_ft = scaler_ft.transform(transformation_test_ft)
+
+            # 线性头超参与 linear_probe 协议同源（evaluation.linear_probe 字段可覆盖）
+            ft_lp_params = _evaluation_config(config).get("linear_probe") or {}
+            ft_results = _finetune_subset_eval(
+                transformation_ft, transformation_test_ft, y_all, y_test,
+                ratios=ft_ratios, seeds=ft_seeds,
+                val_split=ft_val_split, min_val_samples=ft_min_samples,
+                params=ft_lp_params,
+            )
+
+            lines = [
+                "",
+                "===== downstream fine-tuning ablation (protocol A: frozen encoder + linear head) =====",
+                f"checkpoint: final-round (round {numRound}) global model",
+                f"val_split: {ft_val_split} (only applied when subset >= {ft_min_samples} samples; "
+                "otherwise best-on-train, footnote in tables)",
+                "ratio | per-seed test acc | mean ± std",
+            ]
+            for ratio in sorted(ft_results):
+                accs = [ft_results[ratio][s] for s in sorted(ft_results[ratio])]
+                lines.append(
+                    f"{ratio:.2%} | "
+                    + ", ".join(f"{a:.4f}" for a in accs)
+                    + f" | {np.mean(accs):.4f} ± {np.std(accs):.4f}"
+                )
+            block = "\n".join(lines) + "\n"
+            print(block, flush=True)
+            _append_text_to_log(logTxt, block)
+        except Exception as e:  # 消融失败不致命：记录后继续（保留主实验结果）
+            msg = f"[ft-ablation] 微调消融失败: {e}\n{traceback.format_exc()}"
+            print(msg, flush=True)
+            _append_text_to_log(logTxt, msg)
+        print(f"[ft-ablation] done in {time.perf_counter() - ft_t0:.1f}s", flush=True)
 
 
 def save_model(state_dict, dataset, formatted_date):

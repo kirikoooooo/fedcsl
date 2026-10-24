@@ -40,6 +40,9 @@ spilter:
   # stitched：selected_scales_only（默认）= encode_mix_forward_selected_scales（FedCSL forward 同源管线，仅所选尺度）；
   # forward_slices = 全尺度 forward 后切片（与 FedCSL 表征对照）；subset_ln_forward_scale = 旧版辅助项二次 encode_scale。
   stitched_feature_source: "selected_scales_only"
+  # Soft penalty on each selected scale's actual uploaded parameter bytes.
+  # 0 reproduces the prior NSV + coverage objective.
+  communication_penalty: 0.1
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Knapsack-Lagrangian Scale Allocation (§7.7)

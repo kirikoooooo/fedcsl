@@ -1,6 +1,7 @@
 # Jenkins CICD 部署 FedCSL Dashboard —— 实施过程记录
 
 > 日期：2026-10-24
+> 流水线自测：本行用于验证 GitHub 提交能被 Jenkins 定时检测并触发流水线（可安全删除）。
 > 目标：用 Jenkins 定时检测 GitHub 仓库更新，有更新时自动部署 dashboard（FastAPI 后端 + 静态前端），全程零手工干预。
 > 状态：✅ **已上线并完成端到端验证**（构建 #2 实际部署成功；构建 #3 无更新正确跳过）
 

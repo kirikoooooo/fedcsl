@@ -297,3 +297,4 @@ schtasks /change /tn FedCSLDeployWatcher /enable    # 恢复自动部署
 - **dashboard/requirements.txt 缺失**：README 引用了但仓库中没有；watcher 目前不做依赖安装，换机器时需手动 `pip install fastapi uvicorn psutil`。
 - **JCasC 每次启动强制覆盖**：`jenkins.yaml` 会覆盖 UI 上对账号/安全策略的修改；任务定义由 init.groovy.d 覆盖。改配置请改文件而非 UI。
 - **仅本机可访问**：如需局域网访问，把 `-p 127.0.0.1:8080:8080` 改为 `-p 8080:8080`，并务必先改强密码。
+- ⚠️ **watcher 会覆盖 `dashboard/` 下未提交的本地修改**：部署时执行 `git checkout FETCH_HEAD -- dashboard/`，因此修改 dashboard 代码后必须先 commit + push 再触发部署，否则本地改动会被远端版本静默覆盖。本地调试时请直接手动启动 dashboard（`python -m dashboard.app`），不要经过 watcher。

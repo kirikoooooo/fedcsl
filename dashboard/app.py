@@ -88,6 +88,40 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _terminate_tree(pid: int, pgid: Optional[int] = None, force: bool = False) -> None:
+    """跨平台终止进程树。
+
+    POSIX 下优先 killpg（整组）；Windows 没有 getpgid/killpg，
+    改用 psutil 递归终止子进程 + 父进程。
+    """
+    if pgid and hasattr(os, "killpg"):
+        try:
+            os.killpg(pgid, signal.SIGKILL if force else signal.SIGTERM)
+            return
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            raise
+    try:
+        parent = psutil.Process(pid)
+        children = parent.children(recursive=True)
+    except psutil.NoSuchProcess:
+        return
+    procs = children + [parent]
+    for p in procs:
+        try:
+            p.kill() if force else p.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    if not force:
+        _, alive = psutil.wait_procs(procs, timeout=5)
+        for p in alive:
+            try:
+                p.kill()
+            except psutil.NoSuchProcess:
+                pass
+
+
 def _refresh_run_status(run: Dict[str, Any]) -> Dict[str, Any]:
     """根据 pid 是否存活更新 run 的 status 字段（in-place）。"""
     if run.get("status") == "running":
@@ -544,7 +578,8 @@ def launch_script(req: LaunchRequest) -> Dict[str, Any]:
         "env": req.env,
         "cmd": " ".join(shlex.quote(c) for c in cmd),
         "pid": proc.pid,
-        "pgid": os.getpgid(proc.pid),
+        # os.getpgid 是 POSIX 专有；Windows 上为 None，停止时走 psutil 进程树终止
+        "pgid": os.getpgid(proc.pid) if hasattr(os, "getpgid") else None,
         "log": str(log_path.relative_to(DASHBOARD_DIR)),
         "started_at": time.time(),
         "ended_at": None,
@@ -592,10 +627,7 @@ def stop_run(run_id: str) -> Dict[str, Any]:
     killed = False
     if pid and _pid_alive(pid):
         try:
-            if pgid:
-                os.killpg(pgid, signal.SIGTERM)
-            else:
-                os.kill(pid, signal.SIGTERM)
+            _terminate_tree(pid, pgid=pgid, force=False)
             killed = True
         except ProcessLookupError:
             pass
@@ -608,10 +640,7 @@ def stop_run(run_id: str) -> Dict[str, Any]:
             time.sleep(0.25)
         if _pid_alive(pid):
             try:
-                if pgid:
-                    os.killpg(pgid, signal.SIGKILL)
-                else:
-                    os.kill(pid, signal.SIGKILL)
+                _terminate_tree(pid, pgid=pgid, force=True)
             except ProcessLookupError:
                 pass
 

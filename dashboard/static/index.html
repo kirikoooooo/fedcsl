@@ -191,7 +191,7 @@
           <div>
             <div class="muted">算法 tags</div>
             <div id="baseline-tags" class="tag-grid"><span class="muted">加载中…</span></div>
-            <div style="margin-top:6px; font-size:12px; color:var(--muted);">Spilter 选项</div>
+            <div style="margin-top:6px; font-size:12px; color:var(--muted);">实验类型</div>
             <div class="tag-grid" style="margin-bottom:8px">
               <label class="tag-check">
                 <input type="checkbox" id="spilter-random-toggle" onchange="updateBaselineSummary()" />
@@ -205,6 +205,34 @@
                 <input type="checkbox" id="spilter-memory-budget-toggle" onchange="updateMemoryBudgetSection(); updateBaselineSummary();" />
                 <span>Spilter-memory-budget（显存预算实验）</span>
               </label>
+              <label class="tag-check" style="margin-top:6px">
+                <input type="checkbox" id="ft-toggle" onchange="updateFtSection(); updateBaselineSummary();" />
+                <span>下游微调实验（不同标注比例 · 标签效率）</span>
+              </label>
+            </div>
+            <div id="ft-section" style="display:none; margin-bottom:8px; padding:10px; background:var(--card); border:1px solid var(--border); border-radius:6px;">
+              <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">
+                下游微调参数（协议 A：冻结 encoder + 线性头，训练结束后基于最后一轮全局模型执行）
+              </div>
+              <div class="form-row">
+                <label>微调比例</label>
+                <input id="ft-ratios" class="control" type="text" value="0.05,0.1,0.2,0.5,1.0" placeholder="0.05,0.1,0.2,0.5,1.0" oninput="updateBaselineSummary()" />
+              </div>
+              <div class="form-row">
+                <label>采样种子数</label>
+                <input id="ft-seeds" class="control" type="number" min="1" step="1" value="3" oninput="updateBaselineSummary()" style="width:80px" />
+                <span style="font-size:11px; color:var(--muted); margin-left:4px">(每比例重复采样次数，报告 mean±std)</span>
+              </div>
+              <div class="form-row">
+                <label>验证集比例</label>
+                <input id="ft-val-split" class="control" type="number" min="0" max="0.9" step="0.05" value="0.2" oninput="updateBaselineSummary()" style="width:80px" />
+                <span style="font-size:11px; color:var(--muted); margin-left:4px">(标注子集内早停划分)</span>
+              </div>
+              <div class="form-row">
+                <label>验证集最小样本</label>
+                <input id="ft-min-samples" class="control" type="number" min="1" step="1" value="50" oninput="updateBaselineSummary()" style="width:80px" />
+                <span style="font-size:11px; color:var(--muted); margin-left:4px">(子集小于该值时不划验证集)</span>
+              </div>
             </div>
             <div class="form-row" style="margin-bottom:6px">
               <label>TopM（每客户端尺度数）</label>
@@ -257,6 +285,11 @@
             <div class="form-row">
               <label>客户端数量</label>
               <input id="baseline-num-client" class="control" type="number" min="1" step="1" value="10" oninput="updateBaselineSummary()" />
+            </div>
+            <div class="form-row">
+              <label>预训练轮次</label>
+              <input id="baseline-num-rounds" class="control" type="number" min="1" step="1" value="20" oninput="updateBaselineSummary()" />
+              <span style="font-size:11px; color:var(--muted); margin-left:4px">(默认 20 轮快速验证)</span>
             </div>
             <div class="form-row">
               <label>下游评估</label>
@@ -718,6 +751,27 @@ function updateMemoryBudgetSection() {
   if (section && toggle) { section.style.display = toggle.checked ? 'block' : 'none'; }
   if (toggle && toggle.checked) { _refreshMemoryBudgetSummary(); }
 }
+function updateFtSection() {
+  const toggle = document.getElementById('ft-toggle');
+  const section = document.getElementById('ft-section');
+  if (section && toggle) { section.style.display = toggle.checked ? 'block' : 'none'; }
+}
+function _ftConfig() {
+  const ratios = (document.getElementById('ft-ratios')?.value || '').trim() || '0.05,0.1,0.2,0.5,1.0';
+  const seeds = parseInt(document.getElementById('ft-seeds')?.value) || 3;
+  const valSplit = parseFloat(document.getElementById('ft-val-split')?.value);
+  const minSamples = parseInt(document.getElementById('ft-min-samples')?.value) || 50;
+  return {
+    ratios: ratios.replace(/\s+/g, ''),
+    seeds: Math.max(1, seeds),
+    valSplit: Number.isFinite(valSplit) ? valSplit : 0.2,
+    minSamples: Math.max(1, minSamples),
+  };
+}
+function _numRounds() {
+  const n = parseInt(document.getElementById('baseline-num-rounds')?.value);
+  return Number.isFinite(n) && n >= 1 ? n : 20;
+}
 function _memoryBudgetConfig() {
   const base = parseInt(document.getElementById('memory-budget-base')?.value) || 200;
   const rStrong = parseInt(document.getElementById('memory-budget-ratio-strong')?.value) || 30;
@@ -777,6 +831,8 @@ function updateBaselineSummary() {
   const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
   const knapsackChecked = document.getElementById('spilter-knapsack-toggle')?.checked || false;
   const memBudgetChecked = document.getElementById('spilter-memory-budget-toggle')?.checked || false;
+  const ftChecked = document.getElementById('ft-toggle')?.checked || false;
+  const rounds = _numRounds();
   const randomText = randomChecked ? ' · Random scales ✓' : '';
   const knapsackText = knapsackChecked ? ' · Knapsack Lagrangian ✓' : '';
   let memBudgetText = '';
@@ -785,10 +841,15 @@ function updateBaselineSummary() {
     const nCli = parseInt(numClient) || 10;
     memBudgetText = ` · 显存预算: base=${cfg.base}MB (强${cfg.budgets.strong}/中${cfg.budgets.medium}/弱${cfg.budgets.weak}) 分布${(cfg.normalizedRatios.strong*100).toFixed(0)}/${(cfg.normalizedRatios.medium*100).toFixed(0)}/${(cfg.normalizedRatios.weak*100).toFixed(0)} × ${nCli}客户端`;
   }
+  let ftText = '';
+  if (ftChecked) {
+    const ft = _ftConfig();
+    ftText = `<br>微调实验：比例 [${escapeHtml(ft.ratios)}] × ${ft.seeds} 种子（val ${ft.valSplit}, min ${ft.minSamples}）`;
+  }
   _refreshMemoryBudgetSummary();
   const el = document.getElementById('baseline-summary');
   if (el) {
-    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>GPU：${gpuText}${randomText}${knapsackText}${memBudgetText}`;
+    el.innerHTML = `将启动 <b>${count}</b> 个任务<br>算法：${scripts.map(scriptTag).join(', ') || '未选择'}<br>下游评估：${evalText}（${evalIntervalText}）<br>数据集：${escapeHtml(dataset)}<br>alpha：${alphas.join(', ')}<br>客户端：${escapeHtml(String(numClient))}<br>预训练轮次：${rounds}<br>GPU：${gpuText}${randomText}${knapsackText}${memBudgetText}${ftText}`;
   }
 }
 function selectAllBaselines(checked) {
@@ -799,9 +860,10 @@ async function refreshBaselineGpuOptions() {
   await loadGpuOptions('baseline-gpu', {includeAuto: false, selectMostIdle: true});
   updateBaselineSummary();
 }
-function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', dataset='HAR', evalProtocol='svm', evalInterval=1, extraArgs=[], envBase={}}={}) {
+function buildLaunchPayload(script, {alpha=null, gpu='', numClient='', numRounds=null, dataset='HAR', evalProtocol='svm', evalInterval=1, extraArgs=[], envBase={}}={}) {
   const args = [...extraArgs];
   if (numClient) args.push('--num-client', String(numClient));
+  if (numRounds) args.push('--num-rounds', String(numRounds));
   if (gpu !== '') {
     args.push('--server-gpu', '0', '--client-gpus', '0');
   }
@@ -852,6 +914,11 @@ function runBadges(r) {
   if (env.SPILTER_MEMORY_BUDGETS && !env.SPILTER_MEMORY_BUDGETS.startsWith('__')) {
     badges.push(`<span class="tag" style="background:rgba(153,34,210,.18); color:#d9b3ff; border-color:#a855f7;">MEM-BUDGET</span>`);
   }
+  const ftRatios = argValue(r.args, '--ft-ratios');
+  if (ftRatios) {
+    const nRounds = argValue(r.args, '--num-rounds');
+    badges.push(`<span class="tag" style="background:rgba(34,197,94,.18); color:#86efac; border-color:#22c55e;">FT ${escapeHtml(ftRatios)}${nRounds ? ' @' + escapeHtml(nRounds) + 'r' : ''}</span>`);
+  }
   return badges.join(' ');
 }
 async function launchSelectedBaselines() {
@@ -867,6 +934,24 @@ async function launchSelectedBaselines() {
   const randomChecked = document.getElementById('spilter-random-toggle')?.checked || false;
   const knapsackChecked = document.getElementById('spilter-knapsack-toggle')?.checked || false;
   const memBudgetChecked = document.getElementById('spilter-memory-budget-toggle')?.checked || false;
+  const ftChecked = document.getElementById('ft-toggle')?.checked || false;
+  const numRounds = _numRounds();
+  const ft = _ftConfig();
+  if (ftChecked) {
+    const parsed = ft.ratios.split(',').map(s => parseFloat(s)).filter(v => Number.isFinite(v));
+    if (!parsed.length || parsed.some(v => !(v > 0 && v <= 1))) {
+      toast('微调比例格式错误：需为 (0,1] 之间的逗号分隔数字，如 0.05,0.1,0.2,0.5,1.0', 'err');
+      return;
+    }
+  }
+  // 下游微调实验参数（所有经 FedCSL_All.py 的脚本通用）
+  const ftArgs = ftChecked
+    ? ['--ft-ratios', ft.ratios,
+       '--ft-seeds', String(ft.seeds),
+       '--ft-val-split', String(ft.valSplit),
+       '--ft-min-samples', String(ft.minSamples)]
+    : [];
+  const launchExtraArgs = [...extraArgs, ...ftArgs];
   const topM = document.getElementById('spilter-top-m')?.value || '8';
   const started = [];
   try {
@@ -896,7 +981,7 @@ async function launchSelectedBaselines() {
           const perClientBudgets = computePerClientMemoryBudgets(nCli);
           envBase.SPILTER_MEMORY_BUDGETS = perClientBudgets.join(',');
         }
-        const payload = buildLaunchPayload(script, {alpha, gpu, numClient, dataset, evalProtocol, evalInterval, extraArgs, envBase});
+        const payload = buildLaunchPayload(script, {alpha, gpu, numClient, numRounds, dataset, evalProtocol, evalInterval, extraArgs: launchExtraArgs, envBase});
         const run = await api('/runs', {
           method: 'POST',
           headers: {'content-type':'application/json'},

@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -538,6 +539,33 @@ class LaunchRequest(BaseModel):
     env: Dict[str, str] = Field(default_factory=dict, description="附加环境变量")
 
 
+def _bash_bin() -> str:
+    """返回可用的 bash 路径。
+
+    Windows 上直接调用 "bash" 可能解析到 System32 下的 WSL bash.exe，
+    而 WSL 未安装发行版时会报 "execvpe(/bin/bash) failed"。
+    优先使用显式配置或 Git Bash。
+    """
+    env_bash = os.environ.get("DASHBOARD_BASH")
+    if env_bash and Path(env_bash).exists():
+        return env_bash
+    for candidate in (
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+    ):
+        if Path(candidate).exists():
+            return candidate
+    found = shutil.which("bash")
+    if found and "system32" not in found.lower():
+        return found
+    raise HTTPException(
+        500,
+        "未找到可用的 bash：请安装 Git Bash，或通过环境变量 DASHBOARD_BASH 指定 bash 路径",
+    )
+
+
 def launch_script(req: LaunchRequest) -> Dict[str, Any]:
     script_rel = req.script.lstrip("/")
     script_path = _safe_under(PROJECT_ROOT, PROJECT_ROOT / script_rel)
@@ -548,13 +576,16 @@ def launch_script(req: LaunchRequest) -> Dict[str, Any]:
     log_path = LOGS_DIR / f"{run_id}.log"
 
     if script_path.suffix == ".sh":
-        cmd = ["bash", str(script_path), *req.args]
+        cmd = [_bash_bin(), str(script_path), *req.args]
     elif script_path.suffix == ".py":
         cmd = [sys.executable, str(script_path), *req.args]
     else:
         raise HTTPException(400, "unsupported script type")
 
     env = os.environ.copy()
+    # 脚本内部默认 PY_BIN=python3（Linux 习惯）；Windows 上显式指向当前解释器
+    env.setdefault("PY_BIN", sys.executable)
+    env.setdefault("SCHED_PY_BIN", sys.executable)
     for k, v in req.env.items():
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
             raise HTTPException(400, f"invalid env var name: {k}")

@@ -1,0 +1,45 @@
+model:
+  name: ""
+  params:
+    dist_measure: "mix"
+    lr: 0.01     # 当dataset=HAR时为0.05
+    batch_size: 32 # HAR baseline 统一：16
+    wd: 0
+    ls: 1         #l3 多粒度学习
+    l: 0.01       #l4 正则化系数 default0.01
+    beta: 0.4     # 长短期融合系数
+    gamma: 0.5    # 本地和全局融合系数
+dataset: "SleepEDF"
+algo: "fedavg"
+federated:
+  numClient: 3
+  numRound: 200
+  numEpoch: 1
+  dirichlet_alpha: 1
+  use_client_selection: False  # 是否启用客户端选择
+  client_selection_ratio: 0.6   # 客户端选择比例（当use_client_selection为True时生效）
+
+  checkpoint_every: 0  # 每 N 轮覆盖保存 resume checkpoint（0=关闭）
+  auto_resume: false     # 启动时若存在 resume ckpt 则自动续训
+ablation:
+  UseJointKD: False
+  UseJointCL: False
+  UseScaleKD: False
+  UseScaleCL: False
+  UseProdictor: False
+  UseMTLHomo: False     # 方差多任务学习
+  UseACF: False
+  UseDistribution: False
+logPath: "./result/"
+description: "AVG_FT20"
+
+evaluation:
+  protocol: "svm"  # options: svm | linear_probe
+  svm_c_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+  linear_probe:
+    lr: 0.001
+    wd: 0.0001
+    batch_size: 256
+    max_epoch: 200
+    eval_interval: 1
+    seed: 42

@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+  evaluation_interval: 15s
+  external_labels:
+    stack: fedcsl-k8s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: fedcsl-exporter
+    static_configs:
+      - targets: ["fedcsl-exporter.argo.svc.cluster.local:9108"]
+        labels:
+          env: k8s
+          component: training
+
+  - job_name: argo-workflow-controller
+    static_configs:
+      - targets: ["workflow-controller-metrics.argo.svc.cluster.local:9090"]
+        labels:
+          component: argo
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

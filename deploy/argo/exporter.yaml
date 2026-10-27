@@ -1,0 +1,71 @@
+# File-collector exporter. It reads the fedcsl-work PVC and serves Prometheus
+# metrics on :9108. It shares the PVC with Argo steps, so it must run in the
+# argo namespace (PVCs are namespaced).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fedcsl-exporter
+  namespace: argo
+  labels:
+    app: fedcsl-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fedcsl-exporter
+  template:
+    metadata:
+      labels:
+        app: fedcsl-exporter
+    spec:
+      containers:
+        - name: exporter
+          image: fedcsl-train:observe
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/fedcsl/deploy/argo/entrypoint.sh"]
+          args:
+            - python
+            - -m
+            - observability.exporter
+            - --root
+            - /data/observability/runs
+            - --port
+            - "9108"
+          ports:
+            - name: metrics
+              containerPort: 9108
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9108
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: work
+              mountPath: /data
+      volumes:
+        - name: work
+          persistentVolumeClaim:
+            claimName: fedcsl-work
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fedcsl-exporter
+  namespace: argo
+  labels:
+    app: fedcsl-exporter
+spec:
+  selector:
+    app: fedcsl-exporter
+  ports:
+    - name: metrics
+      port: 9108
+      targetPort: 9108

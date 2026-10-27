@@ -1,0 +1,23 @@
+# Shared state for Argo steps and the exporter.
+#
+# ReadWriteMany is required when steps and the exporter Deployment run on
+# different nodes. On a single-node cluster RWO can work as long as all pods are
+# scheduled to the same node.
+#
+# Pre-populate /data with:
+#   Epilepsy/{train,val,test}.pt
+#   Multivariate_ts/LSST/LSST_{TRAIN,TEST}.ts (if using LSST)
+#   algoutils/shapelet_weight_All.npy
+#   observability/runs/ (empty directory)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fedcsl-work
+  namespace: argo
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  # storageClassName: your-rwx-storage-class

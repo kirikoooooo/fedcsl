@@ -122,6 +122,13 @@ parser.add_argument('--coverage-strength', type=float, default=None,
                     help='Coverage balancing strength 0-1 (0=no swap, 0.5=balanced, 1=max uniformity; default 0.5)')
 parser.add_argument('--communication-penalty', type=float, default=None,
                     help='Penalty weight for transmitted scale parameters (0 disables; overrides spilter.communication_penalty)')
+# 可观测性 / Argo 分阶段执行支持
+parser.add_argument('--save-final-checkpoint', action='store_true', default=False,
+                    help='Save the final-round global model even when fine-tuning is disabled')
+parser.add_argument('--final-checkpoint-path', type=str, default=None,
+                    help='Explicit path for the final-round checkpoint (used to hand off between Argo steps)')
+parser.add_argument('--load-state', type=str, default=None,
+                    help='Load a bare state_dict before training/eval; use with --num-rounds 0 for fine-tune-only runs')
 
 args = parser.parse_args()
 
@@ -148,6 +155,25 @@ def _append_text_to_log(log_path, text):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, mode="a+", encoding="utf-8") as f:
         f.write(text)
+
+
+def _emit_obs_progress(payload):
+    """Write a progress snapshot for the Prometheus exporter when enabled.
+
+    Enabled only when FEDCSL_RUN_DIR is set (local observability runner or an
+    Argo step). Observability failures must never break training.
+    """
+    run_dir = os.environ.get("FEDCSL_RUN_DIR")
+    if not run_dir:
+        return
+    try:
+        from observability.progress import write_progress
+        data = dict(payload)
+        data.setdefault("phase", os.environ.get("FEDCSL_PHASE", "pretrain"))
+        data.setdefault("pid", os.getpid())
+        write_progress(run_dir, data)
+    except Exception as exc:  # pragma: no cover - best-effort telemetry
+        print(f"[observability] progress write failed: {exc}", flush=True)
 
 
 def _normalize_loss_breakdown(loss_entry):
@@ -2606,6 +2632,24 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     print(f"Client worker groups: {client_groups}")
     print(f"Client worker devices: {[str(d) for d in client_devices]}")
 
+    # ----- 分阶段执行：加载预训练好的 state_dict（微调/评估专用）----------------
+    loaded_state_path = None
+    if args.load_state:
+        load_path = args.load_state
+        if not os.path.isfile(load_path):
+            raise SystemExit(f"[fedcsl] --load-state 文件不存在: {load_path}")
+        try:
+            loaded_state = torch.load(load_path, map_location="cpu", weights_only=True)
+        except TypeError:  # 兼容不支持 weights_only 的旧版 torch
+            loaded_state = torch.load(load_path, map_location="cpu")
+        if isinstance(loaded_state, dict) and "server_state" in loaded_state:
+            loaded_state = loaded_state["server_state"]
+        _load_state_to_model(server.model, loaded_state)
+        loaded_state_path = load_path
+        print(f"[fedcsl] loaded model state ← {load_path}", flush=True)
+    if int(numRound) <= 0 and loaded_state_path is None:
+        raise SystemExit("[fedcsl] --num-rounds 0 需要配合 --load-state 使用")
+
     best_acc = 0.0
     best_round = -1
     best_state_dict = None  # 只保存 state_dict 的 CPU 副本，避免频繁 deepcopy GPU 模型
@@ -3225,6 +3269,31 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
                 f"eval={eval_stage_sec:.3f}s total={round_total_sec:.3f}s\n"
             )
 
+        # 可观测性：把本轮指标写给 Prometheus exporter（未启用时无副作用）
+        _emit_obs_progress({
+            "dataset": dataset,
+            "algo": algo,
+            "alpha": dirichlet_alpha,
+            "seed": original_seed,
+            "round": round,
+            "num_rounds": numRound,
+            "train_acc": train_acc,
+            "test_acc": test_acc,
+            "best_acc": best_acc,
+            "best_round": best_round,
+            "avg_loss": avg_loss,
+            "loss_terms": avg_loss_terms,
+            "timings": {
+                "train": train_stage_sec,
+                "distribution": dist_stage_sec,
+                "agg": agg_stage_sec,
+                "eval": eval_stage_sec,
+                "total": round_total_sec,
+            },
+            "eval_skipped": not do_eval,
+            "result_log": logTxt,
+        })
+
         # 断点续训：每 ckpt_every 轮覆盖保存一次
         if ckpt_every > 0 and (round + 1) % ckpt_every == 0:
             try:
@@ -3241,6 +3310,17 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
     else:
         print("[warn] 没有任何一轮 test_acc > 0，跳过 best 模型保存")
 
+    # 分阶段执行：预训练阶段显式落盘最终轮模型，供微调阶段加载。
+    if args.save_final_checkpoint and ft_ratios is None:
+        try:
+            save_final_model(
+                _state_dict_to_cpu(server.model.state_dict()),
+                dataset, formatted_date,
+                explicit_path=args.final_checkpoint_path,
+            )
+        except Exception as e:
+            print(f"[fedcsl] 保存 final-round 模型失败: {e}", flush=True)
+
     # ----- 下游微调消融（协议 A：冻结表征 + 线性头）-----
     # 固定规则：基于训练结束时的最后一轮全局模型执行一次，
     # 各比例 x 各采样种子 分层抽样标注子集后训线性头（详见 docs/downstream_finetuning_ablation.md）。
@@ -3249,11 +3329,11 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
         ft_t0 = time.perf_counter()
         # 保存最后一轮全局模型（协议 A 的 checkpoint 口径；best 模型另行保存，供 B 组对照）
         try:
-            final_state = _state_dict_to_cpu(server.model.state_dict())
-            final_path = f"./checkpoint/{dataset}/{formatted_date}_{dataset}_model_final_round.pt"
-            os.makedirs(os.path.dirname(final_path), exist_ok=True)
-            torch.save(final_state, final_path)
-            print(f"[ft-ablation] final-round model saved to {final_path}", flush=True)
+            save_final_model(
+                _state_dict_to_cpu(server.model.state_dict()),
+                dataset, formatted_date,
+                explicit_path=args.final_checkpoint_path,
+            )
         except Exception as e:  # 保存失败不阻断消融
             print(f"[ft-ablation] 保存 final-round 模型失败: {e}", flush=True)
         try:
@@ -3290,10 +3370,38 @@ def train(dataset="", seed=42, T=0.1, l=1e-2, ls=1.0, alpha=0.5, batch_size=8, t
             block = "\n".join(lines) + "\n"
             print(block, flush=True)
             _append_text_to_log(logTxt, block)
+            _emit_obs_progress({
+                "dataset": dataset,
+                "algo": algo,
+                "alpha": dirichlet_alpha,
+                "seed": original_seed,
+                "round": numRound,
+                "num_rounds": numRound,
+                "event": "finetune_completed",
+                "loaded_state": loaded_state_path,
+                "ft_ratios": ft_ratios,
+                "ft_seeds": ft_seeds,
+                "ft_results": {
+                    str(ratio): {str(s): ft_results[ratio][s] for s in ft_results[ratio]}
+                    for ratio in ft_results
+                },
+                "result_log": logTxt,
+            })
         except Exception as e:  # 消融失败不致命：记录后继续（保留主实验结果）
             msg = f"[ft-ablation] 微调消融失败: {e}\n{traceback.format_exc()}"
             print(msg, flush=True)
             _append_text_to_log(logTxt, msg)
+            _emit_obs_progress({
+                "dataset": dataset,
+                "algo": algo,
+                "alpha": dirichlet_alpha,
+                "seed": original_seed,
+                "round": numRound,
+                "num_rounds": numRound,
+                "event": "finetune_failed",
+                "ft_error": str(e),
+                "result_log": logTxt,
+            })
         print(f"[ft-ablation] done in {time.perf_counter() - ft_t0:.1f}s", flush=True)
 
 
@@ -3305,6 +3413,22 @@ def save_model(state_dict, dataset, formatted_date):
     os.makedirs(checkpoint_dir, exist_ok=True)
     torch.save(state_dict, model_path)
     print(f"Model saved to {model_path}")
+
+
+def save_final_model(state_dict, dataset, formatted_date, explicit_path=None):
+    """保存最后一轮全局模型；explicit_path 用于 Argo 步骤间使用固定交接路径。"""
+    if explicit_path:
+        model_path = explicit_path
+    else:
+        checkpoint_dir = f'./checkpoint/{dataset}'
+        safe_date = _sanitize_filename(formatted_date) if formatted_date else formatted_date
+        model_path = f'{checkpoint_dir}/{safe_date}_{dataset}_model_final_round.pt'
+    parent = os.path.dirname(model_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    torch.save(state_dict, model_path)
+    print(f"[fedcsl] final-round model saved to {model_path}", flush=True)
+    return model_path
 
 
 # ---------------------------------------------------------------------------

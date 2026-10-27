@@ -1,0 +1,257 @@
+# Four-stage FedCSL DAG. Steps are separate pods and hand off through the
+# fedcsl-work PVC:
+#   prepare -> pretrain (GPU) -> finetune (GPU) -> evaluate (gate)
+#
+# Each step is wrapped by observability.stage, so <run>/stages/*.json and
+# <run>/logs/*.log are written for the exporter and for human debugging.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: fedcsl-pipeline
+  namespace: argo
+spec:
+  entrypoint: pipeline
+  serviceAccountName: argo
+  archiveLogs: true
+  activeDeadlineSeconds: 86400
+  arguments:
+    parameters:
+      - name: dataset
+        value: Epilepsy-TSTCC
+      - name: config
+        value: config/configACF.yml
+      - name: numRounds
+        value: "2"
+      - name: numClients
+        value: "3"
+      - name: dirichletAlpha
+        value: "0.1"
+      - name: ftRatios
+        value: "0.1,1.0"
+      - name: ftSeeds
+        value: "1"
+      - name: image
+        value: fedcsl-train:observe
+  templates:
+    - name: pipeline
+      steps:
+        - - name: prepare
+            template: prepare
+        - - name: pretrain
+            template: pretrain
+        - - name: finetune
+            template: finetune
+        - - name: evaluate
+            template: evaluate
+
+    - name: prepare
+      retryStrategy:
+        limit: "1"
+        retryPolicy: OnFailure
+        backoff:
+          duration: "30s"
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: IfNotPresent
+        command: ["/opt/fedcsl/deploy/argo/entrypoint.sh"]
+        args:
+          - python
+          - -m
+          - observability.stage
+          - --run-dir
+          - /data/observability/runs/{{workflow.uid}}
+          - --phase
+          - prepare
+          - --
+          - python
+          - -m
+          - observability.prepare
+          - --dataset
+          - "{{workflow.parameters.dataset}}"
+          - --run-dir
+          - /data/observability/runs/{{workflow.uid}}
+          - --build-har
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        volumeMounts:
+          - name: work
+            mountPath: /data
+
+    - name: pretrain
+      retryStrategy:
+        limit: "1"
+        retryPolicy: OnFailure
+        backoff:
+          duration: "30s"
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: IfNotPresent
+        command: ["/opt/fedcsl/deploy/argo/entrypoint.sh"]
+        args:
+          - python
+          - -m
+          - observability.stage
+          - --run-dir
+          - /data/observability/runs/{{workflow.uid}}
+          - --phase
+          - pretrain
+          - --
+          - python
+          - -u
+          - FedCSL_All.py
+          - -dataset
+          - "{{workflow.parameters.dataset}}"
+          - --config
+          - "{{workflow.parameters.config}}"
+          - --num-client
+          - "{{workflow.parameters.numClients}}"
+          - --num-rounds
+          - "{{workflow.parameters.numRounds}}"
+          - --dirichlet-alpha
+          - "{{workflow.parameters.dirichletAlpha}}"
+          - --server-gpu
+          - "0"
+          - --client-gpus
+          - "0"
+          - --client-workers
+          - "1"
+          - --eval-protocol
+          - svm
+          - --eval-every-n-rounds
+          - "1"
+          - --seed
+          - "42"
+          - --description
+          - "{{workflow.uid}}_pretrain"
+          - --save-final-checkpoint
+          - --final-checkpoint-path
+          - /data/checkpoint/{{workflow.uid}}/final_round.pt
+        resources:
+          requests:
+            cpu: "4"
+            memory: "12Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: "24Gi"
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: work
+            mountPath: /data
+
+    - name: finetune
+      retryStrategy:
+        limit: "1"
+        retryPolicy: OnFailure
+        backoff:
+          duration: "30s"
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: IfNotPresent
+        command: ["/opt/fedcsl/deploy/argo/entrypoint.sh"]
+        args:
+          - python
+          - -m
+          - observability.stage
+          - --run-dir
+          - /data/observability/runs/{{workflow.uid}}
+          - --phase
+          - finetune
+          - --
+          - python
+          - -u
+          - FedCSL_All.py
+          - -dataset
+          - "{{workflow.parameters.dataset}}"
+          - --config
+          - "{{workflow.parameters.config}}"
+          - --num-client
+          - "{{workflow.parameters.numClients}}"
+          - --num-rounds
+          - "0"
+          - --dirichlet-alpha
+          - "{{workflow.parameters.dirichletAlpha}}"
+          - --server-gpu
+          - "0"
+          - --client-gpus
+          - "0"
+          - --client-workers
+          - "1"
+          - --eval-protocol
+          - svm
+          - --seed
+          - "42"
+          - --load-state
+          - /data/checkpoint/{{workflow.uid}}/final_round.pt
+          - --ft-ratios
+          - "{{workflow.parameters.ftRatios}}"
+          - --ft-seeds
+          - "{{workflow.parameters.ftSeeds}}"
+          - --description
+          - "{{workflow.uid}}_finetune"
+        resources:
+          requests:
+            cpu: "4"
+            memory: "12Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: "24Gi"
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: work
+            mountPath: /data
+
+    - name: evaluate
+      retryStrategy:
+        limit: "1"
+        retryPolicy: OnFailure
+        backoff:
+          duration: "30s"
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: IfNotPresent
+        command: ["/opt/fedcsl/deploy/argo/entrypoint.sh"]
+        args:
+          - python
+          - -m
+          - observability.stage
+          - --run-dir
+          - /data/observability/runs/{{workflow.uid}}
+          - --phase
+          - evaluate
+          - --
+          - python
+          - -m
+          - observability.evaluate
+          - --run-dir
+          - /data/observability/runs/{{workflow.uid}}
+          - --dataset
+          - "{{workflow.parameters.dataset}}"
+          - --pretrain-desc
+          - "{{workflow.uid}}_pretrain"
+          - --finetune-desc
+          - "{{workflow.uid}}_finetune"
+          - --expect-ft
+          - --final-ckpt
+          - /data/checkpoint/{{workflow.uid}}/final_round.pt
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+        volumeMounts:
+          - name: work
+            mountPath: /data
+
+  volumes:
+    - name: work
+      persistentVolumeClaim:
+        claimName: fedcsl-work

@@ -1,0 +1,31 @@
+# Training/observability image for Argo Workflows.
+#
+# Build from the repository root:
+#   docker build -f deploy/observability/Dockerfile.training -t fedcsl-train:observe .
+#
+# The base image tag should match environment.yml (PyTorch 2.4.1 / CUDA 12.1).
+# If your registry mirror differs, change the FROM prefix.
+FROM docker.m.daocloud.io/pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    PYTHONPATH=/opt/fedcsl
+
+WORKDIR /opt/fedcsl
+
+# Code only; datasets and checkpoints live on the fedcsl-work PVC.
+COPY . /opt/fedcsl
+
+# environment.yml is the authoritative pin. These are the runtime deps needed by
+# FedCSL_All.py; adjust versions if you need exact research reproducibility.
+RUN pip install --no-cache-dir \
+      scikit-learn \
+      sktime \
+      tsaug \
+      pandas \
+      pyyaml \
+      psutil \
+    && chmod +x /opt/fedcsl/deploy/argo/entrypoint.sh
+
+ENTRYPOINT ["/opt/fedcsl/deploy/argo/entrypoint.sh"]

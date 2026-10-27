@@ -1,0 +1,179 @@
+# In-cluster Prometheus + Grafana for FedCSL.
+#
+# Prerequisites (see deploy/argo/README.md):
+#   kubectl -n observability create configmap fedcsl-prometheus-config \
+#     --from-file=prometheus.yml=deploy/observability/prometheus/prometheus-k8s.yml
+#   kubectl -n observability create configmap fedcsl-prometheus-alerts \
+#     --from-file=alerts.yml=deploy/observability/prometheus/alerts.yml
+#   kubectl -n observability create configmap fedcsl-grafana-datasource \
+#     --from-file=prometheus.yml=deploy/observability/grafana/provisioning/datasources/prometheus.yml
+#   kubectl -n observability create configmap fedcsl-grafana-dashboard-provider \
+#     --from-file=dashboards.yml=deploy/observability/grafana/provisioning/dashboards/dashboards.yml
+#   kubectl -n observability create configmap fedcsl-grafana-dashboard \
+#     --from-file=fedcsl-overview.json=deploy/observability/grafana/dashboards/fedcsl-overview.json
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fedcsl-prometheus
+  namespace: observability
+  labels:
+    app: fedcsl-prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fedcsl-prometheus
+  template:
+    metadata:
+      labels:
+        app: fedcsl-prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: docker.m.daocloud.io/prom/prometheus:v2.53.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=15d
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+            - name: alerts
+              mountPath: /etc/prometheus/alerts.yml
+              subPath: alerts.yml
+            - name: data
+              mountPath: /prometheus
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      volumes:
+        - name: config
+          configMap:
+            name: fedcsl-prometheus-config
+        - name: alerts
+          configMap:
+            name: fedcsl-prometheus-alerts
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: observability
+  labels:
+    app: fedcsl-prometheus
+spec:
+  selector:
+    app: fedcsl-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fedcsl-grafana
+  namespace: observability
+  labels:
+    app: fedcsl-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fedcsl-grafana
+  template:
+    metadata:
+      labels:
+        app: fedcsl-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: docker.m.daocloud.io/grafana/grafana:10.4.5
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            # Change this for anything other than a private demo cluster.
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: fedcsl
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /var/lib/grafana/dashboards/fedcsl-overview.json
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: datasource
+              mountPath: /etc/grafana/provisioning/datasources/prometheus.yml
+              subPath: prometheus.yml
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
+              subPath: dashboards.yml
+            - name: dashboard
+              mountPath: /var/lib/grafana/dashboards
+            - name: data
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      volumes:
+        - name: datasource
+          configMap:
+            name: fedcsl-grafana-datasource
+        - name: dashboard-provider
+          configMap:
+            name: fedcsl-grafana-dashboard-provider
+        - name: dashboard
+          configMap:
+            name: fedcsl-grafana-dashboard
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fedcsl-grafana
+  namespace: observability
+  labels:
+    app: fedcsl-grafana
+spec:
+  selector:
+    app: fedcsl-grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

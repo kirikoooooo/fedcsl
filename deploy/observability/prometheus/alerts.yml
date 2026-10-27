@@ -1,0 +1,59 @@
+groups:
+  - name: fedcsl-pipeline
+    rules:
+      - alert: FedCSLStageFailed
+        expr: fedcsl_stage_status == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FedCSL stage failed ({{ $labels.run_id }} / {{ $labels.phase }})"
+          description: "A pipeline stage exited non-zero; inspect the stage log in observability/runs/{{ $labels.run_id }}/logs."
+
+      - alert: FedCSLEvalGateFailed
+        expr: fedcsl_eval_passed == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FedCSL evaluation gate failed ({{ $labels.run_id }})"
+          description: "The evaluate stage rejected the run: missing round metrics, missing fine-tune block, or missing checkpoint."
+
+      - alert: FedCSLExporterDown
+        # Use the scrape target, not the exporter's self-gauge: when the
+        # exporter is down its series disappears instead of becoming 0.
+        expr: up{job="fedcsl-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FedCSL exporter is not reporting"
+          description: "The Prometheus scrape target fedcsl-exporter has been down for more than 2 minutes; metrics are stale."
+
+  - name: fedcsl-training
+    rules:
+      - alert: FedCSLNoRoundProgress
+        expr: (fedcsl_run_info{status="running"} == 1) and on(run_id) ((time() - fedcsl_round_last_timestamp_seconds{phase="pretrain"}) > 900)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No training round progress for 15m ({{ $labels.run_id }})"
+          description: "The run is marked running but no round metric has been updated for 15 minutes."
+
+      - alert: FedCSLGPUHighMemory
+        expr: (fedcsl_gpu_memory_used_bytes / fedcsl_gpu_memory_total_bytes) > 0.90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} memory above 90%"
+          description: "Sustained high GPU memory may cause OOM during the next round."
+
+      - alert: FedCSLGPUHighTemperature
+        expr: fedcsl_gpu_temperature_celsius > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} temperature above 85C"

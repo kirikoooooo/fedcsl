@@ -401,6 +401,8 @@ cd deploy/observability && docker compose up -d
 
 ## 11. 部署步骤
 
+> 本机运行中的服务地址、账号密码和验证结果见 `deploy/observability/ACCESS.md`。
+
 ### 11.1 本地（已验证）
 
 ```bash

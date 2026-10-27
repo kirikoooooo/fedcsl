@@ -2,6 +2,8 @@
 
 Prometheus + Grafana for the FedCSL training/observability pipeline.
 
+Service URLs, credentials and current status: [`ACCESS.md`](ACCESS.md).
+
 ## Quick start
 
 ```bash

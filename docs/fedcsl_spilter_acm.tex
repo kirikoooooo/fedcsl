@@ -1,0 +1,1161 @@
+%%
+%% FedCSL-Spilter -- ACM SIGMOD-style conference article.
+%% Derived from the ACM Primary Article Template (sigconf.tex), renamed per the
+%% template notice ("Any modified versions of this file must be renamed").
+%% Compile with:  tectonic -X compile fedcsl_spilter_acm.tex
+%%
+\documentclass[sigconf]{acmart}
+
+\AtBeginDocument{%
+  \providecommand\BibTeX{{%
+    Bib\TeX}}}
+
+%% Rights information: replace with the values from the rights confirmation
+%% e-mail once the paper is accepted.
+\setcopyright{acmlicensed}
+\copyrightyear{2026}
+\acmYear{2026}
+\acmDOI{XXXXXXX.XXXXXXX}
+\acmConference[Submitted]{ACM Conference (under review)}{2026}{Harbin, China}
+\acmISBN{978-1-4503-XXXX-X/2026/06}
+
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{enumitem}
+
+\begin{document}
+
+\title[FedCSL-Spilter]{FedCSL-Spilter: Federated Shapelet Representation Learning
+with Adaptive Scale Stitching and Memory-Aware Planning for Non-IID
+Multivariate Time Series}
+
+\author{Xiongfei Li}
+\affiliation{%
+  \institution{Harbin Institute of Technology}
+  \city{Harbin}
+  \country{China}}
+\email{author@example.com}   % TODO: replace with the real address before submission
+
+\renewcommand{\shortauthors}{Li}
+
+\begin{abstract}
+Multivariate time series (MTS) are ubiquitous in human activity recognition,
+industrial monitoring, and medical diagnosis, yet the data are naturally
+distributed across terminals and institutions, label-scarce, statistically
+heterogeneous, and privacy-sensitive. Federated learning (FL) keeps raw data
+local, but under non-IID partitions it suffers from client drift, cross-client
+representation inconsistency, and excessive communication, computation, and GPU
+memory cost. Existing federated time-series methods focus mainly on supervised
+classification, parameter averaging, or client scheduling; they offer limited
+support for interpretable multi-scale shapelet submodel construction and for
+memory-aware execution under heterogeneous devices.
+
+We propose \textbf{FedCSL-Spilter}, a federated shapelet learning framework
+with three cooperating levels of optimization. At the \emph{representation}
+level, local instance contrastive learning is augmented with local--global joint
+contrastive learning and joint knowledge distillation (KD), so that client models
+retain local adaptability while staying aligned with a shared global semantic
+space. At the \emph{scale-composition} level, \textbf{Spilter} lets every client
+rank $R$ candidate shapelet scales by STFT/ACF period-aware scores computed on
+local data, select the top-$m$ scales, stitch their shapelet features along the
+representation dimension into a local submodel, upload only the parameters of
+trained scales, and lets the server aggregate in a scale-wise manner. At the
+\emph{execution} level, \textbf{MAST} exploits the structural properties of the
+shapelet encoder---activations dominated by independent per-scale
+submodules---to cast activation-checkpoint planning as an exact binary linear
+program, trading recomputation for memory without recursive dependencies.
+
+We further formalize local scale selection as a covering-constrained 0--1
+knapsack that a Lagrange multiplier decomposes across clients, so that global
+scale coverage is preserved under per-device memory budgets. Experiments on five
+MTS benchmarks---HAR, FaceDetection, LSST, Epilepsy, and SleepEDF---under
+Dirichlet concentrations $\alpha\in\{0.05,\dots,10.0\}$ show that FedCSL-Spilter
+matches or exceeds full-scale FedCSL and federated self-supervised baselines in
+downstream SVM accuracy while cutting client peak memory by up to 71.1\%,
+reducing the slowest-client epoch time by $1.48\times$, and, in the MAST
+evaluation on four large UEA datasets, reducing training time by
+1.43\%--7.65\% over state-of-the-art checkpoint planners at the same memory
+budget.
+\end{abstract}
+
+\begin{CCSXML}
+<ccs2012>
+   <concept>
+       <concept_id>10010147.10010257.10010293.10010294</concept_id>
+       <concept_desc>Computing methodologies~Neural networks</concept_desc>
+       <concept_significance>500</concept_significance>
+   </concept>
+   <concept>
+       <concept_id>10010147.10010257.10010282.10011304</concept_id>
+       <concept_desc>Computing methodologies~Learning paradigms</concept_desc>
+       <concept_significance>500</concept_significance>
+   </concept>
+   <concept>
+       <concept_id>10002951.10003227</concept_id>
+       <concept_desc>Information systems~Data mining</concept_desc>
+       <concept_significance>300</concept_significance>
+   </concept>
+   <concept>
+       <concept_id>10011007.10011006.10011041</concept_id>
+       <concept_desc>Software and its engineering~Distributed systems organizing principles</concept_desc>
+       <concept_significance>300</concept_significance>
+   </concept>
+   <concept>
+       <concept_id>10010147.10010341.10010349</concept_id>
+       <concept_desc>Computing methodologies~Distributed artificial intelligence</concept_desc>
+       <concept_significance>300</concept_significance>
+   </concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Computing methodologies~Neural networks}
+\ccsdesc[500]{Computing methodologies~Learning paradigms}
+\ccsdesc[300]{Information systems~Data mining}
+\ccsdesc[300]{Software and its engineering~Distributed systems organizing principles}
+\ccsdesc[300]{Computing methodologies~Distributed artificial intelligence}
+
+\keywords{federated learning; multivariate time series; shapelet;
+multi-scale stitching; adaptive scale selection; contrastive learning;
+knowledge distillation; activation checkpointing}
+
+\maketitle
+
+%%--------------------------------------------------------------------
+\section{Introduction}
+%%--------------------------------------------------------------------
+
+Time series analysis is a core topic in artificial intelligence and data mining,
+with applications in smart manufacturing, EEG diagnosis, human activity
+recognition, financial forecasting, and industrial alerting. Unlike static
+tabular data, time series encode temporal dependencies, periodic structure, and
+cross-scale patterns in addition to multivariate observations. Learning
+discriminative, transferable, and interpretable temporal representations
+therefore remains a central challenge.
+
+Unsupervised representation learning has advanced rapidly on this problem.
+Contrastive methods construct positive--negative relations across augmented
+views and capture intrinsic consistency in feature space, improving downstream
+classification, clustering, and anomaly detection~\cite{ts2vec,tstcc,tfc}.
+Later work extends self-supervision through masked modelling~\cite{simmtm},
+time--frequency consistency~\cite{tfc}, soft contrastive
+relations~\cite{softclt}, and revisited positive/negative construction
+strategies~\cite{timesurl}. TimeCSL/CSL further shows that
+\emph{shapelets}---interpretable subsequence patterns---can be coupled with
+contrastive learning to form a general unsupervised shapelet representation
+framework~\cite{timescsl}, which is attractive for interpretability and
+transferability~\cite{interpgn,unishape}. Most of these methods, however, use
+CNN/Transformer backbones~\cite{fcnbaseline,timesnet} that were not designed for
+variable-length, strongly periodic series.
+
+In practice, large volumes of time-series data cannot be centralized: medical,
+physiological, sensing, and edge data live on different clients and are
+privacy-sensitive. Federated learning exchanges parameters or representations
+instead of raw data~\cite{fedavg}, and proximal or contrastive
+regularization~\cite{fedprox,moon} mitigates client drift. Federated
+representation learning for multivariate time series---especially interpretable
+shapelet learning---remains underexplored~\cite{fedst,fedtsc}.
+
+Directly porting centralized TimeCSL/CSL to FL is non-trivial for three reasons.
+First, client data are strongly non-IID across users, devices, and environments;
+naive local training plus parameter averaging overfits local modes and drifts the
+representation space. Second, time series exhibit rich multi-scale structure, and
+treating all scales equally reduces the specificity of shapelet learning. Third,
+``model heterogeneity'' here manifests as \emph{scale heterogeneity}: some scales
+carry more parameters and heavier sliding-window matching than others, and
+uniform or random scale usage wastes computation, communication, and GPU memory.
+
+Prior heterogeneous FL methods adapt to device resources with width/depth
+submodels (HeteroFL~\cite{heterofl}, FjORD~\cite{fjord}, DepthFL~\cite{depthfl},
+ScaleFL~\cite{scalefl}), weak-device participation
+(InclusiveFL~\cite{inclusivefl}, AdaptiveFL~\cite{adaptivefl}), or flexible
+pruning with self-KD (FlexFL~\cite{flexfl}). These works show that submodel
+structure is a first-order factor in FL efficiency, but they target generic
+CNN/Transformer backbones and do not model \emph{scale cost} and \emph{periodic
+utility} in multi-scale shapelet encoders. On the systems side, activation
+checkpointing~\cite{chen2016checkpoint} reduces peak memory by recomputation, and
+planners such as Checkmate~\cite{checkmate}, Mimose~\cite{mimose}, and
+MONet~\cite{monet} search for good recomputation plans; generic planners either
+lack global optimality (heuristics) or must approximate nonlinear dependency
+constraints.
+
+We propose \textbf{FedCSL-Spilter}, which couples federated shapelet
+representation learning with client-autonomous \emph{scale stitching} and
+memory-aware execution. The contributions are:
+
+\begin{enumerate}
+  \item A unified framework that extends interpretable multi-scale shapelet
+        representation learning to non-IID FL while preserving TimeCSL/CSL's
+        decoupled ``representation + analyzer'' paradigm.
+  \item Local--global joint CL/KD and scale-level CL/KD that softly align client
+        features to a global semantic space and suppress scale inconsistency
+        under non-IID data.
+  \item STFT/ACF period-aware weighting that adapts multi-scale losses to the
+        dominant periodic structure of each client and supplies the utility
+        signal for scale selection.
+  \item \textbf{Spilter}: a purely local, distribution-aware top-$m$ scale
+        selection and feature-stitching mechanism with scale-sharded
+        communication and scale-wise aggregation, compared against random
+        top-$m$, fixed scales, and full-scale FedCSL.
+  \item A covering-constrained 0--1 knapsack formulation whose Lagrangian
+        decomposition lets clients select scales independently while the server
+        iteratively restores global scale coverage.
+  \item \textbf{MAST}: an exact binary linear program for activation-checkpoint
+        planning that exploits submodule independence in the shapelet encoder,
+        used as a per-device memory--time regulator in synchronous FL.
+  \item Experiments on five MTS benchmarks and four large UEA datasets covering
+        accuracy, ablations, non-IID strength, convergence, interpretability,
+        and system efficiency.
+\end{enumerate}
+
+%%--------------------------------------------------------------------
+\section{Related Work}
+%%--------------------------------------------------------------------
+
+\subsection{Unsupervised Time-Series Representation Learning}
+
+Unsupervised time-series representation learning seeks general temporal
+embeddings without labels. Early reconstruction, forecasting, and autoencoder
+approaches emphasize local reconstruction error but do not necessarily yield
+discriminative downstream features~\cite{simmtm}. Contrastive learning maximizes
+agreement across augmented views while separating negatives: TS2Vec performs
+hierarchical contextual contrast~\cite{ts2vec}; TS-TCC combines temporal and
+contextual contrast~\cite{tstcc}; TF-C enforces time--frequency
+consistency~\cite{tfc}; SoftCLT mitigates over-repulsion of neighbouring
+samples~\cite{softclt}; TimesURL revisits positive--negative construction and
+SSCL losses~\cite{timesurl}; SimMTM extends self-supervision via masked
+modelling and manifold neighbour reconstruction~\cite{simmtm}. A complementary
+line builds models around interpretable subsequence patterns such as
+shapelets~\cite{interpgn,unishape}; TimeCSL/CSL couples shapelets with
+contrastive learning across scales and similarity
+measures~\cite{timescsl}, enabling visualization and task transfer beyond
+black-box embeddings.
+
+\subsection{Federated Time-Series Learning and Knowledge Distillation}
+
+Federated time-series learning must train collaboratively without sharing raw
+data~\cite{fedavg}. Most prior work targets supervised classification through
+parameter averaging, personalization, distillation, or transfer~\cite{fedkdsurvey}.
+FedST proposes a secure federated shapelet
+transformation~\cite{fedst}; FedTSC embeds interpretable TSC models in
+FL~\cite{fedtsc}; EFDLS applies federated distillation to multi-task time-series
+classification with feature-level teacher--student alignment~\cite{efdls}.
+These results indicate that parameter averaging alone is insufficient under
+strong temporal heterogeneity, and that feature-level distillation and semantic
+alignment matter~\cite{moon,fedx}.
+
+Cross-domain federated unsupervised representation learning is also active.
+FedCA aligns cross-client representations for federated unsupervised
+representation learning~\cite{fedca}; FedMoCo adapts MoCo to decentralized
+medical imaging~\cite{fedmoco}; FedX uses bidirectional KD and local--global
+contrast~\cite{fedx}; FedU2 identifies representation collapse and
+representation-space inconsistency in federated unsupervised learning and gives
+a unified aggregation scheme~\cite{fedu2}. On the supervised side, MOON adds
+model-level contrast~\cite{moon}, FedProc and FedPCL construct contrastive
+signals from class prototypes~\cite{fedproc,fedpcl}, and CDL suppresses
+heterogeneity across vehicles~\cite{fedcdl}. FLESD performs similarity
+distillation on the server side~\cite{flesd}; FLPD and FedRCIL offer
+communication-efficient distillation variants~\cite{flpd,fedrcil}, while
+FedCOG~\cite{fedcog}, MrTF~\cite{mrtf}, FedIOCD~\cite{fediocd}, and
+FedNoRo~\cite{fednoro} broaden the boundary of federated distillation.
+
+Most of these methods assume a supervised objective or visual unsupervised
+learning; few study unsupervised shapelet representation directly. We target
+general temporal representations in FL---learn an interpretable embedding space
+first, then solve downstream tasks---which inherits the strengths of
+TimeCSL~\cite{timescsl} and suits label-scarce settings~\cite{fedsmall}.
+
+\subsection{Heterogeneous Federated Models and Scale-Level Composition}
+
+Real FL systems cannot assume uniform client capacity: bandwidth, device
+heterogeneity, and client scale constrain what each node can train. Oort and
+FedCS show that statistical utility, device speed, bandwidth, and training
+latency jointly determine time-to-accuracy~\cite{oort,fedcsadaptive}. We adopt
+this systems view but do not study client sampling; instead we ask how, for a
+given participant set, each node composes a scale submodel that fits its local
+data.
+
+Heterogeneous FL derives multiple submodels from one global model: HeteroFL
+shrinks width~\cite{heterofl}; DepthFL varies depth~\cite{depthfl}; FjORD uses
+ordered dropout to obtain nested submodels~\cite{fjord}; ScaleFL adapts width and
+depth jointly~\cite{scalefl}; InclusiveFL and AdaptiveFL co-train large and small
+models with distillation~\cite{inclusivefl,adaptivefl}; FlexFL estimates neuron
+redundancy and prunes adaptively with self-KD~\cite{flexfl}. Efficiency depends
+not only on participation but on whether submodel granularity matches device
+resources. For FedCSL the natural structural unit is the \emph{shapelet scale}
+rather than channels or layers, and clients with different periodic/spectral
+structure naturally need different scales. We therefore instantiate heterogeneity
+as client-autonomous \emph{scale stitching}, where device memory/compute
+differences enter through per-client budgets $m_k$ rather than through the scale
+ranking itself (Sec.~\ref{sec:resource-hetero}).
+
+\subsection{Memory-Efficient Training and Checkpoint Planning}
+
+Training deep networks stores intermediate activations for backpropagation, and
+these activations---not parameters or optimizer states---dominate peak GPU memory
+for long sequences and large batches. Activation checkpointing (AC) discards
+selected activations during the forward pass and recomputes them during the
+backward pass~\cite{chen2016checkpoint}, trading computation for memory. Sublinear
+scheduling~\cite{chen2016checkpoint}, Mimose~\cite{mimose},
+Checkmate~\cite{checkmate}, and MONet~\cite{monet} aim at good checkpoint plans; exactly solving the planning
+problem is attractive because it removes tuning and guarantees budget
+feasibility, but generic MILP formulations must encode nonlinear layer
+dependencies and can be slow to solve for large networks. Our MAST planner
+(Sec.~\ref{sec:mast}) restricts the formulation to the shapelet encoder's
+independent submodules, which makes the program linear and the solution exact.
+
+%%--------------------------------------------------------------------
+\section{Problem Formulation}
+%%--------------------------------------------------------------------
+
+\subsection{Federated Setting}
+
+Consider a central server and $K$ clients. Client $k$ holds local multivariate
+time-series data
+\begin{equation}
+D_k = \{x_{k,i}\}_{i=1}^{n_k}, \qquad x_{k,i}\in\mathbb{R}^{C\times T},
+\end{equation}
+where $C$ is the number of channels, $T$ the sequence length, and $n_k$ the local
+sample size; $N=\sum_{k=1}^{K} n_k$. Clients are typically non-IID,
+\begin{equation}
+P_k(x)\neq P_j(x),\quad k\neq j,
+\end{equation}
+reflecting differences in label distribution, temporal scale, periodicity,
+amplitude, and local noise. We later instantiate heterogeneity with Dirichlet
+partitions of concentration $\alpha$, where smaller $\alpha$ means stronger
+heterogeneity.
+
+\subsection{Objective}
+
+We do not train an end-to-end classifier. Instead we learn a federated shapelet
+encoder $f(\cdot;w)$ that maps a raw series to an interpretable representation,
+\begin{equation}
+z = f(x;w)\in\mathbb{R}^{d},
+\end{equation}
+and evaluate it with a downstream classifier (SVM), following TimeCSL's decoupled
+``representation + task analyzer'' paradigm~\cite{timescsl}. The central
+question is how to learn $w$ collaboratively when clients are non-IID and their
+devices cannot all afford the full multi-scale model.
+
+\subsection{Overall Pipeline}
+
+Figure~\ref{fig:framework} summarizes FedCSL-Spilter. The server initializes the
+global shapelet encoder. Each client precomputes period-aware scale utility
+scores on its local data, selects the top-$m$ scales, and stitches their features
+into a local submodel. Clients pull only the parameters of selected scales,
+perform shapelet contrastive learning with local--global joint distillation and
+scale-level distillation, and upload updates for trained scales. The server
+aggregates scale-sharded updates with sample-size weighting, leaving untouched
+scales unchanged. Period-aware weights from STFT/ACF statistics modulate the
+multi-scale losses and provide the utility signal for scale selection. The loop
+repeats until convergence, after which representations are evaluated downstream.
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.92\textwidth]{figures/framework.png}
+  \caption{Overall framework of FedCSL-Spilter. \textbf{Server (top):} a
+  scale-wise aggregator fuses client updates per scale into the global shapelet
+  encoder $w_g$; downstream evaluation trains an SVM on extracted
+  representations. \textbf{Client $k$ (bottom):} multivariate series are
+  augmented into two views $x_q,x_k$; the client selects $m$ scales and stitches
+  shapelet features; an alignment node aggregates local and global features for
+  $\mathcal{L}_{\text{local}}$, $\mathcal{L}_{\text{joint-CL}}$, and
+  $\mathcal{L}_{\text{joint-KD}}$; the period-aware weighting module
+  (bottom-right) produces scale weights $\boldsymbol{\pi}$ from an STFT branch
+  (short--medium scales) and an ACF branch (medium--long scales), used both for
+  multi-scale losses and for local scale selection.}
+  \label{fig:framework}
+\end{figure*}
+
+%%--------------------------------------------------------------------
+\section{Method}
+%%--------------------------------------------------------------------
+
+\subsection{Multi-Scale Shapelet Encoder}
+
+We adopt the multi-scale shapelet representation of TimeCSL/CSL. For input
+length $T$, $R$ scales are sampled uniformly in $[0.1T,0.8T]$, each with a fixed
+number of shapelets; the encoder supports Euclidean distance, cosine similarity,
+cross-correlation, and mixed measures. Let
+$\mathcal{S}^{(r)}=\{s^{(r)}_{j}\}_{j=1}^{M_r}$ denote the shapelets at scale $r$.
+The embedding concatenates per-scale responses,
+\begin{equation}
+z = \bigl[z^{(1)},z^{(2)},\dots,z^{(R)}\bigr],
+\end{equation}
+where $z^{(r)}$ collects the best-match responses to all shapelets at scale $r$.
+Multi-scale shapelets capture local transients, meso-scale dynamics, and
+long-range dependencies while remaining interpretable through explicit
+subsequence patterns.
+
+\subsection{Local Instance-Level Contrastive Learning}
+\label{sec:local-cl}
+
+Each client constructs two augmented views (noise, cropping, pooling,
+quantization, time warping) following TS2Vec/TS-TCC~\cite{ts2vec,tstcc}. For
+input $x$ with views $x_q,x_k$,
+\begin{equation}
+q = f(x_q;w_k),\qquad k = f(x_k;w_k).
+\end{equation}
+After normalization, the local InfoNCE-style objective is
+\begin{equation}
+\mathcal{L}_{\text{local}} = \mathrm{CE}\!\left(\frac{qk^\top}{\tau}, y\right),
+\end{equation}
+with temperature $\tau$ and positive-pair labels $y$; it encourages view
+consistency and inter-sample separability.
+
+\subsection{Local--Global Joint Contrastive Learning and Distillation}
+\label{sec:joint-clkd}
+
+Under non-IID FL, local instance contrast alone may optimize clients in
+incompatible semantic coordinates~\cite{fedu2}. Inspired by MOON~\cite{moon},
+FedX~\cite{fedx}, and FLESD~\cite{flesd}, we treat the previous global model as a
+semantic teacher with representations
+\begin{equation}
+q_g = f(x_q; w_g),\qquad k_g = f(x_k; w_g),
+\end{equation}
+and add
+\begin{equation}
+\mathcal{L}_{\text{joint-CL}} = \mathrm{CE}\!\left(\frac{q_gk^\top}{\tau}, y\right),
+\end{equation}
+\begin{equation}
+\mathcal{L}_{\text{joint-KD}} = D_{\mathrm{KL}}(q \,\|\, q_g) + D_{\mathrm{KL}}(k \,\|\, k_g),
+\end{equation}
+where $D_{\mathrm{KL}}$ is computed on similarity matrices. These terms preserve
+local temporal adaptability while anchoring clients to a shared global semantic
+space.
+
+\subsection{Multi-Scale Structural Constraints and Scale-Level Distillation}
+\label{sec:scale-constr}
+
+Global-level distillation does not guarantee that each scale subspace is well
+learned, so we align per scale:
+\begin{equation}
+\mathcal{L}_{\text{scale-CL}} = \sum_{r=1}^{R}\alpha_r \,
+\mathrm{CE}\!\left(\frac{q_g^{(r)}(k^{(r)})^\top}{\tau}, y\right),
+\label{eq:scale-cl}
+\end{equation}
+\begin{equation}
+\mathcal{L}_{\text{scale-KD}} = \sum_{r=1}^{R}\alpha_r \left[
+D_{\mathrm{KL}}\!\left(q^{(r)} \,\|\, q_g^{(r)}\right)+
+D_{\mathrm{KL}}\!\left(k^{(r)} \,\|\, k_g^{(r)}\right)\right].
+\end{equation}
+The weight $\alpha_r$ is period-aware when \texttt{UseACF} is enabled
+(Sec.~\ref{sec:period-score}) and uniform otherwise. Following CSL/TimeCSL,
+covariance off-diagonal penalties on $Z^{(r)}$ reduce channel redundancy within
+each scale, forming a structural alignment loss
+$\mathcal{L}_{\text{structure}}$ that counteracts collapse and scale redundancy.
+
+\subsection{Period-Aware Multi-Scale Weighting}
+\label{sec:period-score}
+
+Dominant periods and frequencies vary across datasets and channels, whereas the
+encoder extracts patterns at $R$ discrete lengths. Equal weighting wastes
+gradients on scales mismatched to local spectra. At each training step we call
+\texttt{period\_score} on the current batch to produce non-negative weights
+aligned with the $R$ reference scales, used as $\alpha_r$ in
+Eq.~\eqref{eq:scale-cl} and in scale-level KD.
+
+\paragraph{Reference scales and discrete anchors.}
+Normalized anchors $\rho_r=\rho_{\min}+\frac{r-1}{R-1}(\rho_{\max}-\rho_{\min})$
+with $\rho_{\min}=0.1$, $\rho_{\max}=0.8$ map to target lengths
+$\tau_r=\lfloor \rho_r L \rfloor$, matching the multi-scale shapelet
+configuration.
+
+\paragraph{STFT branch (short--medium scales).}
+For up to $k=\min(9,K)$ channels per sample we compute the STFT with $f_s=1$,
+window $W=\max(4,\lfloor L/2\rfloor)$, $N_{\mathrm{fft}}=8W$, and hop
+$h=\lfloor W/4\rfloor$. With power $P_c(f,t)=|Z_{xx}(f,t)|^2$, a 95th-percentile
+mask selects high-energy bins and yields the masked mean frequency
+\begin{equation}
+\bar{f}_c=\frac{\sum_{f,t} f\,P_c(f,t)\,\mathbb{I}[\cdot]}
+{\sum_{f,t} P_c(f,t)\,\mathbb{I}[\cdot]+\varepsilon}.
+\end{equation}
+The period proxy $s_c^{\mathrm{ST}}=1/(\bar{f}_c+\varepsilon)$ is soft-aligned to
+the first $\lfloor R/2\rfloor$ anchors by Gaussian kernels with $\sigma=0.1L$,
+accumulating into $\mathbf{S}^{\mathrm{ST}}$ on
+$\mathcal{I}_{\mathrm{ST}}=\{1,\dots,\lfloor R/2\rfloor\}$.
+
+\paragraph{ACF branch (medium--long scales).}
+The sample autocorrelation $R_c(\ell)$ is computed with \texttt{fft=True} up to
+lag $L-1$. Peaks in the second half, $\ell\ge\lfloor L/2\rfloor$ with
+$R_c(\ell)>\theta_{\mathrm{acf}}=0.2$, vote inversely by distance to each anchor,
+\begin{equation}
+v_{c,r}(\ell)=\frac{1}{|\tau_r-\ell|+\varepsilon},\qquad
+\mathbf{v}_c=\sum_{\ell\in\mathcal{P}_c}\bigl(v_{c,1}(\ell),\ldots,v_{c,R}(\ell)\bigr),
+\end{equation}
+yielding $\mathbf{S}^{\mathrm{ACF}}$ on
+$\mathcal{I}_{\mathrm{ACF}}=\{\lfloor R/2\rfloor+1,\dots,R\}$.
+
+\paragraph{Dual-branch fusion.}
+The normalized STFT vector and the ACF subvector are fused with coefficient
+$\beta$,
+\begin{equation}
+\boldsymbol{\pi}=\mathrm{Norm}\!\left(
+\beta\,\mathrm{Embed}_{\mathcal{I}_{\mathrm{ST}}}\!\bigl(\hat{\mathbf{S}}^{\mathrm{ST}}\bigr)
++(1-\beta)\,\mathrm{Embed}_{\mathcal{I}_{\mathrm{ACF}}}\!\bigl(\hat{\mathbf{S}}^{\mathrm{ACF}}_{\mathcal{I}_{\mathrm{ACF}}}\bigr)
+\right),
+\label{eq:period-fuse}
+\end{equation}
+where $\mathrm{Embed}_{\mathcal{I}}$ pads a subvector back to $R$ dimensions and
+$\mathrm{Norm}$ yields a non-negative simplex vector (uniform fallback if both
+branches vanish). Hence each batch's spectral and ACF statistics set the
+multi-scale loss emphasis without extra labels.
+
+\subsection{Spilter: Adaptive Scale Stitching and Top-$m$ Selection}
+\label{sec:spilter}
+
+The multi-scale encoder decomposes into $R$ scale submodels with parameters
+$\theta^{(r)}$, length $\ell_r$, and $M_r$ shapelets; the full model is
+$w=\{\theta^{(1)},\dots,\theta^{(R)},\theta^{(\mathrm{shared})}\}$. Unlike
+server-planned heterogeneous submodels, Spilter lets each client autonomously
+select scales valuable under its local periodic/spectral structure and stitch
+their features into a local submodel. Client $k$ activates
+$\mathcal{R}_k\subseteq\{1,\dots,R\}$ with $|\mathcal{R}_k|=m<R$ and pulls,
+trains, and uploads only $\{\theta^{(r)}:r\in\mathcal{R}_k\}$.
+
+\paragraph{Local period-aware scoring.}
+Client $k$ computes $\mathbf{s}_k=(s_{k,1},\dots,s_{k,R})$ with the STFT/ACF
+mechanism of Sec.~\ref{sec:period-score}, reflecting the match between local
+periodic/spectral structure and the anchors $\tau_r$. Scoring is fully
+local---no raw data or system proxy is uploaded.
+
+\paragraph{Distribution-aware top-$m$ selection.}
+Given $\mathbf{s}_k$, client $k$ selects the top-$m$ scales
+\begin{equation}
+\mathcal{R}_k=\mathrm{TopM}(\mathbf{s}_k,m)
+=\underset{\substack{\mathcal{R}\subseteq\{1,\dots,R\}\\|\mathcal{R}|=m}}{\arg\max}\;
+\sum_{r\in\mathcal{R}} s_{k,r}.
+\label{eq:spilter-topm}
+\end{equation}
+Scores are normalized and sorted stably, with ties preferring smaller scale
+indices; the plan is fixed after one local precomputation. $m=R$ recovers
+full-scale FedCSL and random scores yield the Random-top-$m$ ablation. Because
+ranking uses only local distribution-aware scores, different clients naturally
+obtain different $\mathcal{R}_k$, forming a multi-view ensemble.
+
+\paragraph{Scale feature stitching.}
+For input $x$, the selected features are concatenated,
+\begin{equation}
+z^{\mathrm{stitch}}_k = \bigl[z^{(r_1)} \,\|\, z^{(r_2)} \,\|\, \cdots \,\|\, z^{(r_m)}\bigr],
+\qquad r_i\in\mathcal{R}_k .
+\label{eq:stitch}
+\end{equation}
+Stitched representations drive $\mathcal{L}_{\text{local}}$,
+$\mathcal{L}_{\text{joint-CL}}$, and $\mathcal{L}_{\text{joint-KD}}$; each active
+scale additionally computes $\mathcal{L}_{\text{scale-CL}}$ and
+$\mathcal{L}_{\text{scale-KD}}$ with period-aware weights. Clients thus train a
+customized $m$-scale submodel: backbone losses on stitched features, auxiliary
+alignment on component scales.
+
+\paragraph{Coverage-aware scale allocation as a knapsack.}
+Pure top-$m$ maximizes each client's local value but guarantees neither global
+scale coverage nor local optimal total value. We therefore introduce binary
+variables $x_{k,r}\in\{0,1\}$, a per-client memory budget (Sec.~\ref{sec:mast}),
+and a minimum global coverage $N_{\min}$ per scale. Relaxing the coverage
+equalities by a Lagrange multiplier $\mu_r\ge 0$ gives a decomposed objective,
+\begin{equation}
+\max_{\{x_{k,r}\}}\;\sum_{k=1}^{K}\sum_{r=1}^{R}
+\bigl(s_{k,r}+\mu_r\bigr)x_{k,r}
+\quad\text{s.t.}\quad
+\sum_{r=1}^{R} c_{k,r}\,x_{k,r}\le B_k,\;\;
+\sum_{r}x_{k,r}=m_k ,
+\label{eq:knapsack}
+\end{equation}
+where $c_{k,r}$ is the estimated memory cost of scale $r$. Each client solves an
+independent 0--1 knapsack with adjusted values $s_{k,r}+\mu_r$; the server
+updates $\mu$ by subgradient steps, raising the value of under-covered scales
+until coverage is restored. This yields memory-constrained, coverage-aware scale
+trimming rather than a purely greedy top-$m$.
+
+\subsection{Scale-Sharded Communication and Scale-Wise Aggregation}
+
+In round $t$, client $k$ pulls
+$\Theta_{k}^{\downarrow}(t)=\{\theta_g^{(r,t)}:r\in\mathcal{R}_k\}$ and uploads
+$\Theta_{k}^{\uparrow}(t)=\{\theta_k^{(r,t+1)}:r\in\mathcal{R}_k\}$. The
+bidirectional cost is
+\begin{equation}
+\mathcal{C}_{\mathrm{split}}(t)
+=2\sum_{k=1}^{K}\sum_{r\in\mathcal{R}_k}B_r + O(KR),
+\end{equation}
+against the full-scale cost $\mathcal{C}_{\mathrm{full}}(t)=2K\sum_{r=1}^{R}B_r$;
+with near-uniform per-scale payload,
+$\mathcal{C}_{\mathrm{split}}/\mathcal{C}_{\mathrm{full}}\approx m/R$.
+Computation scales analogously,
+$\mathcal{F}_{\mathrm{split}}(t)=\sum_{k}E\,n_k\sum_{r\in\mathcal{R}_k}F_r$ versus
+$\mathcal{F}_{\mathrm{full}}(t)=\sum_{k}E\,n_k\sum_{r}F_r$, so the saving depends
+on the cost mix of the selected scales.
+
+Let $\mathcal{K}_r(t)=\{k:r\in\mathcal{R}_k\}$. The server aggregates
+\begin{equation}
+\theta_g^{(r,t+1)}=
+\begin{cases}
+\displaystyle
+\sum_{k\in\mathcal{K}_r(t)}
+\frac{n_k}{\sum_{j\in\mathcal{K}_r(t)}n_j}\,
+\theta_k^{(r,t+1)}, & \mathcal{K}_r(t)\neq\emptyset,\\[2ex]
+\theta_g^{(r,t)}, & \mathcal{K}_r(t)=\emptyset,
+\end{cases}
+\label{eq:scale-agg}
+\end{equation}
+so untrained scales remain unchanged, consistent with heterogeneous FL such as
+HeteroFL and FlexFL~\cite{heterofl,flexfl}.
+
+\subsection{Overall Optimization Objective}
+\label{sec:overall-obj}
+
+We now assemble the loss components of
+Secs.~\ref{sec:local-cl}--\ref{sec:scale-constr} into a single training
+objective. Given its selected scales $\mathcal{R}_k$
+(Eq.~\eqref{eq:spilter-topm}), client $k$ minimizes
+\begin{equation}
+\begin{aligned}
+\mathcal{L}_k(w_k;\mathcal{R}_k)
+={}& \gamma\,\mathcal{L}_{\mathrm{loc}}
++\lambda_5\,\mathcal{L}_{\mathrm{str}}
++\mathbb{I}_{\mathrm{Fed}}\Bigl[
+\lambda_1\,\mathcal{L}_{\mathrm{jCL}}
++\lambda_2\,\mathcal{L}_{\mathrm{jKD}} \\
+&+\lambda_3\,\mathcal{L}_{\mathrm{sCL}}
++\lambda_4\,\mathcal{L}_{\mathrm{sKD}}
+\Bigr],
+\end{aligned}
+\label{eq:client-obj}
+\end{equation}
+where $\mathcal{L}_{\mathrm{loc}}$, $\mathcal{L}_{\mathrm{str}}$,
+$\mathcal{L}_{\mathrm{jCL}}$, $\mathcal{L}_{\mathrm{jKD}}$,
+$\mathcal{L}_{\mathrm{sCL}}$, and $\mathcal{L}_{\mathrm{sKD}}$ denote the local
+instance-level contrastive, structural alignment, joint contrastive, joint
+distillation, scale-level contrastive, and scale-level distillation losses
+defined in Secs.~\ref{sec:local-cl}--\ref{sec:scale-constr}. The backbone terms
+$\mathcal{L}_{\mathrm{loc}}$, $\mathcal{L}_{\mathrm{jCL}}$, and
+$\mathcal{L}_{\mathrm{jKD}}$ act on the stitched features
+(Eq.~\eqref{eq:stitch}), whereas $\mathcal{L}_{\mathrm{sCL}}$ and
+$\mathcal{L}_{\mathrm{sKD}}$ act on the $m$ active component scales and carry
+the period-aware weights $\alpha_r$ (Sec.~\ref{sec:period-score}). A single
+balance parameter $\gamma\in[0,1]$, with $\zeta=1-\gamma$, controls the
+trade-off between local adaptation and global alignment: the joint terms are
+scaled by $\gamma$ and the scale-level terms by $\zeta$, up to fixed positive
+constants, and the indicator $\mathbb{I}_{\mathrm{Fed}}\in\{0,1\}$ gates the
+FedCSL-specific terms ($0$ for the local-only ablation, which disables
+\texttt{UseJointCL}, \texttt{UseJointKD}, \texttt{UseScaleCL}, and
+\texttt{UseScaleKD}).
+
+The server approximately minimizes the sample-weighted sum of the client
+objectives,
+\begin{equation}
+\mathcal{L}_g(w_g;\mathcal{R})
+=\sum_{k=1}^{K}\frac{n_k}{N}\,\mathcal{L}_k(w_g;\mathcal{R}_k),
+\label{eq:server-obj}
+\end{equation}
+which separates across scales under the aggregation rule of
+Eq.~\eqref{eq:scale-agg}: each $\theta_g^{(r)}$ is updated as the
+sample-weighted average over $\mathcal{K}_r(t)$, so the server step reduces to
+$R$ independent per-scale subproblems solved in closed form each round.
+
+The overall training problem is therefore a bilevel program over the scale
+allocation $\mathcal{R}=\{\mathcal{R}_1,\dots,\mathcal{R}_K\}$,
+\begin{equation}
+\min_{\mathcal{R}}\;\sum_{k=1}^{K}\frac{n_k}{N}\,
+\mathcal{L}_k\!\bigl(w_k^{\star}(\mathcal{R}_k);\mathcal{R}_k\bigr)
+\quad\text{s.t.}\quad
+|\mathcal{R}_k|=m,\;\;k=1,\dots,K,
+\label{eq:overall-obj}
+\end{equation}
+where $w_k^{\star}(\mathcal{R}_k)=\arg\min_{w_k}\mathcal{L}_k(w_k;\mathcal{R}_k)$
+is the local optimum of Eq.~\eqref{eq:client-obj}. The default allocator is the
+distribution-aware top-$m$ rule of Eq.~\eqref{eq:spilter-topm}; when per-device
+memory budgets $B_k$ and a global coverage floor $N_{\min}$ are enforced, the
+allocation step is replaced by the Lagrangian-decomposed knapsack of
+Eq.~\eqref{eq:knapsack}. Algorithm~\ref{alg:fedcsl} summarizes one training
+round.
+
+\begin{algorithm}[t]
+\caption{FedCSL-Spilter training procedure}
+\label{alg:fedcsl}
+\begin{algorithmic}[1]
+\State Initialize global model $w_g^{(0)}$
+\For{each client $k$ \textbf{in parallel}}
+    \State Compute period-aware scores $\mathbf{s}_k$ on local data
+    \State Determine $\mathcal{R}_k\subseteq\{1,\dots,R\}$, $|\mathcal{R}_k|=m$
+           via Eq.~\eqref{eq:spilter-topm}
+\EndFor
+\For{$t=0,1,\dots,T-1$}
+    \For{each client $k$ \textbf{in parallel}}
+        \State Pull $\Theta_k^{\downarrow}(t)=\{\theta_g^{(r,t)}:r\in\mathcal{R}_k\}$
+        \State Augment inputs and stitch $|\mathcal{R}_k|$ scale features
+               (Eq.~\eqref{eq:stitch})
+        \State Compute local CL on stitched features; joint/scale CL/KD on
+               $\mathcal{R}_k$
+        \State Update local scale parameters; upload $\Theta_k^{\uparrow}(t)$
+    \EndFor
+    \State Server aggregates each scale via Eq.~\eqref{eq:scale-agg}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+%%--------------------------------------------------------------------
+\section{Memory-Aware Multi-Scale Training with MAST}
+\label{sec:mast}
+%%--------------------------------------------------------------------
+
+FedCSL-Spilter already contains two levels of memory optimization: the server
+distills a useful scale set and distributes only those submodels, and each client
+trims scales further under its own budget. A third level targets the local
+multi-scale computation itself.
+
+\subsection{The Activation Bottleneck}
+
+Training proceeds in mini-batches, each with a forward and a backward pass. In
+the forward pass every layer's output (activation) is kept for the backward
+pass; once a layer's gradient is computed its activations are released. Peak GPU
+memory therefore has three parts: model parameters, optimizer states, and
+intermediate activations. Activations dominate. For a multivariate sample with
+$D$ variables, sequence length $T$, and batch size $B$, a single scale submodule
+with shapelet length $\ell$ and representation dimension $d$ stores
+$O(B\,D\,T\,M_r\,d)$ values, and $R\times M_r$ submodules reside in memory
+simultaneously---easily causing out-of-memory (OOM) errors. Unlike parameters and
+optimizer states, activation size grows linearly with batch size, channel count,
+and sequence length, which is precisely why large-scale MTS training is
+memory-bound on 16--32\,GB GPUs.
+
+\subsection{Checkpointing and Why Planning Is Hard}
+
+Activation checkpointing keeps only selected activations in the forward pass and
+recomputes the rest during backpropagation~\cite{chen2016checkpoint}. It is
+supported natively (\texttt{torch.utils.checkpoint}), but default
+implementations checkpoint whole layers indiscriminately. A good plan depends on
+layer dependencies: if the activations of both $l_2$ and $l_3$ are dropped,
+recomputing $l_3$ first requires recomputing $l_2$, producing a recursive
+recomputation chain. Consequently, heuristic planners~\cite{mimose} lack global
+optimality, while MILP planners such as
+Checkmate~\cite{checkmate} and MONet~\cite{monet} must encode nonlinear
+dependency constraints and may be slow to solve for very large networks.
+
+\subsection{MAST: Exact Planning via Structural Decomposition}
+
+MAST exploits two structural properties of the shapelet transformer encoder to
+shrink the planning space to an exactly solvable one. First, memory is dominated
+by submodules: the activations of a submodule $\phi_{r,m}$ with scale $r$ and
+measure $m$ account for roughly $O(B\,D\,T\,M_r d)$, whereas the subsequent loss
+computation needs only $O(B\,d\mathcal{R})$; for large $B$, $D$, and $T$ the gap
+is decisive. Second, submodules are mutually independent: different
+$\phi_{r,m}$ are only concatenated at the output and share no data dependency, so
+any subset of activations can be dropped and recomputed without triggering
+recursion.
+
+Let $x_{r,m}\in\{0,1\}$ indicate whether submodule $\phi_{r,m}$ is checkpointed.
+Writing $C_{r,m}$ for its forward cost (obtained by profiling once), the total
+cost is
+\begin{equation}
+J=\sum_{r,m}\bigl[\,C_{r,m}\,x_{r,m} + C_{r,m}\,(1-x_{r,m})\cdot \rho_{r,m}\,\bigr],
+\end{equation}
+where $\rho_{r,m}$ is the recomputation factor, so the optimization reduces to
+minimizing the recomputation overhead
+\begin{equation}
+\min_{\{x_{r,m}\}}\;\sum_{r,m} C_{r,m}\,(1-x_{r,m})\,\rho_{r,m}
+\end{equation}
+subject to the peak-memory constraints of the five phases---forward submodule,
+forward loss, backward loss, backward submodule, and submodule recomputation---
+each staying below the budget. All symbols except the decisions are constants,
+so this is a \emph{binary linear program} solvable exactly by Gurobi.
+
+\subsection{Using MAST Inside Federated Rounds}
+
+MAST does not change the mathematical model and therefore does not affect
+accuracy: it is a memory--time regulator. In synchronous FL the round duration is
+set by the straggler, so a faster client can spend its spare memory to train with
+fewer checkpoints (more activation memory, less recomputation) without altering
+what is learned. Conversely, a memory-constrained client runs a more aggressive
+plan and remains in the same round. The per-client budgets $B_k$ used in the
+scale knapsack (Eq.~\eqref{eq:knapsack}) come directly from this planner.
+
+%%--------------------------------------------------------------------
+\section{Experimental Setup}
+%%--------------------------------------------------------------------
+
+\subsection{Datasets and Federated Partitioning}
+
+We use five MTS classification benchmarks:
+\begin{itemize}
+  \item \textbf{HAR} (UCI Human Activity Recognition): 6-class smartphone
+        inertial sensing, length 128, 9 channels; used for multi-$\alpha$
+        tables, convergence curves, system efficiency, and ablations.
+  \item \textbf{FaceDetection} (UEA): length 62, 3 channels, 2 classes.
+  \item \textbf{LSST} (UEA): astronomical light curves, length 36, 6 channels,
+        14 classes.
+  \item \textbf{Epilepsy} (UEA): length 206, 3 channels, 4 classes.
+  \item \textbf{SleepEDF}: multi-channel EEG/EOG sleep staging, 5 stages.
+\end{itemize}
+FaceDetection, LSST, and HAR sweep the Dirichlet concentration
+$\alpha\in\{0.05,0.1,0.3,0.5,1.0,10.0\}$; Epilepsy and SleepEDF ablations use the
+default non-IID split. MAST is evaluated on four large UEA datasets: Cricket
+(Cr), DuckDuckGeese (DD), MotorImagery (MI), and PEMS-SF (PE).
+
+\subsection{Baselines}
+
+\textbf{Tier 1: federated representation baselines and our methods.} All methods
+share the multi-scale shapelet encoder and the SVM evaluation, varying only the
+FL objective and aggregation: (i) classic FL---FedAvg~\cite{fedavg} and
+FedProx~\cite{fedprox}; (ii) federated self-supervised baselines---FedBYOL,
+FedU2~\cite{fedu2}, and Orchestra; (iii) full-scale FedCSL with joint/scale CL/KD
+and STFT/ACF weighting over all $R$ scales; (iv) FedCSL-Spilter with local-score
+top-$m$ stitching, $m\in\{1,2,4\}$.
+
+\textbf{Tier 2: module ablations.} Local-only contrastive learning, FedAvg-style
+aggregation (AVG), Federated Contrastive All (full FedCSL modules), and
+Federated Contrastive + multi-scale adaptation (Spilter), plus Random-top-$m$
+variants that replace period scores with uniform random scores.
+
+\subsection{Training Configuration}
+
+Each round, clients determine $\mathcal{R}_k$ via Eq.~\eqref{eq:spilter-topm},
+pull the corresponding scale parameters, train locally for several epochs, and
+upload the trained scales; the server aggregates via Eq.~\eqref{eq:scale-agg}. We
+use SGD, mixed distance measures, and unified hyperparameters in configuration
+files; Spilter runs set \texttt{allocation\_mode=local\_score\_topm}. Every
+algorithm has its own YAML configuration and launch script, and the batch
+$\alpha$-matrix experiments are dispatched across multiple GPUs.
+
+\subsection{Evaluation Protocol}
+
+Following TimeCSL~\cite{timescsl} and the linear evaluation of
+TS2Vec/TS-TCC~\cite{ts2vec,tstcc}, we extract train/test representations with the
+global shapelet encoder and train an SVM classifier, decoupling representation
+quality from end-to-end classification. We report the mean test SVM accuracy over
+the last 10 rounds, together with average rank, rounds-to-convergence, and
+wall-clock and memory statistics.
+
+%%--------------------------------------------------------------------
+\section{Results and Discussion}
+%%--------------------------------------------------------------------
+
+\subsection{Multi-Scale Comparative Learning}
+
+Table~\ref{tab:face_dirichlet} reports FaceDetection accuracy under six Dirichlet
+concentrations. FedCSL attains the best or second-best result in all six
+settings, staying within $0.0144$ of its own range ($0.5626$--$0.5770$), whereas
+FedAvg spans $0.5376$--$0.5633$ and degrades clearly under strong heterogeneity.
+The gap between $\alpha=0.05$ and $\alpha=10.0$ is only $0.0084$ for FedCSL,
+whereas FedAvg and FedProx both drop when $\alpha$ falls from $0.1$ to $0.05$,
+confirming their reliance on the IID assumption. This robustness follows from the
+multi-scale shapelet encoder: submodules at different temporal scales capture
+patterns from local to global, so features remain stable when client
+distributions shift. FedCSL peaks at $0.5770$ for $\alpha=1.0$ and has its
+largest advantage over FedAvg at $\alpha=0.5$ ($+0.0351$, about 6.5\%), which
+suggests that moderate heterogeneity supplies enough negative-sample diversity
+for contrastive learning without destroying semantic consistency. Among
+unsupervised baselines, Orchestra and FedU2 are stable but remain $0.01$--$0.02$
+below FedCSL; FedBYOL reaches $0.5763$ at $\alpha=1.0$ but falls to $0.5530$
+under strong heterogeneity ($\alpha=0.05$). The joint objective of multi-grained
+contrast plus multi-scale alignment is therefore better suited to federated
+heterogeneity than a single global contrastive loss.
+
+\begin{table*}[t]
+  \centering
+  \caption{FaceDetection accuracy under varying Dirichlet non-IID strength
+  (mean test SVM accuracy over the last 10 rounds; bold = best per column).}
+  \label{tab:face_dirichlet}
+  \begin{tabular}{lcccccc}
+    \toprule
+    Method & $\alpha{=}0.05$ & $\alpha{=}0.1$ & $\alpha{=}0.3$ & $\alpha{=}0.5$ & $\alpha{=}1.0$ & $\alpha{=}10.0$ \\
+    \midrule
+    FedAvg   & 0.5594 & 0.5633 & 0.5459 & 0.5386 & 0.5501 & 0.5376 \\
+    FedProx  & 0.5430 & 0.5438 & 0.5486 & 0.5508 &        & 0.5336 \\
+    FedBYOL  & 0.5530 & 0.5592 & 0.5627 & 0.5616 & 0.5763 & 0.5578 \\
+    FedU2    & 0.5621 & 0.5634 & 0.5463 & 0.5630 & 0.5550 & 0.5618 \\
+    Orchestra& 0.5609 & 0.5530 & 0.5646 & 0.5620 & 0.5591 & \textbf{0.5632} \\
+    FedCSL   & \textbf{0.5710} & \textbf{0.5646} & \textbf{0.5701} & \textbf{0.5737} & \textbf{0.5770} & 0.5626 \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsection{Non-IID Comparison on HAR}
+
+Table~\ref{tab:har_dirichlet} reports nine methods over six values of $\alpha$ on
+HAR. Spilter-$m{=}2$ and Spilter-$m{=}4$ outperform full-scale FedCSL and the
+self-supervised baselines at most concentrations: Spilter-$m{=}2$ is best at
+$\alpha=0.1,1.0,10.0$ (reaching $0.9655$ at $\alpha=10.0$), while Spilter-$m{=}4$
+is best at $\alpha=0.3$ and $0.5$ ($0.9521$ and $0.9586$) and at $\alpha=0.1$
+($0.9446$). Spilter-$m{=}1$ is slightly less accurate but has the lowest memory,
+forming an explicit accuracy--cost trade-off. Notably, stitched submodels beating
+full-scale FedCSL under moderate to strong non-IID data indicates a structured
+regularization effect: restricting each client to a subset of scales prevents
+gradients from being diluted across scale subspaces that the local data cannot
+support.
+
+\begin{table*}[t]
+  \centering
+  \caption{HAR accuracy under varying Dirichlet non-IID strength (mean test SVM
+  accuracy over the last 10 rounds; bold = best per column).}
+  \label{tab:har_dirichlet}
+  \begin{tabular}{lcccccc}
+    \toprule
+    Method & $\alpha{=}0.05$ & $\alpha{=}0.1$ & $\alpha{=}0.3$ & $\alpha{=}0.5$ & $\alpha{=}1.0$ & $\alpha{=}10.0$ \\
+    \midrule
+    FedAvg            & 0.9332 & 0.9370 & 0.9338 & 0.9462 & 0.9445 & 0.9484 \\
+    FedProx           & \textbf{0.9472} & 0.9399 & 0.9346 & 0.9384 & 0.9398 & 0.9458 \\
+    FedBYOL           & 0.9268 & 0.9285 & 0.9336 & 0.9284 & 0.9331 & 0.9267 \\
+    FedU2             & 0.9252 & 0.9240 & 0.9307 & 0.9286 & 0.9317 & 0.9327 \\
+    Orchestra         & 0.9344 & 0.9336 & 0.9293 & 0.9315 & 0.9325 & 0.9333 \\
+    FedCSL            & 0.9315 & 0.9339 & 0.9306 & 0.9382 & 0.9475 & 0.9514 \\
+    \midrule
+    Spilter ($m{=}1$) & 0.9261 & 0.9236 & 0.9350 & 0.9378 & 0.9253 & 0.9331 \\
+    Spilter ($m{=}2$) & 0.9377 & 0.9346 & 0.9489 & 0.9527 & 0.9405 & \textbf{0.9655} \\
+    Spilter ($m{=}4$) & 0.9414 & \textbf{0.9446} & \textbf{0.9521} & \textbf{0.9586} & \textbf{0.9573} & 0.9630 \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsection{LSST and Ablation Study}
+
+Table~\ref{tab:lsst_dirichlet} reports LSST, where astronomical light curves are
+short (length 36) and highly heterogeneous. FedU2 is strongest on this benchmark
+and Spilter-$m{=}4$ approaches it ($0.6081$ at $\alpha=10.0$) but does not
+surpass it---an honest limitation we discuss in Sec.~\ref{sec:limitations}.
+Table~\ref{tab:ablation} isolates the contribution of each module. Moving from
+FedAvg-style aggregation (AVG) to the full FedCSL objective, and finally to
+Spilter on top of it, yields consistent gains on Epilepsy, HAR, and SleepEDF; the
+largest improvement appears on SleepEDF
+($0.7797\rightarrow0.8052\rightarrow0.8213$), where the inter-client stage
+distribution is most skewed. The local-only column is not reported in this run
+and is shown as a placeholder.
+
+\begin{table*}[t]
+  \centering
+  \caption{LSST accuracy under varying Dirichlet non-IID strength (mean test SVM
+  accuracy over the last 10 rounds; bold = best per column).}
+  \label{tab:lsst_dirichlet}
+  \begin{tabular}{lcccccc}
+    \toprule
+    Method & $\alpha{=}0.05$ & $\alpha{=}0.1$ & $\alpha{=}0.3$ & $\alpha{=}0.5$ & $\alpha{=}1.0$ & $\alpha{=}10.0$ \\
+    \midrule
+    FedAvg            & 0.5857 & 0.5833 & 0.5901 & 0.5716 & 0.5770 & 0.5739 \\
+    FedProx           & 0.5867 & 0.5951 & 0.5793 & 0.5777 & 0.5781 & 0.5794 \\
+    FedBYOL           & 0.6033 & 0.6092 & 0.6071 & 0.6056 & 0.6051 & 0.6025 \\
+    FedU2             & \textbf{0.6103} & \textbf{0.6102} & \textbf{0.6115} & \textbf{0.6185} & \textbf{0.6201} & \textbf{0.6138} \\
+    Orchestra         & 0.6068 & 0.6066 & 0.6084 & 0.6095 & 0.6020 & 0.6018 \\
+    FedCSL            & 0.5978 & 0.6054 & 0.5992 & 0.5926 & 0.6008 & 0.5968 \\
+    \midrule
+    Spilter ($m{=}4$) & 0.6013 & 0.5995 & 0.5897 & 0.6052 & 0.5940 & 0.6081 \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\begin{table}[t]
+  \centering
+  \caption{Module ablation on Epilepsy, HAR, and SleepEDF (mean test SVM
+  accuracy).}
+  \label{tab:ablation}
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lcccc}
+    \toprule
+    Dataset & Local & AVG & Fed.\ Contrast.\ All & Fed.\ Contrast. \\
+            &       &     &                      & + Multi-Scale Adapt. \\
+    \midrule
+    Epilepsy & --- & 0.9804 & 0.9839 & 0.9852 \\
+    HAR      & --- & 0.9281 & 0.9342 & 0.9338 \\
+    SleepEDF & --- & 0.7797 & 0.8052 & 0.8213 \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table}
+
+\subsection{System Efficiency and Client Memory}
+\label{sec:efficiency}
+
+Table~\ref{tab:har_memory} reports HAR micro-benchmarks ($\alpha=0.1$, $K=10$,
+batch size 32, one local epoch, RTX 3090), measuring peak GPU memory with
+\texttt{torch.cuda.max\_memory\_allocated()} after warmup. FedCSL activates all
+$R=8$ scales; Spilter trains stitched $m$-scale submodels and reduces memory
+almost linearly in $m$. Scale stitching alone cuts mean peak memory from
+$178.1$\,MB to $51.5$\,MB at $m{=}1$ (71.1\% saving, $3.46\times$ compression),
+while Spilter-$m{=}4$ stays Pareto-competitive on accuracy
+(Table~\ref{tab:har_dirichlet}). The slowest epoch also drops from
+$4.70$\,s to $3.17$\,s ($1.48\times$ speedup) at $m{=}1$, and Spilter-$m{=}4$
+reaches $0.9446$ accuracy---above FedCSL's $0.9339$---at $3.76$\,s. Over 200
+rounds the local-compute lower bound falls to about 68\% of FedCSL for $m{=}1$,
+which is the quantity that matters when the round makespan is determined by the
+straggler.
+
+\begin{table*}[t]
+  \centering
+  \caption{HAR client peak memory and slowest-client epoch time ($\alpha=0.1$,
+  RTX 3090, $K=10$). Mem Saving $=1-\bar{M}/\bar{M}_{\mathrm{FedCSL}}$;
+  Compress. Ratio $=\bar{M}_{\mathrm{FedCSL}}/\bar{M}$. Bold: Spilter savings
+  versus FedCSL.}
+  \label{tab:har_memory}
+  \begin{tabular}{lcccccc}
+    \toprule
+    Method & $m$ & Mean Peak (MB) $\downarrow$ & Max Peak (MB) $\downarrow$
+           & Mem Saving $\uparrow$ & Compress. Ratio $\uparrow$ & Slowest Epoch (s) $\downarrow$ \\
+    \midrule
+    FedAvg            & 8 & 177.0 & 180.3 & 0.6\%  & 1.01$\times$ & \textbf{1.28} \\
+    FedProx           & 8 & 179.2 & 182.4 & $-$0.6\% & 0.99$\times$ & 1.47 \\
+    FedBYOL           & 8 & 182.9 & 183.4 & $-$2.7\% & 0.97$\times$ & 1.89 \\
+    FedU2             & 8 & 182.9 & 183.4 & $-$2.7\% & 0.97$\times$ & 1.93 \\
+    Orchestra         & 8 & 231.3 & 233.5 & $-$29.9\% & 0.77$\times$ & 2.28 \\
+    FedCSL (baseline) & 8 & 178.1 & 181.3 & --- & 1.00$\times$ (ref) & 4.70 \\
+    \midrule
+    Spilter-$m{=}1$   & 1 & \textbf{51.5} & \textbf{51.7} & \textbf{71.1\%} & \textbf{3.46$\times$} & 3.17 \\
+    Spilter-$m{=}2$   & 2 & \textbf{78.7} & \textbf{79.1} & \textbf{55.8\%} & \textbf{2.26$\times$} & 3.43 \\
+    Spilter-$m{=}4$   & 4 & \textbf{130.3} & \textbf{131.5} & \textbf{26.8\%} & \textbf{1.37$\times$} & 3.76 \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.98\linewidth]{figures/convergence.png}
+  \caption{HAR test accuracy versus communication rounds for varying Dirichlet
+  $\alpha$ ($3\times2$ panels, $\alpha=0.05,0.1,0.3,0.5,1.0,10.0$ left-to-right,
+  top-to-bottom). Curves show Spilter with \texttt{local\_top\_m} $\in\{1,2,4\}$
+  against FedCSL; y-axes are zoomed per panel.}
+  \label{fig:dirichlet}
+\end{figure}
+
+\subsection{Resource-Imbalanced Deployment}
+\label{sec:resource-hetero}
+
+In real deployments client memory and compute are uneven. Sec.~\ref{sec:spilter}
+keeps scale ranking based on purely local period scores; device heterogeneity is
+then modeled by \emph{lowering each client's scale budget}: strong devices use
+$m{=}4$, medium devices $m{=}2$, weak devices $m{=}1$, giving a cardinality
+degradation chain $m=4\rightarrow2\rightarrow1$. This matches
+Table~\ref{tab:har_memory}: mean peak memory and per-epoch time decrease roughly
+monotonically with $m$ (mean peak memory $130.3$, $78.7$, and $51.5$\,MB
+for $m=4,2,1$, and mean epoch time $1.62$, $1.44$, and $1.34$\,s
+epoch), while Table~\ref{tab:har_dirichlet} shows accuracy degrades slowly; at
+$\alpha{=}0.1$ the three levels reach $0.9446$, $0.9346$, and $0.9236$. In other
+words, dropping from $m{=}4$ to $m{=}1$ reduces mean peak memory to about 40\%
+and mean epoch time by roughly 17\%, at an accuracy cost of about 2.1 points.
+
+\paragraph{Local-score top-$m$ versus Random-top-$m$.}
+To isolate whether period-aware scoring beats arbitrary scale subsets, we compare
+local-score top-$m$ (Eq.~\eqref{eq:spilter-topm}) with Random-top-$m$ (period
+scores replaced by uniform random scores) under the same $m{=}4$ and the same
+federated splits. Table~\ref{tab:random_vs_topm} shows that local-score top-$m$
+wins by 1.3--4.8 percentage points at every $\alpha$, with the largest gaps under
+strong non-IID ($\alpha=0.05$: $0.9372$ vs.\ $0.9238$; $\alpha=0.1$: $0.9411$
+vs.\ $0.9247$). Local STFT/ACF scores therefore select scale combinations
+aligned with each client's dominant periods instead of arbitrary subsets.
+
+\begin{table}[t]
+  \centering
+  \caption{HAR accuracy of Local-score top-$m$ versus Random-top-$m$ ($m{=}4$;
+  mean test SVM accuracy over the last 10 rounds; bold: better at the same
+  $\alpha$).}
+  \label{tab:random_vs_topm}
+  \begin{tabular}{lcc}
+    \toprule
+    $\alpha$ & Random-top-$m$ & Local-score top-$m$ \\
+    \midrule
+    0.05  & 0.9238 & \textbf{0.9372} \\
+    0.1   & 0.9247 & \textbf{0.9411} \\
+    0.3   & 0.9460 & \textbf{0.9520} \\
+    0.5   & 0.9482 & \textbf{0.9513} \\
+    1.0   & 0.9497 & \textbf{0.9529} \\
+    10.0  & 0.9529 & \textbf{0.9577} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Coverage-aware knapsack.}
+The experiments above use greedy top-$m$. The knapsack formulation
+(Eq.~\eqref{eq:knapsack}) is the natural next step when per-device memory budgets
+differ and some scales would otherwise be covered by too few clients. Because the
+Lagrangian decomposition leaves each client with a standard 0--1 knapsack, the
+per-round overhead is small, and the multiplier update lets the server steer
+coverage without inspecting local data.
+
+\subsection{MAST: Memory--Time Trade-off}
+
+MAST is evaluated on four UEA datasets with large channel counts and sequence
+lengths: Cricket, DuckDuckGeese, MotorImagery, and PEMS-SF. Across all planners
+and budgets the normalized time stays below 1 (all are faster than full-model
+PyTorch checkpointing) and actual memory consumption always stays under the
+budget, confirming that planning under a hard memory cap is effective. MAST is
+faster than every baseline, achieving $1.21\times$--$2.72\times$ speedup over
+PyTorch. Against the state-of-the-art planners Mimose, Checkmate, and MONet, MAST
+reduces training time by 1.43\%--7.65\% at the same budget, and saves
+6.4\%--21.9\% of GPU memory at the same computational cost (estimated by a
+quadratic fit of the time--budget curve).
+
+To examine this more closely we profiled MotorImagery over time under a 16\,GB
+budget using the plans produced by MAST and by Checkmate (the second-fastest
+planner). In the first iteration the forward phases are close: both take about
+0--350\,ms and Checkmate's peak is slightly lower. In the backward phase,
+however, Checkmate releases less memory, particularly between 650 and 750\,ms,
+so its global peak reaches 14.7\,GB, 4.7\% higher than MAST; its backward pass
+also takes longer, indicating heavier recomputation. This validates the
+customized formulation.
+
+These gains matter most for large training data and iterative development, where
+GPU time is expensive (for reference, a 16\,GB V100 costs \$2.48 per hour on
+Google Cloud). Beyond speed, MAST provides the per-client budget $B_k$ used by
+the scale knapsack, closing the loop between the systems layer and the
+representation layer.
+
+\subsection{Interpretability Analysis}
+
+Because representations are built from explicit subsequence patterns, they
+support visualization that black-box CNN/Transformer embeddings do not: class-wise
+embedding structure, per-scale response strength, selected scale sets
+$\mathcal{R}_k$ under different local periodicities, and the trajectory of the
+period-aware weights $\boldsymbol{\pi}$ during training. In practice, inspecting
+$\mathcal{R}_k$ shows which temporal scales a client's data actually supports,
+which is useful both for debugging federated partitions and for explaining why a
+given client benefits from stitching.
+
+\subsection{Limitations and Ongoing Work}
+\label{sec:limitations}
+
+Several gaps remain, and we list them explicitly.
+(i)~Communication and system experiments do not yet cover all five datasets; the
+efficiency study concentrates on HAR.
+(ii)~Mixed per-client $m_k$ within the same round has not been evaluated; the
+current study uses a uniform degradation chain, and the coverage-aware knapsack
+is formulated but not yet deployed at scale.
+(iii)~Scale selection is precomputed and fixed before training; an online
+top-$m$ strategy that updates $\mathcal{R}_k$ across rounds is not yet realized.
+(iv)~FedCSL-Spilter does not surpass FedU2 on LSST, which needs further analysis
+and hyperparameter tuning; short light curves may not expose enough multi-scale
+periodic structure.
+(v)~Evaluation focuses on classification; clustering and anomaly detection are
+future work~\cite{ts2vec,timescsl}.
+
+%%--------------------------------------------------------------------
+\section{Conclusion}
+%%--------------------------------------------------------------------
+
+We presented FedCSL-Spilter for non-IID multivariate time series, coupling
+TimeCSL/CSL multi-scale shapelet learning with client-autonomous scale stitching:
+local STFT/ACF scores select the top-$m$ scales, shapelet features are stitched
+into local submodels, clients upload scale-sharded updates, and the server
+aggregates scale-wise. Local--global joint CL/KD, multi-scale structural
+alignment, and period-aware weighting mitigate client drift; a
+covering-constrained knapsack extends greedy top-$m$ to memory-budgeted,
+coverage-aware allocation; and MAST turns activation-checkpoint planning into an
+exact binary linear program that regulates the memory--time trade-off per device
+without affecting accuracy. Experiments on HAR, FaceDetection, LSST, Epilepsy,
+SleepEDF, and four large UEA datasets show favorable
+accuracy--memory--latency trade-offs, with up to 71.1\% memory savings,
+$1.48\times$ faster slowest-client epochs, and 1.43\%--7.65\% lower training time
+than state-of-the-art checkpoint planners at equal budgets. Future work includes
+mixed $m_k$ participation, online scale selection, and personalized federated
+extensions.
+
+\section*{Acknowledgments}
+
+The author thanks the advisor and the research group for discussions on
+federated learning and memory-efficient training. Funding and compute-resource
+acknowledgments will be added before submission.
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{refs,refs_acm}
+
+\end{document}
